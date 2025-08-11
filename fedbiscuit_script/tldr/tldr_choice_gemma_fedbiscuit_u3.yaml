@@ -1,12 +1,12 @@
 use_gpu: True
-device: 7
+device: 5
 early_stop:
   patience: 0
 federate:
   mode: standalone
   client_num: 10
   sample_client_num: 5
-  total_round_num: 500
+  total_round_num: 20
   save_to: "checkpoints/final_tldr_choice_gemma_fedbiscuit_u3.ckpt"
   ignore_weight: True
   save_freq: 50
