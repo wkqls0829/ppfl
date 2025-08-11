@@ -145,7 +145,7 @@ exp*/
 *.sh
 !scripts/*.sh
 data/
-!/federatedscope/core/data/
+!/federatedscope/*/data/
 checkpoints*/
 benchmark_output/
 *.out
