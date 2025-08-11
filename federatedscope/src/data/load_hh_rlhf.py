@@ -1,5 +1,6 @@
 import logging
 import datasets
+import os
 from federatedscope.core.data import StandaloneDataDict
 from federatedscope.register import register_data
 
@@ -8,7 +9,6 @@ logger = logging.getLogger(__name__)
 def parse_dialogue(text):
     """
     Parses the dialogue to separate the prompt from the response.
-    The prompt is everything before the last "Assistant:" turn.
     """
     parts = text.strip().split("\n\nAssistant: ")
     if len(parts) > 1:
@@ -17,10 +17,28 @@ def parse_dialogue(text):
         return prompt, response
     return None, None
 
-def _load_and_process_subset(data_files):
-    """Loads a specific subset of data files and processes them."""
-    dataset = datasets.load_dataset("Anthropic/hh-rlhf", data_files=data_files)
+def _load_and_process_subset(base_dir):
+    """
+    Loads train and test splits from a specific base directory (e.g., 'harmless-base').
+
+    Args:
+        base_dir (str): The subdirectory within 'data/hh-rlhf' to load from.
+    """
+    # --- THIS IS THE KEY CHANGE ---
+    # Construct the full, absolute paths to the data files inside their subdirectories
+    data_path = os.path.join("data/hh-rlhf", base_dir)
     
+    if not os.path.isdir(data_path):
+        raise FileNotFoundError(
+            f"Data directory not found at '{data_path}'. "
+            f"Please ensure you have cloned the dataset correctly."
+        )
+        
+    # The `datasets` library can automatically find train/test splits
+    # and handle the .gz compression.
+    dataset = datasets.load_dataset(data_path)
+    # --- END OF CHANGE ---
+
     def preprocess(example):
         prompt_chosen, chosen_response = parse_dialogue(example['chosen'])
         prompt_rejected, rejected_response = parse_dialogue(example['rejected'])
@@ -29,67 +47,51 @@ def _load_and_process_subset(data_files):
             "chosen_response": chosen_response,
             "rejected_response": rejected_response
         }
-        
-    processed_dataset = dataset.map(preprocess, batched=False, num_proc=4)
-    processed_dataset = processed_dataset.filter(lambda x: x['prompt'] is not None and x['chosen_response'] is not None and x['rejected_response'] is not None)
-    return processed_dataset['train'] # The loaded data is all in the 'train' split
+    
+    # Process both train and test splits
+    processed_train = dataset['train'].map(preprocess, batched=False, num_proc=4).filter(lambda x: x['prompt'] is not None)
+    processed_test = dataset['test'].map(preprocess, batched=False, num_proc=4).filter(lambda x: x['prompt'] is not None)
+    
+    return processed_train, processed_test
+
 
 def load_hh_rlhf_data(config, client_cfgs=None):
     """
     Loads the hh-rlhf dataset and distributes it heterogeneously.
-    - Half clients get 'harmlessness' data.
-    - The other half get 'helpfulness' data.
     """
     client_num = config.federate.client_num
     if client_num % 2 != 0:
         logger.warning(f"Client number ({client_num}) is odd. One group will have an extra client.")
 
-    # Load harmlessness data
-    logger.info("Loading harmlessness dataset...")
-    harmless_files = {'train': ['harmlessness-base-train.jsonl'], 'test': ['harmlessness-base-test.jsonl']}
-    harmless_train_data = _load_and_process_subset(harmless_files['train'])
-    harmless_test_data = _load_and_process_subset(harmless_files['test'])
+    # Define the subdirectories for each dataset type
+    harmless_dir = 'harmless-base'
+    helpful_dir = 'helpful-base'
+    
+    logger.info(f"Loading and processing data from '{harmless_dir}'...")
+    harmless_train_data, harmless_test_data = _load_and_process_subset(harmless_dir)
 
-    # Load helpfulness data
-    logger.info("Loading helpfulness dataset...")
-    helpful_files = {'train': ['helpfulness-base-train.jsonl'], 'test': ['helpfulness-base-test.jsonl']}
-    helpful_train_data = _load_and_process_subset(helpful_files['train'])
-    helpful_test_data = _load_and_process_subset(helpful_files['test'])
+    logger.info(f"Loading and processing data from '{helpful_dir}'...")
+    helpful_train_data, helpful_test_data = _load_and_process_subset(helpful_dir)
     
-    # Manually create the data dictionary for clients
     data_dict = {}
-    
-    # Assign data to clients
     harmless_clients_num = client_num // 2
     
-    # Distribute harmlessness data to the first half of clients
     logger.info(f"Assigning harmlessness data to {harmless_clients_num} clients...")
-    harmless_train_shards = harmless_train_data.shard(num_shards=harmless_clients_num, index=0, contiguous=True)
-    harmless_test_shards = harmless_test_data.shard(num_shards=harmless_clients_num, index=0, contiguous=True)
-    for i in range(harmless_clients_num):
-        client_id = i + 1
-        train_shard = harmless_train_shards.shard(num_shards=harmless_clients_num, index=i)
-        test_shard = harmless_test_shards.shard(num_shards=harmless_clients_num, index=i)
-        data_dict[client_id] = {
-            'train': train_shard,
-            'test': test_shard,
-            'val': test_shard.select(range(len(test_shard) // 2)) # Use half of test for validation
-        }
+    if harmless_clients_num > 0:
+        for i in range(harmless_clients_num):
+            client_id = i + 1
+            train_shard = harmless_train_data.shard(num_shards=harmless_clients_num, index=i)
+            test_shard = harmless_test_data.shard(num_shards=harmless_clients_num, index=i)
+            data_dict[client_id] = {'train': train_shard, 'test': test_shard, 'val': test_shard}
 
-    # Distribute helpfulness data to the second half of clients
     helpful_clients_num = client_num - harmless_clients_num
     logger.info(f"Assigning helpfulness data to {helpful_clients_num} clients...")
-    helpful_train_shards = helpful_train_data.shard(num_shards=helpful_clients_num, index=0, contiguous=True)
-    helpful_test_shards = helpful_test_data.shard(num_shards=helpful_clients_num, index=0, contiguous=True)
-    for i in range(helpful_clients_num):
-        client_id = i + harmless_clients_num + 1
-        train_shard = helpful_train_shards.shard(num_shards=helpful_clients_num, index=i)
-        test_shard = helpful_test_shards.shard(num_shards=helpful_clients_num, index=i)
-        data_dict[client_id] = {
-            'train': train_shard,
-            'test': test_shard,
-            'val': test_shard.select(range(len(test_shard) // 2)) # Use half of test for validation
-        }
+    if helpful_clients_num > 0:
+        for i in range(helpful_clients_num):
+            client_id = i + harmless_clients_num + 1
+            train_shard = helpful_train_data.shard(num_shards=helpful_clients_num, index=i)
+            test_shard = helpful_test_data.shard(num_shards=helpful_clients_num, index=i)
+            data_dict[client_id] = {'train': train_shard, 'test': test_shard, 'val': test_shard}
 
     logger.info("Finished creating heterogeneous data distribution.")
     return StandaloneDataDict(data_dict, config), config

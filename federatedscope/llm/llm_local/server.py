@@ -31,7 +31,18 @@ class LLMMultiLoRAServer(Server):
               self).__init__(ID, state, config, data, model, client_num,
                              total_round_num, device, strategy, **kwargs)
         if self._cfg.llm.adapter.count > 1:
-            self.aggregator.total_train_size = len(data.train_data)
+            # Calculate the total training size from all clients' data
+            if hasattr(data, 'train_data') and data.train_data is not None:
+                # For standard datasets that have a global train_data
+                self.aggregator.total_train_size = len(data.train_data)
+            elif isinstance(data, dict):
+                # For dictionary-style data (like our StandaloneDataDict)
+                total_size = sum(len(client_data['train']) for client_data in data.values() if 'train' in client_data)
+                self.aggregator.total_train_size = total_size
+            else:
+                self.aggregator.total_train_size = 0
+            #self.aggregator.total_train_size = len(data.train_data)
+
             self.aggregator.num_clients = client_num
 
         if self._cfg.llm.adapter.local_only:

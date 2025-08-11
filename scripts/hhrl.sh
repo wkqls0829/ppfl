@@ -12,7 +12,7 @@ learning_rate=5e-4
 
 tid=10000
 # export CUDA_LAUNCH_BLOCKING=1 
-export CUDA_VISIBLE_DEVICES=6
+export CUDA_VISIBLE_DEVICES=7
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 
 nohup python -u federatedscope/main.py \
     --cfg cfg/gemma_hhrl.yaml \
