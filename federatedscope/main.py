@@ -22,6 +22,8 @@ from federatedscope.core.auxiliaries.worker_builder import get_client_cls, \
 from federatedscope.core.configs.config import global_cfg, CfgNode
 from federatedscope.core.auxiliaries.runner_builder import get_runner
 
+import src.data.load_hh_rlhf
+
 if os.environ.get('https_proxy'):
     del os.environ['https_proxy']
 if os.environ.get('http_proxy'):
