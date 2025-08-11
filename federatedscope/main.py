@@ -1,6 +1,10 @@
 import os
 import sys
 
+import torch
+print(f"This script is using this Python: {sys.executable}")
+print(f"The PyTorch version it sees is: {torch.__version__}")
+
 DEV_MODE = False  # simplify the federatedscope re-setup everytime we change
 # the source codes of federatedscope
 if DEV_MODE:
