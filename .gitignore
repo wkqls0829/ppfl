@@ -149,4 +149,3 @@ benchmark_output/
 *.out
 
 # No new scripts 
-/scripts_*
