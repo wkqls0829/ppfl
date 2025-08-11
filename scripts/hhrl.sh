@@ -10,10 +10,10 @@ mode=ttlora
 projection_type=global_mag #BA_mag
 learning_rate=5e-4
 
-tid=00000
+tid=10000
 # export CUDA_LAUNCH_BLOCKING=1 
-export CUDA_VISIBLE_DEVICES=7
+export CUDA_VISIBLE_DEVICES=6
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 
 nohup python -u federatedscope/main.py \
-    --cfg fedbiscuit_script/tldr/tldr_choice_gemma_fedbiscuit_u3.yaml \
+    --cfg cfg/gemma_hhrl.yaml \
     > outputs/${tid}.log 2>&1 &
