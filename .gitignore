@@ -140,9 +140,10 @@ dmypy.json
 
 # No experiment results 
 exp*/
-*.sh
 *_yaml/
 *dolly*/
+*.sh
+!scripts/*.sh
 data/
 checkpoints*/
 benchmark_output/
