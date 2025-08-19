@@ -1,12 +1,8 @@
-import os
 import datasets
-from federatedscope.core.data import StandaloneDataDict, ClientData
 from federatedscope.core.auxiliaries.logging import logger
 from federatedscope.llm.dataset.llm_dataset import LLMDataset
 
-# This prompt dictionary now uses keys that we will create in our
-# preprocess function. The key is to use generic names like 'prompt'
-# instead of specific ones like 'instruction'.
+# The prompt dictionary remains the same
 PROMPT_DICT = {
     "hh_cmp": (
         "Below is a conversation between a human and an AI assistant, "
@@ -32,12 +28,14 @@ def parse_dialogue(text):
 
 def load_hh_rlhf_dataset(config, tokenizer):
     """
-    Loads, processes, and distributes the hh-rlhf dataset from Hugging Face
-    for choice-based training.
+    Loads and processes the hh-rlhf dataset from Hugging Face.
+    This function now returns a single unified dataset, which the framework
+    will split according to the configuration.
     """
-    logger.info("Loading hh-rlhf dataset from Hugging Face for choice task...")
+    logger.info("Loading and processing hh-rlhf dataset from Hugging Face...")
 
     try:
+        # Load both subsets
         harmless_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="harmless-base")
         helpful_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base")
     except Exception as e:
@@ -45,10 +43,7 @@ def load_hh_rlhf_dataset(config, tokenizer):
         raise e
 
     def preprocess(example):
-        """
-        Preprocesses a single example to create the fields our prompt expects:
-        'prompt', 'output_A', 'output_B', and 'choice'.
-        """
+        """Preprocesses a single example for choice-based training."""
         prompt, chosen = parse_dialogue(example['chosen'])
         _, rejected = parse_dialogue(example['rejected'])
 
@@ -59,77 +54,35 @@ def load_hh_rlhf_dataset(config, tokenizer):
             "prompt": prompt,
             "output_A": chosen,
             "output_B": rejected,
-            "choice": " A"  # The target label for the trainer
+            "choice": " A"  # Target for the choice trainer
         }
 
-    # Process and filter out failed examples
+    # Process all splits
     harmless_train = harmless_raw['train'].map(preprocess).filter(lambda x: x is not None)
     harmless_test = harmless_raw['test'].map(preprocess).filter(lambda x: x is not None)
     helpful_train = helpful_raw['train'].map(preprocess).filter(lambda x: x is not None)
     helpful_test = helpful_raw['test'].map(preprocess).filter(lambda x: x is not None)
+
+    # Combine into a single training and test set
+    full_train_dataset = datasets.concatenate_datasets([harmless_train, helpful_train])
+    full_test_dataset = datasets.concatenate_datasets([harmless_test, helpful_test])
     
-    # --- Create Federated Data Split ---
-    client_num = config.federate.client_num
-    data_dict = {}
+    # Wrap the raw data into LLMDataset objects
+    train_dataset = LLMDataset(full_train_dataset,
+                               tokenizer,
+                               prompt_input=PROMPT_DICT['hh_cmp'],
+                               prompt_no_input=PROMPT_DICT['hh_cmp'],
+                               output_tag='choice')
     
-    harmless_clients_num = client_num // 2
-    helpful_clients_num = client_num - harmless_clients_num
+    test_dataset = LLMDataset(full_test_dataset,
+                              tokenizer,
+                              prompt_input=PROMPT_DICT['hh_cmp'],
+                              prompt_no_input=PROMPT_DICT['hh_cmp'],
+                              output_tag='choice')
 
-    logger.info(f"Assigning 'harmless' data to {harmless_clients_num} clients...")
-    for i in range(harmless_clients_num):
-        client_id = i + 1
-        train_shard = harmless_train.shard(harmless_clients_num, i)
-        test_shard = harmless_test.shard(harmless_clients_num, i)
-        data_dict[client_id] = ClientData(
-            client_cfg=config,
-            train_data=LLMDataset(train_shard, tokenizer, 
-                                  prompt_input=PROMPT_DICT['hh_cmp'],
-                                  prompt_no_input=PROMPT_DICT['hh_cmp'], 
-                                  output_tag='choice'),
-            val_data=LLMDataset(test_shard, tokenizer, 
-                                prompt_input=PROMPT_DICT['hh_cmp'],
-                                prompt_no_input=PROMPT_DICT['hh_cmp'],
-                                output_tag='choice'),
-            test_data=LLMDataset(test_shard, tokenizer, 
-                                 prompt_input=PROMPT_DICT['hh_cmp'],
-                                 prompt_no_input=PROMPT_DICT['hh_cmp'],
-                                 output_tag='choice')
-        )
+    # Return a tuple, just like reddit_tldr.py and shp.py
+    # The framework will handle splitting this into train/val/test and
+    # distributing it to clients.
+    dataset = (train_dataset, test_dataset, test_dataset)
 
-    logger.info(f"Assigning 'helpful' data to {helpful_clients_num} clients...")
-    for i in range(helpful_clients_num):
-        client_id = i + harmless_clients_num + 1
-        train_shard = helpful_train.shard(helpful_clients_num, i)
-        test_shard = helpful_test.shard(helpful_clients_num, i)
-        data_dict[client_id] = ClientData(
-            client_cfg=config,
-            train_data=LLMDataset(train_shard, tokenizer, 
-                                  prompt_input=PROMPT_DICT['hh_cmp'],
-                                  prompt_no_input=PROMPT_DICT['hh_cmp'], 
-                                  output_tag='choice'),
-            val_data=LLMDataset(test_shard, tokenizer, 
-                                prompt_input=PROMPT_DICT['hh_cmp'],
-                                prompt_no_input=PROMPT_DICT['hh_cmp'],
-                                output_tag='choice'),
-            test_data=LLMDataset(test_shard, tokenizer, 
-                                 prompt_input=PROMPT_DICT['hh_cmp'],
-                                 prompt_no_input=PROMPT_DICT['hh_cmp'],
-                                 output_tag='choice')
-        )
-        
-    # --- Create Global Dataset for Server ---
-    global_train = datasets.concatenate_datasets([harmless_train, helpful_train])
-    global_test = datasets.concatenate_datasets([harmless_test, helpful_test])
-
-    data_container = StandaloneDataDict(data_dict, config)
-    data_container.train_data = LLMDataset(global_train, tokenizer, 
-                                          prompt_input=PROMPT_DICT['hh_cmp'],
-                                          prompt_no_input=PROMPT_DICT['hh_cmp'],
-                                          output_tag='choice')
-    data_container.test_data = LLMDataset(global_test, tokenizer, 
-                                         prompt_input=PROMPT_DICT['hh_cmp'],
-                                         prompt_no_input=PROMPT_DICT['hh_cmp'],
-                                         output_tag='choice')
-    data_container.val_data = data_container.test_data
-
-    return data_container, config
+    return dataset, config
