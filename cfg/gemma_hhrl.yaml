@@ -1,5 +1,5 @@
 use_gpu: True
-device: 1
+device: 0
 early_stop:
   patience: 0
 federate:
@@ -56,6 +56,7 @@ trainer:
   type: llmrewardchoicetrainer
   choices: ['A', 'B']
 eval:
+  script: federatedscope.llm.eval.eval_for_hhrl.eval_generation
   freq: 50
   metrics: ['loss', 'acc']
   best_res_update_round_wise_key: test_loss
