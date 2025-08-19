@@ -86,8 +86,6 @@ def load_hh_rlhf_data(config, client_cfgs=None):
                                               train_data=train_shard, 
                                               val_data=test_shard,
                                               test_data=test_shard)
-            logger.info(f"looking at the fugin td")
-            logger.info(len(data_dict[client_id].train_data))
     helpful_clients_num = client_num - harmless_clients_num
     logger.info(f"Assigning helpfulness data to {helpful_clients_num} clients...")
     if helpful_clients_num > 0:
@@ -99,7 +97,6 @@ def load_hh_rlhf_data(config, client_cfgs=None):
                                               train_data=train_shard, 
                                               val_data=test_shard,
                                               test_data=test_shard)
-    logger.info(len(data_dict[1].train_data))
 
     logger.info("Finished creating heterogeneous data distribution.")
     return StandaloneDataDict(data_dict, config), config

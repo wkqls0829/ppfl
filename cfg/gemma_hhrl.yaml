@@ -13,11 +13,12 @@ federate:
   share_local_model: True
   online_aggr: False
 data:
-  root: data/
-  type: hh-rlhf
+  root: /hdd/hdd3/kjb/
+  type: 'hh-rlhf@llm'
   splits: [0.9,0.09,0.01]
   splitter: 'meta'
 llm:
+  use: True
   tok_len: 1024
   accelerator:
     use: True

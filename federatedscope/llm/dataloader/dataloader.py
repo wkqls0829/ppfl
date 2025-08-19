@@ -16,6 +16,9 @@ from federatedscope.llm.dataset.llm_dataset import DefaultToken, \
 from federatedscope.core.data.utils import download_url
 from federatedscope.llm.model.model_builder import get_llm
 
+from federatedscope.llm.dataloader.hh_rlhf import load_hh_rlhf_dataset
+# from federatedscope.llm.dataloader.hh_rlhf import call_hh_rlhf
+
 logger = logging.getLogger(__name__)
 
 
@@ -489,7 +492,8 @@ def load_llm_dataset(config=None, **kwargs):
         dataset = load_comparison_dataset_by_choice(data_root,
                                                     tokenizer,
                                                     max_num_test=1000)
-
+    elif dataset_name.lower() == 'hh-rlhf':
+        dataset, config = load_hh_rlhf_dataset(config, tokenizer)
     elif dataset_name.lower() == 'shp-comparison':
         from federatedscope.llm.dataloader.shp import \
             load_shp_cmp_dataset_by_choice
