@@ -57,7 +57,7 @@ trainer:
   choices: ['A', 'B']
 eval:
   freq: 50
-  metrics: ['loss', 'hhrl_reward']
-  best_res_update_round_wise_key: "val_avg_helpfulness"
+  metrics: ['avg_loss', 'acc', 'avg_helpfulness', 'avg_harmlessness']
+  best_res_update_round_wise_key: test_avg_helpfulness
   count_flops: False
 expname: hhrl/choice_gemma/fedbiscuit_u3
