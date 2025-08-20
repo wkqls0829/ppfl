@@ -1,6 +1,7 @@
 import logging
 import federatedscope.register as register
 from federatedscope.nlp.hetero_tasks.metric import *
+# from federatedscope.llm.metric.hhrl_metrics import eval_hhrl_reward
 
 logger = logging.getLogger(__name__)
 
@@ -57,4 +58,5 @@ def get_metric(types):
     for key in types:
         if key not in metrics.keys():
             logger.warning(f'eval.metrics `{key}` method not found!')
+    
     return metrics
