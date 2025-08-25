@@ -28,33 +28,33 @@ def get_reward_models(device):
     return REWARD_MODELS['harmless'], REWARD_MODELS['helpful']
 
 
-@torch.no_grad()
-def eval_hhrl_reward(ctx, **kwargs):
+def _get_or_compute_hhrl_scores(ctx):
     """
-    Calculates harmlessness and helpfulness scores for generated text using
-    reward models. This function is called by the trainer during evaluation.
-
-    Args:
-        ctx: The context object from the trainer, containing model, data, etc.
-
-    Returns:
-        A dictionary containing the average harmlessness and helpfulness scores.
+    A helper function that computes reward scores and caches them in the `ctx`
+    to avoid redundant computation within the same evaluation round.
     """
+    cache_key = f'{ctx.cur_split}_hhrl_scores'
+    if hasattr(ctx, cache_key):
+        return getattr(ctx, cache_key)
+
+    # Directly get the data for the current split ('val' or 'test')
+    current_data = getattr(ctx, f'{ctx.cur_split}_data', None)
+    if current_data is None:
+        logger.warning(f"ctx.{ctx.cur_split}_data is not available, "
+                       f"skipping reward eval.")
+        return {}
+
     harmless_reward_model, helpful_reward_model = get_reward_models(
         ctx.device)
 
     all_harmless_scores = []
     all_helpful_scores = []
 
-    if not hasattr(ctx, 'eval_data') or ctx.eval_data is None:
-        logger.warning("ctx.eval_data is not available, skipping reward eval.")
-        return {}
-
-    for i in tqdm(range(len(ctx.eval_data)),
+    # Iterate over the correct data object
+    for i in tqdm(range(len(current_data)),
                   desc="Evaluating with Reward Models"):
-        sample = ctx.eval_data[i]
+        sample = current_data[i]
         
-        # HH-RLHF data should have a 'prompt' key with the conversation history
         if 'prompt' not in sample:
             logger.warning(f"Sample {i} is missing the 'prompt' key. Skipping.")
             continue
@@ -88,14 +88,36 @@ def eval_hhrl_reward(ctx, **kwargs):
     if all_helpful_scores:
         results['avg_helpfulness'] = np.mean(all_helpful_scores)
 
+    # Cache the results in the context before returning
+    setattr(ctx, cache_key, results)
     return results
 
 
-# The registration function
-def register_hhrl_reward_metric(types):
-    if 'hhrl_reward' in types:
-        return "hhrl_reward", eval_hhrl_reward, True
+# --- Metric 1: Harmlessness ---
+def eval_harmlessness(ctx, **kwargs):
+    scores = _get_or_compute_hhrl_scores(ctx)
+    return scores.get('avg_harmlessness', 0.0)
 
 
-register.register_metric('hhrl_reward', register_hhrl_reward_metric)
+def register_harmlessness_metric(types):
+    if 'avg_harmlessness' in types:
+        return 'avg_harmlessness', eval_harmlessness, True
+    return None
+
+
+# --- Metric 2: Helpfulness ---
+def eval_helpfulness(ctx, **kwargs):
+    scores = _get_or_compute_hhrl_scores(ctx)
+    return scores.get('avg_helpfulness', 0.0)
+
+
+def register_helpfulness_metric(types):
+    if 'avg_helpfulness' in types:
+        return 'avg_helpfulness', eval_helpfulness, True
+    return None
+
+
+# Register both metrics with the framework
+register.register_metric('avg_harmlessness', register_harmlessness_metric)
+register.register_metric('avg_helpfulness', register_helpfulness_metric)
 

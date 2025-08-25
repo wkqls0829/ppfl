@@ -1,12 +1,12 @@
 use_gpu: True
-device: 2
+device: 5
 early_stop:
   patience: 0
 federate:
   mode: standalone
   client_num: 1
   total_round_num: 20
-  save_to: "checkpoints/tldr_rlhf_gemma_<choice_ckpt>.ckpt"
+  save_to: "checkpoints/hhrl_rlhf_gemma_<choice_ckpt>.ckpt"
   save_freq: 50
   share_local_model: True
   online_aggr: False
@@ -20,7 +20,7 @@ llm:
   tok_len: 1024
   max_new_token: 80
   accelerator:
-    use: True
+    use: False
   chat:
     max_len: 512
   adapter:
@@ -29,7 +29,7 @@ llm:
   reward_coeff: 0.1
   grad_accum_step: 8
 dataloader:
-  batch_size: 8
+  batch_size: 4  
 model:
   type: 'mlabonne/Gemmalpaca-2B@huggingface_llm'
 train:

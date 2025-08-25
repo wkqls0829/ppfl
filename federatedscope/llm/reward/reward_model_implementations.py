@@ -39,7 +39,7 @@ class GPT2HarmlessRewardModel(BaseRewardModel):
                  use_probabilities: bool = False):
         super().__init__(device)
         self.tokenizer, self.model = _load_reward_model_and_tokenizer(
-            "liujch1998/gpt2-harmless-reward-model", device=self.device)
+            "Ray2333/gpt2-large-harmless-reward_model", device=self.device)
         self.use_probabilities = use_probabilities
         logger.info("GPT2 harmlessness reward model initialized")
 
@@ -65,7 +65,7 @@ class GPT2HelpfulRewardModel(BaseRewardModel):
                  use_probabilities: bool = False):
         super().__init__(device)
         self.tokenizer, self.model = _load_reward_model_and_tokenizer(
-            "liujch1998/gpt2-helpful-reward-model", device=self.device)
+            "Ray2333/gpt2-large-helpful-reward_model", device=self.device)
         self.use_probabilities = use_probabilities
         logger.info("GPT2 helpfulness reward model initialized")
 
