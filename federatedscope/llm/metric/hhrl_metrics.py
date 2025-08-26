@@ -1,5 +1,4 @@
 import torch
-import os
 import numpy as np
 from tqdm import tqdm
 import logging
@@ -37,10 +36,9 @@ def _get_or_compute_hhrl_scores(ctx):
     if hasattr(ctx, cache_key):
         return getattr(ctx, cache_key)
 
-    # Directly get the data for the current split ('val' or 'test')
-    current_data = getattr(ctx, f'{ctx.cur_split}_data', None)
-    if current_data is None:
-        logger.warning(f"ctx.{ctx.cur_split}_data is not available, "
+    eval_loader = getattr(ctx, f'{ctx.cur_split}_loader', None)
+    if eval_loader is None:
+        logger.warning(f"ctx.{ctx.cur_split}_loader is not available, "
                        f"skipping reward eval.")
         return {}
 
@@ -50,37 +48,40 @@ def _get_or_compute_hhrl_scores(ctx):
     all_harmless_scores = []
     all_helpful_scores = []
 
-    # Iterate over the correct data object
-    for i in tqdm(range(len(current_data)),
-                  desc="Evaluating with Reward Models"):
-        sample = current_data[i]
+    for batch in tqdm(eval_loader, desc="Evaluating with Reward Models"):
+        # The dataloader provides tokenized inputs. We need to decode them
+        # back to strings to get the prompt.
+        input_ids = batch['input_ids'].to(ctx.device)
         
-        if 'prompt' not in sample:
-            logger.warning(f"Sample {i} is missing the 'prompt' key. Skipping.")
-            continue
-        prompt = sample['prompt']
+        # Decode the entire input_ids to get the formatted prompt string
+        # This is what the model sees as input.
+        prompts = ctx.tokenizer.batch_decode(input_ids,
+                                             skip_special_tokens=True)
 
         if not hasattr(ctx.model, 'generate'):
             raise AttributeError(
                 "The model in ctx does not have a `generate` method.")
 
-        input_ids = ctx.tokenizer(
-            prompt, return_tensors="pt").input_ids.to(ctx.device)
+        attention_mask = batch['attention_mask'].to(ctx.device)
+        
         generated_ids = ctx.model.generate(
             input_ids,
+            attention_mask=attention_mask,
             max_new_tokens=ctx.cfg.llm.max_new_token,
             **ctx.cfg.llm.generation.kwargs)
         
-        completion = ctx.tokenizer.decode(
-            generated_ids[0][input_ids.shape[1]:], skip_special_tokens=True)
+        completions = ctx.tokenizer.batch_decode(
+            generated_ids, skip_special_tokens=True)
 
-        harmless_score = harmless_reward_model.get_rewards([completion],
-                                                           [prompt])[0]
-        helpful_score = helpful_reward_model.get_rewards([completion],
-                                                         [prompt])[0]
+        # The full text for the reward model is the generated text
+        # The prompt for the reward model is the original input text
+        harmless_scores = harmless_reward_model.get_rewards(completions,
+                                                            prompts)
+        helpful_scores = helpful_reward_model.get_rewards(completions,
+                                                          prompts)
 
-        all_harmless_scores.append(harmless_score)
-        all_helpful_scores.append(helpful_score)
+        all_harmless_scores.extend(harmless_scores)
+        all_helpful_scores.extend(helpful_scores)
 
     results = {}
     if all_harmless_scores:
@@ -88,7 +89,6 @@ def _get_or_compute_hhrl_scores(ctx):
     if all_helpful_scores:
         results['avg_helpfulness'] = np.mean(all_helpful_scores)
 
-    # Cache the results in the context before returning
     setattr(ctx, cache_key, results)
     return results
 
@@ -120,4 +120,3 @@ def register_helpfulness_metric(types):
 # Register both metrics with the framework
 register.register_metric('avg_harmlessness', register_harmlessness_metric)
 register.register_metric('avg_helpfulness', register_helpfulness_metric)
-

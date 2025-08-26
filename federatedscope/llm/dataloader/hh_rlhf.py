@@ -2,9 +2,14 @@ import datasets
 from federatedscope.core.auxiliaries.logging import logger
 from federatedscope.llm.dataset.llm_dataset import LLMDataset
 
-# The prompt dictionary remains the same
-PROMPT_DICT = {
-    "hh_cmp": (
+HH_RLHF_PROMPT_DICT = {
+    "generation": (
+        "Below is a conversation between a human and an AI assistant. "
+        "Write a response that is both helpful and harmless.\n\n"
+        "### CONVERSATION:\n{prompt}\n\n"
+        "### RESPONSE:"
+    ),
+    "comparison": (
         "Below is a conversation between a human and an AI assistant, "
         "followed by two responses. Pick the response that is more "
         "helpful and harmless. State your choice with a single capital "
@@ -15,7 +20,6 @@ PROMPT_DICT = {
         "### RESPONSE B: {output_B}\n"
         "### YOUR CHOICE:"
     )
-}
 
 def parse_dialogue(text):
     """Helper to split dialogue into prompt and the final assistant response."""
@@ -86,3 +90,58 @@ def load_hh_rlhf_dataset(config, tokenizer):
     dataset = (train_dataset, test_dataset, test_dataset)
 
     return dataset, config
+
+def load_hh_rlhf_for_rlhf(data_root,
+                          config,
+                          max_num_test=-1,
+                          raw_no_prompt=False):
+    """
+    Loads and processes the hh-rlhf dataset from Hugging Face for the
+    standalone RLHF script. It combines both helpful and harmless datasets.
+    """
+    logger.info("Loading hh-rlhf prompts from Hugging Face for RLHF...")
+
+    # Load both "harmless" and "helpful" test sets for prompts
+    try:
+        harmless_test = datasets.load_dataset("Anthropic/hh-rlhf",
+                                              data_dir="harmless-base",
+                                              split='test')
+        helpful_test = datasets.load_dataset("Anthropic/hh-rlhf",
+                                             data_dir="helpful-base",
+                                             split='test')
+    except Exception as e:
+        logger.error(
+            f"Failed to load dataset from Hugging Face. Error: {e}")
+        raise e
+
+    # Combine them for a diverse set of prompts
+    combined_prompts_dataset = datasets.concatenate_datasets(
+        [harmless_test, helpful_test])
+
+    def get_prompt(example):
+        # The prompt is the same for 'chosen' and 'rejected'
+        prompt, _ = parse_dialogue(example['chosen'])
+        if prompt:
+            return {'prompt': prompt}
+        else:
+            # Return a key with a None value to allow for filtering
+            return {'prompt': None}
+
+    # Extract all prompts and filter out any that failed parsing
+    list_prompts = combined_prompts_dataset.map(get_prompt).filter(
+        lambda x: x['prompt'] is not None
+    )
+
+    # Convert to the simple list of dictionaries format
+    list_prompts = list_prompts.to_dict()['prompt']
+
+    if raw_no_prompt:
+        if max_num_test > 0:
+            return (list_prompts[:max_num_test], None, None)
+        else:
+            return (list_prompts, None, None)
+
+    # This part is for federated training, not standalone, but we keep the
+    # structure for consistency. It won't be used by standalone_training.py
+    # when `raw_no_prompt` is True.
+    return ([], [], [])

@@ -69,6 +69,23 @@ def get_rlhf_prompts_dataset(config):
         generation_prompt = TLDR_PROMPT_DICT["summary"]
         selector_prompt = TLDR_PROMPT_DICT["summary_cmp"]
 
+    elif dataset_name.lower() = "hh-rlhf":
+        from federatedscope.llm.dataloader.hh_rlhf import (
+            load_hh_rlhf_for_rlhf,
+            HH_RLHF_PROMPT_DICT,
+        )
+        data_root = os.path.join(config.data.root, "hh-rlhf")
+
+        list_train_prompts, _, _ = load_hh_rlhf_for_rlhf(
+            data_root,
+            config,
+            max_num_test=1000,
+            raw_no_prompt=True,
+        )
+
+        generation_prompt = HH_RLHF_PROMPT_DICT["generation"]
+        selector_prompt = HH_RLHF_PROMPT_DICT["comparison"]
+
     elif dataset_name.lower() == "shp-rlhf":
         from federatedscope.llm.dataloader.shp import \
             load_rlhf_dataset, SHP_PROMPT_DICT
