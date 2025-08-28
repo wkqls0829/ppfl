@@ -69,7 +69,7 @@ def get_rlhf_prompts_dataset(config):
         generation_prompt = TLDR_PROMPT_DICT["summary"]
         selector_prompt = TLDR_PROMPT_DICT["summary_cmp"]
 
-    elif dataset_name.lower() = "hh-rlhf":
+    elif dataset_name.lower() == "hh-rlhf":
         from federatedscope.llm.dataloader.hh_rlhf import (
             load_hh_rlhf_for_rlhf,
             HH_RLHF_PROMPT_DICT,

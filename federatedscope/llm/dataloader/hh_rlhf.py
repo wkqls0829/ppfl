@@ -2,6 +2,7 @@ import datasets
 from federatedscope.core.auxiliaries.logging import logger
 from federatedscope.llm.dataset.llm_dataset import LLMDataset
 
+
 HH_RLHF_PROMPT_DICT = {
     "generation": (
         "Below is a conversation between a human and an AI assistant. "
@@ -20,6 +21,7 @@ HH_RLHF_PROMPT_DICT = {
         "### RESPONSE B: {output_B}\n"
         "### YOUR CHOICE:"
     )
+}
 
 def parse_dialogue(text):
     """Helper to split dialogue into prompt and the final assistant response."""
@@ -74,14 +76,14 @@ def load_hh_rlhf_dataset(config, tokenizer):
     # Wrap the raw data into LLMDataset objects
     train_dataset = LLMDataset(full_train_dataset,
                                tokenizer,
-                               prompt_input=PROMPT_DICT['hh_cmp'],
-                               prompt_no_input=PROMPT_DICT['hh_cmp'],
+                               prompt_input=HH_RLHF_PROMPT_DICT['comparison'],
+                               prompt_no_input=HH_RLHF_PROMPT_DICT['comparison'],
                                output_tag='choice')
     
     test_dataset = LLMDataset(full_test_dataset,
                               tokenizer,
-                              prompt_input=PROMPT_DICT['hh_cmp'],
-                              prompt_no_input=PROMPT_DICT['hh_cmp'],
+                              prompt_input=HH_RLHF_PROMPT_DICT['comparison'],
+                              prompt_no_input=HH_RLHF_PROMPT_DICT['comparison'],
                               output_tag='choice')
 
     # Return a tuple, just like reddit_tldr.py and shp.py
@@ -133,7 +135,7 @@ def load_hh_rlhf_for_rlhf(data_root,
     )
 
     # Convert to the simple list of dictionaries format
-    list_prompts = list_prompts.to_dict()['prompt']
+    list_prompts = list(list_prompts)
 
     if raw_no_prompt:
         if max_num_test > 0:

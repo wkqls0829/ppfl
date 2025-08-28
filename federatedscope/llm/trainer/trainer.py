@@ -60,6 +60,10 @@ class LLMTrainer(GeneralTorchTrainer):
                                           config.llm.tok_len)
         self.eval_metrics = config.eval.metrics
 
+    def evaluate(self, target_data_split_name="test"):
+        self.ctx.tokenizer = self.tokenizer
+        super(LLMTrainer,self).evaluate(target_data_split_name)
+
     def register_default_hooks_train(self):
         super().register_default_hooks_train()
         self.register_hook_in_train(self._hook_on_fit_end_free_space,

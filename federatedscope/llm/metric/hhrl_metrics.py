@@ -63,12 +63,16 @@ def _get_or_compute_hhrl_scores(ctx):
                 "The model in ctx does not have a `generate` method.")
 
         attention_mask = batch['attention_mask'].to(ctx.device)
-        
+        generation_kwargs = {
+            k: v
+            for k, v in ctx.cfg.llm.generation.kwargs.items()
+        }
+
         generated_ids = ctx.model.generate(
-            input_ids,
+            input_ids=input_ids,
             attention_mask=attention_mask,
             max_new_tokens=ctx.cfg.llm.max_new_token,
-            **ctx.cfg.llm.generation.kwargs)
+            generation_kwargs)
         
         completions = ctx.tokenizer.batch_decode(
             generated_ids, skip_special_tokens=True)
