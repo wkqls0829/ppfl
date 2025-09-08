@@ -72,7 +72,7 @@ def _get_or_compute_hhrl_scores(ctx):
             input_ids=input_ids,
             attention_mask=attention_mask,
             max_new_tokens=ctx.cfg.llm.max_new_token,
-            generation_kwargs)
+            **generation_kwargs)
         
         completions = ctx.tokenizer.batch_decode(
             generated_ids, skip_special_tokens=True)
