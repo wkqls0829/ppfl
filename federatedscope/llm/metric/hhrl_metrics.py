@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from tqdm import tqdm
 import logging
+import inspect
 
 import federatedscope.register as register
 from federatedscope.llm.reward.reward_model_implementations import (
@@ -48,6 +49,11 @@ def _get_or_compute_hhrl_scores(ctx):
     all_harmless_scores = []
     all_helpful_scores = []
 
+    generation_kwargs = {
+        "do_sample": False,
+        "num_beams": 1
+    }
+
     for batch in tqdm(eval_loader, desc="Evaluating with Reward Models"):
         # The dataloader provides tokenized inputs. We need to decode them
         # back to strings to get the prompt.
@@ -58,21 +64,16 @@ def _get_or_compute_hhrl_scores(ctx):
         prompts = ctx.tokenizer.batch_decode(input_ids,
                                              skip_special_tokens=True)
 
-        if not hasattr(ctx.model, 'generate'):
-            raise AttributeError(
-                "The model in ctx does not have a `generate` method.")
 
         attention_mask = batch['attention_mask'].to(ctx.device)
-        generation_kwargs = {
-            k: v
-            for k, v in ctx.cfg.llm.generation.kwargs.items()
-        }
+
+
 
         generated_ids = ctx.model.generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
             max_new_tokens=ctx.cfg.llm.max_new_token,
-            generation_kwargs)
+            **generation_kwargs)
         
         completions = ctx.tokenizer.batch_decode(
             generated_ids, skip_special_tokens=True)
