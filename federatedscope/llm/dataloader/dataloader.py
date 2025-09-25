@@ -7,7 +7,7 @@ import logging
 import torch
 import datasets
 import transformers
-from transformers import GenerationConfig
+from transformers import GenerationConfig, AutoConfig
 from tqdm import tqdm
 
 from dataclasses import dataclass
@@ -113,8 +113,22 @@ class Generator:
         return response_tokens
 
 
-def get_tokenizer(model_name, cache_dir, tok_len=128, padding_side="right"):
+def get_tokenizer(model_name, cache_dir, tok_len=128, padding_side=None):
     from transformers import AutoTokenizer, GPT2Tokenizer
+
+    if padding_side is None:
+        config_name = 'gpt2' \
+                if model_name == 'CarperAI/openai_summarize_tldr_sft' else model_name
+        try:
+            config = AutoConfig.from_pretrained(config_name, cache_dir=cache_dir)
+            padding_side = "right" if getattr(config, "is_encoder_decoder", False) \
+                    else "left"
+        except Exception as error:
+            logger.warning(
+                "Failed to infer padding side for %s, falling back to 'right'. "
+                "Original error: %s", model_name, error
+            )
+            padding_side = "right"
 
     if model_name == 'CarperAI/openai_summarize_tldr_sft':
         tokenizer = GPT2Tokenizer.from_pretrained(

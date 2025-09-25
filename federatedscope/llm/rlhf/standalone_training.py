@@ -49,6 +49,25 @@ def cal_acc(logits, labels, choices):
     return new_labels, new_logits, predicted, predicted.eq(
         new_labels).sum().item()
 
+def _get_model_device(model, fallback="cpu"):
+    device = getattr(model, "device", None)
+    if device is None and hasattr(model, "module"):
+        device = getattr(model.module, "device", None)
+
+    if device is None:
+        try:
+            device = next(model.parameters()).device
+        except (StopIteration, AttributeError):
+            device = fallback
+
+    if isinstance(device, torch.device):
+        return device
+
+    try:
+        return torch.device(device)
+    except (TypeError, ValueError):
+        return torch.device(fallback)
+
 
 def get_rlhf_prompts_dataset(config):
     dataset_name, _ = config.data.type.split("@")
@@ -278,6 +297,8 @@ class RLHF_finetuning:
             num_return_sequences=max(2, num_completions),
         )
 
+        model_device = _get_model_device(model)
+
         new_list_data_dict = []
         for input_data in get_input_data(list_data_dict):
             input_texts = [prompt.format_map(data) for data in input_data]
@@ -286,9 +307,8 @@ class RLHF_finetuning:
                 padding=True,
                 add_special_tokens=True,
                 return_tensors="pt",
-            )
+            ).to(model_device)
 
-            input_text_tokens = {key: tensor.to("cuda:0") for key, tensor in input_text_tokens.items()}
 
 
             output_ids = model.generate(**input_text_tokens, **generate_kwargs)
@@ -342,14 +362,16 @@ class RLHF_finetuning:
             collate_fn=LLMDataCollator(tokenizer=tokenizer),
         )
 
+        model_device = _get_model_device(model)
+
         predicted_indices = []
         if hasattr(model, "adapter_names") is False or len(
                 model.adapter_names) == 1:
             # No adapter or only one LoRA adapter
             for idx, data_batch in enumerate(tqdm(dataloader)):
-                input_ids = data_batch["input_ids"].to("cuda:0")
-                labels = data_batch["labels"].to("cuda:0")
-                attention_mask = data_batch["attention_mask"].to("cuda:0")
+                input_ids = data_batch["input_ids"].to(model_device)
+                labels = data_batch["labels"].to(model_device)
+                attention_mask = data_batch["attention_mask"].to(model_device)
                 outputs = model(input_ids=input_ids,
                                 attention_mask=attention_mask)
                 _, _, predicted, _ = cal_acc(outputs.logits, labels, choices)
@@ -357,9 +379,9 @@ class RLHF_finetuning:
         else:
             # More than one adapters (exclude "default" one)
             for idx, data_batch in enumerate(tqdm(dataloader)):
-                input_ids = data_batch["input_ids"].to("cuda:0")
-                labels = data_batch["labels"].to("cuda:0")
-                attention_mask = data_batch["attention_mask"].to("cuda:0")
+                input_ids = data_batch["input_ids"].to(model_device)
+                labels = data_batch["labels"].to(model_device)
+                attention_mask = data_batch["attention_mask"].to(model_device)
                 collective_choices = []
                 for name in model.adapter_names:
                     if name == "default":
@@ -412,13 +434,15 @@ class RLHF_finetuning:
             choice="fake_choice",
         )
 
+
+        model_device = _get_model_device(model)
         dataloader = DataLoader(dataset)
 
         predicted_indices = []
         for idx, data_batch in enumerate(tqdm(dataloader)):
-            win_input_ids = data_batch["win_input_ids"].to("cuda:0")
-            win_labels = data_batch["win_labels"].to("cuda:0")
-            win_attention_mask = data_batch["win_attention_mask"].to("cuda:0")
+            win_input_ids = data_batch["win_input_ids"].to(model_device)
+            win_labels = data_batch["win_labels"].to(model_device)
+            win_attention_mask = data_batch["win_attention_mask"].to(model_device)
             ref_win_outputs = model(
                 disable_adapter=True,
                 input_ids=win_input_ids,
@@ -438,10 +462,10 @@ class RLHF_finetuning:
                                                 win_labels,
                                                 average_log_prob=False)
 
-            lose_input_ids = data_batch["lose_input_ids"].to("cuda:0")
-            lose_labels = data_batch["lose_labels"].to("cuda:0")
+            lose_input_ids = data_batch["lose_input_ids"].to(model_device)
+            lose_labels = data_batch["lose_labels"].to(model_device)
             lose_attention_mask = data_batch["lose_attention_mask"].to(
-                "cuda:0")
+                model_device)
             ref_lose_outputs = model(
                 disable_adapter=True,
                 input_ids=lose_input_ids,
