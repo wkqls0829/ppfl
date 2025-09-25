@@ -286,7 +286,10 @@ class RLHF_finetuning:
                 padding=True,
                 add_special_tokens=True,
                 return_tensors="pt",
-            ).to("cuda:0")
+            )
+
+            input_text_tokens = {key: tensor.to("cuda:0") for key, tensor in input_text_tokens.items()}
+
 
             output_ids = model.generate(**input_text_tokens, **generate_kwargs)
             responses = tokenizer.batch_decode(output_ids,

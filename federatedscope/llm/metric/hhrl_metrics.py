@@ -49,6 +49,13 @@ def _get_or_compute_hhrl_scores(ctx):
     all_harmless_scores = []
     all_helpful_scores = []
 
+    original_padding_side = ctx.tokenizer.padding_side
+    original_pad_token = ctx.tokenizer.pad_token
+
+    ctx.tokenizer.padding_side = 'left'
+    if ctx.tokenizer.pad_token is None:
+        ctx.tokenizer.pad_token = ctx.tokenizer.eos_token
+
     generation_kwargs = {
         "do_sample": False,
         "num_beams": 1
@@ -87,6 +94,9 @@ def _get_or_compute_hhrl_scores(ctx):
 
         all_harmless_scores.extend(harmless_scores)
         all_helpful_scores.extend(helpful_scores)
+
+    ctx.tokenizer.padding_side = original_padding_side
+    ctx.tokenizer.pad_token = original_pad_token
 
     results = {}
     if all_harmless_scores:
