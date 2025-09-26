@@ -20,7 +20,91 @@ from federatedscope.llm.dataloader.hh_rlhf import load_hh_rlhf_dataset
 # from federatedscope.llm.dataloader.hh_rlhf import call_hh_rlhf
 
 logger = logging.getLogger(__name__)
+DECODER_ONLY_MODEL_TYPES = {
+    "bloom",
+    "chatglm",
+    "cohere",
+    "falcon",
+    "gemma",
+    "gpt2",
+    "gpt_bigcode",
+    "gpt_neo",
+    "gpt_neox",
+    "llama",
+    "mistral",
+    "mpt",
+    "opt",
+    "phi",
+    "qwen",
+    "rwkv",
+    "xglm",
+    "yi",
+}
 
+_ENCODER_DECODER_MODEL_TYPES = {
+    "bart",
+    "blenderbot",
+    "blenderbot-small",
+    "marian",
+    "mbart",
+    "m2m_100",
+    "nllb",
+    "pegasus",
+    "t5",
+}
+
+_DECODER_ONLY_NAME_HINTS = {
+    "bloom",
+    "chatglm",
+    "falcon",
+    "gemma",
+    "gpt",
+    "llama",
+    "mistral",
+    "mpt",
+    "opt",
+    "phi",
+    "qwen",
+    "rwkv",
+    "xglm",
+    "yi",
+}
+
+_ENCODER_DECODER_NAME_HINTS = {
+    "bart",
+    "marian",
+    "mbart",
+    "m2m",
+    "nllb",
+    "pegasus",
+    "t5",
+}
+
+
+def _padding_side_from_config(config):
+    if getattr(config, "is_encoder_decoder", False):
+        return "right"
+
+    model_type = getattr(config, "model_type", None)
+    if model_type in _DECODER_ONLY_MODEL_TYPES:
+        return "left"
+    if model_type in _ENCODER_DECODER_MODEL_TYPES:
+        return "right"
+
+    architectures = getattr(config, "architectures", None) or []
+    if any("decoder" in arch.lower() for arch in architectures):
+        if not any("encoder" in arch.lower() for arch in architectures):
+            return "left"
+    return "left"
+
+
+def _padding_side_from_name(model_name):
+    lower_name = model_name.lower()
+    if any(hint in lower_name for hint in _DECODER_ONLY_NAME_HINTS):
+        return "left"
+    if any(hint in lower_name for hint in _ENCODER_DECODER_NAME_HINTS):
+        return "right"
+    return "right"
 
 @dataclass
 class LLMDataCollator(object):
@@ -120,15 +204,20 @@ def get_tokenizer(model_name, cache_dir, tok_len=128, padding_side=None):
         config_name = 'gpt2' \
                 if model_name == 'CarperAI/openai_summarize_tldr_sft' else model_name
         try:
-            config = AutoConfig.from_pretrained(config_name, cache_dir=cache_dir)
-            padding_side = "right" if getattr(config, "is_encoder_decoder", False) \
-                    else "left"
+            config = AutoConfig.from_pretrained(
+                config_name,
+                cache_dir=cache_dir,
+                trust_remote_code=True,
+            )
+            padding_side = _padding_side_from_config(config)
         except Exception as error:
             logger.warning(
-                "Failed to infer padding side for %s, falling back to 'right'. "
-                "Original error: %s", model_name, error
+                "Failed to infer padding side from config for %s. Falling back to "
+                "name-based heuristics. Original error: %s",
+                model_name,
+                error,
             )
-            padding_side = "right"
+            padding_side = _padding_side_from_name(model_name)
 
     if model_name == 'CarperAI/openai_summarize_tldr_sft':
         tokenizer = GPT2Tokenizer.from_pretrained(
