@@ -2,7 +2,7 @@ import os
 
 import datasets
 from federatedscope.core.auxiliaries.logging import logger
-from federatedscope.llm.dataset.llm_dataset import LLMDataset
+from federatedscope.llm.dataset.llm_dataset import LLMComparisonDataset
 
 
 HH_RLHF_PROMPT_DICT = {
@@ -34,63 +34,73 @@ def parse_dialogue(text):
     prompt = '\n\n'.join(parts[:-1]).strip()
     return prompt, response
 
-def load_hh_rlhf_dataset(config, tokenizer):
-    """
-    Loads and processes the hh-rlhf dataset from Hugging Face.
-    This function now returns a single unified dataset, which the framework
-    will split according to the configuration.
-    """
-    logger.info("Loading and processing hh-rlhf dataset from Hugging Face...")
-
-    try:
-        # Load both subsets
-        harmless_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="harmless-base")
-        helpful_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base")
-    except Exception as e:
-        logger.error(f"Failed to load dataset from Hugging Face. Error: {e}")
-        raise e
-
-    def preprocess(example):
-        """Preprocesses a single example for choice-based training."""
+def _build_comparison_list(hf_split, subset_tag):
+    """Convert a Hugging Face split into LLM entries."""
+    processed = []
+    skipped = 0
+    for example in hf_split:
         prompt, chosen = parse_dialogue(example['chosen'])
         _, rejected = parse_dialogue(example['rejected'])
 
         if prompt is None or chosen is None or rejected is None:
-            return None
-        
-        return {
+            skipped += 1
+            continue
+        processed.append({
             "prompt": prompt,
-            "output_A": chosen,
-            "output_B": rejected,
-            "choice": " A"  # Target for the choice trainer
-        }
+            "output_A": rejected,
+            "output_B": chosen,
+            "choice": 1,
+            "category": subset_tag,
+        })
+    if skipped:
+        logger.warning(
+            "Skipped %d malformed hh-rlhf records from the %s split.",
+            skipped,
+            subset_tag,
+        )
 
-    # Process all splits
-    harmless_train = harmless_raw['train'].map(preprocess).filter(lambda x: x is not None)
-    harmless_test = harmless_raw['test'].map(preprocess).filter(lambda x: x is not None)
-    helpful_train = helpful_raw['train'].map(preprocess).filter(lambda x: x is not None)
-    helpful_test = helpful_raw['test'].map(preprocess).filter(lambda x: x is not None)
+    return processed
 
-    # Combine into a single training and test set
-    full_train_dataset = datasets.concatenate_datasets([harmless_train, helpful_train])
-    full_test_dataset = datasets.concatenate_datasets([harmless_test, helpful_test])
-    
-    # Wrap the raw data into LLMDataset objects
-    train_dataset = LLMDataset(full_train_dataset,
-                               tokenizer,
-                               prompt_input=HH_RLHF_PROMPT_DICT['comparison'],
-                               prompt_no_input=HH_RLHF_PROMPT_DICT['comparison'],
-                               output_tag='choice')
-    
-    test_dataset = LLMDataset(full_test_dataset,
-                              tokenizer,
-                              prompt_input=HH_RLHF_PROMPT_DICT['comparison'],
-                              prompt_no_input=HH_RLHF_PROMPT_DICT['comparison'],
-                              output_tag='choice')
+def load_hh_rlhf_dataset(config, tokenizer):
+    logger.info("Loading and processing hh-rlhf dataset from Hugging Face...")
 
-    # Return a tuple, just like reddit_tldr.py and shp.py
-    # The framework will handle splitting this into train/val/test and
-    # distributing it to clients.
+    try:
+        harmless_raw = datasets.load_dataset("Anthropic/hh-rlhf",
+                                             data_dir="harmless-base")
+        helpful_raw = datasets.load_dataset("Anthropic/hh-rlhf",
+                                            data_dir="helpful-base")
+    except Exception as e:
+        logger.error("Failed to load dataset from Hugging Face. Error: %s", e)
+        raise
+
+    harmless_train = _build_comparison_list(harmless_raw['train'], 'harmless')
+    harmless_test = _build_comparison_list(harmless_raw['test'], 'harmless')
+    helpful_train = _build_comparison_list(helpful_raw['train'], 'helpful')
+    helpful_test = _build_comparison_list(helpful_raw['test'], 'helpful')
+
+    train_list = harmless_train + helpful_train
+    test_list = harmless_test + helpful_test
+
+    train_dataset = LLMComparisonDataset(
+        train_list,
+        tokenizer,
+        prompt_input=HH_RLHF_PROMPT_DICT['generation'],
+        prompt_no_input=HH_RLHF_PROMPT_DICT['generation'],
+        output_A='output_A',
+        output_B='output_B',
+        choice='choice')
+
+    test_dataset = LLMComparisonDataset(
+        test_list,
+        tokenizer,
+        prompt_input=HH_RLHF_PROMPT_DICT['generation'],
+        prompt_no_input=HH_RLHF_PROMPT_DICT['generation'],
+        output_A='output_A',
+        output_B='output_B',
+        choice='choice')
+
+
+
     dataset = (train_dataset, test_dataset, test_dataset)
 
     return dataset, config
