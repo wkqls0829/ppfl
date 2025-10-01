@@ -1,4 +1,5 @@
 import os
+import random
 
 import datasets
 from federatedscope.core.auxiliaries.logging import logger
@@ -27,17 +28,25 @@ HH_RLHF_PROMPT_DICT = {
 
 def parse_dialogue(text):
     """Helper to split dialogue into prompt and the final assistant response."""
-    parts = text.split('\n\n')
-    if len(parts) < 2 or 'Assistant:' not in parts[-1]:
+    if "Assistant:" not in text:
         return None, None
-    response = parts[-1].replace('Assistant: ', '').strip()
-    prompt = '\n\n'.join(parts[:-1]).strip()
+
+    # Take the final assistant turn as the response and keep the rest as prompt.
+    prompt, response = text.rsplit("Assistant:", 1)
+    prompt = prompt.strip()
+    response = response.strip()
+
+    if not prompt or not response:
+        return None, None
+
+    # Ensure the assistant prefix is removed from the response body.
     return prompt, response
 
 def _build_comparison_list(hf_split, subset_tag):
-    """Convert a Hugging Face split into LLM entries."""
+    """Convert a Hugging Face split into LLM comparison entries."""
     processed = []
     skipped = 0
+
     for example in hf_split:
         prompt, chosen = parse_dialogue(example['chosen'])
         _, rejected = parse_dialogue(example['rejected'])
@@ -45,13 +54,18 @@ def _build_comparison_list(hf_split, subset_tag):
         if prompt is None or chosen is None or rejected is None:
             skipped += 1
             continue
+
         processed.append({
             "prompt": prompt,
+            # LLMComparisonDataset expects ``choice`` to be numeric. We always
+            # set it to ``1`` and feed the rejected response as ``output_A`` so
+            # that the internal swap produces (chosen, rejected) pairs.
             "output_A": rejected,
             "output_B": chosen,
             "choice": 1,
             "category": subset_tag,
         })
+
     if skipped:
         logger.warning(
             "Skipped %d malformed hh-rlhf records from the %s split.",
@@ -61,7 +75,9 @@ def _build_comparison_list(hf_split, subset_tag):
 
     return processed
 
+
 def load_hh_rlhf_dataset(config, tokenizer):
+    """Load hh-rlhf as pairwise preference data for RLHF training."""
     logger.info("Loading and processing hh-rlhf dataset from Hugging Face...")
 
     try:
@@ -79,10 +95,26 @@ def load_hh_rlhf_dataset(config, tokenizer):
     helpful_test = _build_comparison_list(helpful_raw['test'], 'helpful')
 
     train_list = harmless_train + helpful_train
-    test_list = harmless_test + helpful_test
+    eval_list = harmless_test + helpful_test
+
+    # Build deterministic validation/test splits following reddit_tldr style.
+    rng = random.Random(42)
+    rng.shuffle(eval_list)
+    mid = len(eval_list) // 2
+    val_list = eval_list[:mid]
+    test_list = eval_list[mid:]
 
     train_dataset = LLMComparisonDataset(
         train_list,
+        tokenizer,
+        prompt_input=HH_RLHF_PROMPT_DICT['generation'],
+        prompt_no_input=HH_RLHF_PROMPT_DICT['generation'],
+        output_A='output_A',
+        output_B='output_B',
+        choice='choice')
+
+    val_dataset = LLMComparisonDataset(
+        val_list,
         tokenizer,
         prompt_input=HH_RLHF_PROMPT_DICT['generation'],
         prompt_no_input=HH_RLHF_PROMPT_DICT['generation'],
@@ -99,9 +131,7 @@ def load_hh_rlhf_dataset(config, tokenizer):
         output_B='output_B',
         choice='choice')
 
-
-
-    dataset = (train_dataset, test_dataset, test_dataset)
+    dataset = (train_dataset, val_dataset, test_dataset)
 
     return dataset, config
 

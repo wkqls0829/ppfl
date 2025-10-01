@@ -84,7 +84,8 @@ def get_dataloader(dataset, config, split='train'):
             dataset = dataset[0].edge_index
     filtered_args = filter_dict(loader_cls.__init__, raw_args)
 
-    if config.data.type.lower().endswith('@llm-rlhf') or config.llm.rlhf:
+    if config.data.type.lower().endswith('@llm-rlhf') or \
+       getattr(config.llm, 'rlhf', False):
         from federatedscope.llm.dataloader import get_tokenizer, \
             LLMRewardCollator
         model_name, _ = config.model.type.split('@')
@@ -95,12 +96,26 @@ def get_dataloader(dataset, config, split='train'):
 
     elif config.data.type.lower().endswith('@llm'):
         from federatedscope.llm.dataloader import get_tokenizer, \
-            LLMDataCollator
+            LLMDataCollator, LLMRewardCollator
         model_name, _ = config.model.type.split('@')
         tokenizer, _ = get_tokenizer(model_name, config.data.root,
                                      config.llm.tok_len)
-        data_collator = LLMDataCollator(tokenizer=tokenizer)
-        filtered_args['collate_fn'] = data_collator
+
+        use_reward_collator = False
+        sample = None
+        try:
+            if hasattr(dataset, '__len__') and len(dataset) > 0:
+                sample = dataset[0]
+        except Exception:
+            sample = None
+
+        if isinstance(sample, dict) and (
+                'win_data' in sample or 'lose_data' in sample):
+            use_reward_collator = True
+
+        collator_cls = LLMRewardCollator if use_reward_collator \
+            else LLMDataCollator
+        filtered_args['collate_fn'] = collator_cls(tokenizer=tokenizer)
 
     dataloader = loader_cls(dataset, **filtered_args)
     return dataloader

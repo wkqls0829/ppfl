@@ -1,5 +1,5 @@
 use_gpu: True
-device: 7
+device: 6
 early_stop:
   patience: 0
 federate:
