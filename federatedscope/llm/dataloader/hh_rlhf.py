@@ -3,7 +3,7 @@ import random
 
 import datasets
 from federatedscope.core.auxiliaries.logging import logger
-from federatedscope.llm.dataset.llm_dataset import LLMComparisonDataset
+from federatedscope.llm.dataset.llm_dataset import LLMComparisonDataset, LLMDataset
 
 
 HH_RLHF_PROMPT_DICT = {
@@ -28,8 +28,21 @@ HH_RLHF_PROMPT_DICT = {
 
 def parse_dialogue(text):
     """Helper to split dialogue into prompt and the final assistant response."""
-    if "Assistant:" not in text:
+    if not text:
         return None, None
+
+    marker = "Assistant:"
+    last_assistant = text.rfind(marker)
+    if last_assistant == -1:
+        return None, None
+
+    prompt = text[:last_assistant].strip()
+    response = text[last_assistant + len(marker):].strip()
+
+    if not prompt or not response:
+        return None, None
+
+    return prompt, response
 
 def _collect_split(data_dir, split):
     """Download and preprocess a single split from the Anthropic HH-RLHF hub."""
