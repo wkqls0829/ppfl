@@ -31,105 +31,72 @@ def parse_dialogue(text):
     if "Assistant:" not in text:
         return None, None
 
-    # Take the final assistant turn as the response and keep the rest as prompt.
-    prompt, response = text.rsplit("Assistant:", 1)
-    prompt = prompt.strip()
-    response = response.strip()
+def _collect_split(data_dir, split):
+    """Download and preprocess a single split from the Anthropic HH-RLHF hub."""
 
-    if not prompt or not response:
-        return None, None
+    try:
+        raw_split = datasets.load_dataset("Anthropic/hh-rlhf",
+                                          data_dir=data_dir,
+                                          split=split)
+    except Exception as error:
+        logger.error("Failed to load %s/%s from Hugging Face: %s", data_dir,
+                     split, error)
+        raise
 
-    # Ensure the assistant prefix is removed from the response body.
-    return prompt, response
-
-def _build_comparison_list(hf_split, subset_tag):
-    """Convert a Hugging Face split into LLM comparison entries."""
-    processed = []
-    skipped = 0
-
-    for example in hf_split:
-        prompt, chosen = parse_dialogue(example['chosen'])
-        _, rejected = parse_dialogue(example['rejected'])
+    processed_examples = []
+    for example in raw_split:
+        prompt, chosen = parse_dialogue(example.get('chosen', ''))
+        _, rejected = parse_dialogue(example.get('rejected', ''))
 
         if prompt is None or chosen is None or rejected is None:
-            skipped += 1
             continue
 
-        processed.append({
+        processed_examples.append({
             "prompt": prompt,
-            # LLMComparisonDataset expects ``choice`` to be numeric. We always
-            # set it to ``1`` and feed the rejected response as ``output_A`` so
-            # that the internal swap produces (chosen, rejected) pairs.
-            "output_A": rejected,
-            "output_B": chosen,
-            "choice": 1,
-            "category": subset_tag,
+            "output_A": chosen,
+            "output_B": rejected,
+            "choice": " A",
         })
 
-    if skipped:
-        logger.warning(
-            "Skipped %d malformed hh-rlhf records from the %s split.",
-            skipped,
-            subset_tag,
-        )
-
-    return processed
+    return processed_examples
 
 
 def load_hh_rlhf_dataset(config, tokenizer):
-    """Load hh-rlhf as pairwise preference data for RLHF training."""
-    logger.info("Loading and processing hh-rlhf dataset from Hugging Face...")
+    """Return HH-RLHF data following the same structure as other LLM loaders."""
 
-    try:
-        harmless_raw = datasets.load_dataset("Anthropic/hh-rlhf",
-                                             data_dir="harmless-base")
-        helpful_raw = datasets.load_dataset("Anthropic/hh-rlhf",
-                                            data_dir="helpful-base")
-    except Exception as e:
-        logger.error("Failed to load dataset from Hugging Face. Error: %s", e)
-        raise
+    logger.info("Preparing hh-rlhf dataset using TL;DR-style preprocessing...")
 
-    harmless_train = _build_comparison_list(harmless_raw['train'], 'harmless')
-    harmless_test = _build_comparison_list(harmless_raw['test'], 'harmless')
-    helpful_train = _build_comparison_list(helpful_raw['train'], 'helpful')
-    helpful_test = _build_comparison_list(helpful_raw['test'], 'helpful')
+    harmless_train = _collect_split("harmless-base", "train")
+    harmless_test = _collect_split("harmless-base", "test")
+    helpful_train = _collect_split("helpful-base", "train")
+    helpful_test = _collect_split("helpful-base", "test")
 
-    train_list = harmless_train + helpful_train
-    eval_list = harmless_test + helpful_test
+    list_train_dict = harmless_train + helpful_train
+    list_eval_dict = harmless_test + helpful_test
 
-    # Build deterministic validation/test splits following reddit_tldr style.
-    rng = random.Random(42)
-    rng.shuffle(eval_list)
-    mid = len(eval_list) // 2
-    val_list = eval_list[:mid]
-    test_list = eval_list[mid:]
+    random.Random(42).shuffle(list_eval_dict)
+    split_point = len(list_eval_dict) // 2
+    list_val_dict = list_eval_dict[:split_point]
+    list_test_dict = list_eval_dict[split_point:]
 
-    train_dataset = LLMComparisonDataset(
-        train_list,
-        tokenizer,
-        prompt_input=HH_RLHF_PROMPT_DICT['generation'],
-        prompt_no_input=HH_RLHF_PROMPT_DICT['generation'],
-        output_A='output_A',
-        output_B='output_B',
-        choice='choice')
+    if not list_test_dict:
+        list_test_dict = list_val_dict
 
-    val_dataset = LLMComparisonDataset(
-        val_list,
-        tokenizer,
-        prompt_input=HH_RLHF_PROMPT_DICT['generation'],
-        prompt_no_input=HH_RLHF_PROMPT_DICT['generation'],
-        output_A='output_A',
-        output_B='output_B',
-        choice='choice')
-
-    test_dataset = LLMComparisonDataset(
-        test_list,
-        tokenizer,
-        prompt_input=HH_RLHF_PROMPT_DICT['generation'],
-        prompt_no_input=HH_RLHF_PROMPT_DICT['generation'],
-        output_A='output_A',
-        output_B='output_B',
-        choice='choice')
+    train_dataset = LLMDataset(list_train_dict,
+                               tokenizer,
+                               prompt_input=HH_RLHF_PROMPT_DICT['comparison'],
+                               prompt_no_input=HH_RLHF_PROMPT_DICT['comparison'],
+                               output_tag='choice')
+    val_dataset = LLMDataset(list_val_dict,
+                             tokenizer,
+                             prompt_input=HH_RLHF_PROMPT_DICT['comparison'],
+                             prompt_no_input=HH_RLHF_PROMPT_DICT['comparison'],
+                             output_tag='choice')
+    test_dataset = LLMDataset(list_test_dict,
+                              tokenizer,
+                              prompt_input=HH_RLHF_PROMPT_DICT['comparison'],
+                              prompt_no_input=HH_RLHF_PROMPT_DICT['comparison'],
+                              output_tag='choice')
 
     dataset = (train_dataset, val_dataset, test_dataset)
 

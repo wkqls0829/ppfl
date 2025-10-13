@@ -8,9 +8,126 @@ import torch
 import datasets
 import transformers
 from transformers import GenerationConfig, AutoConfig
+
+
+_DECODER_ONLY_MODEL_TYPES = frozenset({
+    "bloom",
+    "chatglm",
+    "cohere",
+    "falcon",
+    "gemma",
+    "gpt2",
+    "gpt_bigcode",
+    "gpt_neo",
+    "gpt_neox",
+    "llama",
+    "mistral",
+    "mpt",
+    "opt",
+    "phi",
+    "qwen",
+    "rwkv",
+    "xglm",
+    "yi",
+})
+
+_ENCODER_DECODER_MODEL_TYPES = frozenset({
+    "bart",
+    "blenderbot",
+    "blenderbot-small",
+    "marian",
+    "mbart",
+    "m2m_100",
+    "nllb",
+    "pegasus",
+    "t5",
+})
+
+_DECODER_ONLY_NAME_HINTS = frozenset({
+    "bloom",
+    "chatglm",
+    "falcon",
+    "gemma",
+    "gpt",
+    "llama",
+    "mistral",
+    "mpt",
+    "opt",
+    "phi",
+    "qwen",
+    "rwkv",
+    "xglm",
+    "yi",
+})
+
+_ENCODER_DECODER_NAME_HINTS = frozenset({
+    "bart",
+    "marian",
+    "mbart",
+    "m2m",
+    "nllb",
+    "pegasus",
+    "t5",
+})
+
+
+def _padding_side_from_config(config):
+    decoder_only_model_types = globals().get("_DECODER_ONLY_MODEL_TYPES", ())
+    encoder_decoder_model_types = globals().get(
+        "_ENCODER_DECODER_MODEL_TYPES", ())
+
+    if getattr(config, "is_encoder_decoder", False):
+        return "right"
+
+    model_type = getattr(config, "model_type", None)
+    if model_type in decoder_only_model_types:
+        return "left"
+    if model_type in encoder_decoder_model_types:
+        return "right"
+
+    architectures = getattr(config, "architectures", None) or []
+    if any("decoder" in arch.lower() for arch in architectures):
+        if not any("encoder" in arch.lower() for arch in architectures):
+            return "left"
+    return "left"
+
+
+def _padding_side_from_name(model_name):
+    lower_name = model_name.lower()
+    decoder_only_name_hints = globals().get("_DECODER_ONLY_NAME_HINTS", ())
+    encoder_decoder_name_hints = globals().get(
+        "_ENCODER_DECODER_NAME_HINTS", ())
+
+    if any(hint in lower_name for hint in decoder_only_name_hints):
+        return "left"
+    if any(hint in lower_name for hint in encoder_decoder_name_hints):
+        return "right"
+    return "right"
 from tqdm import tqdm
 
 from dataclasses import dataclass
+
+
+def _pad_tensor_sequence(sequences, padding_value, padding_side):
+    if not sequences:
+        return torch.empty(0)
+
+    if padding_side == "left":
+        max_len = max(seq.size(0) for seq in sequences)
+        padded = []
+        for seq in sequences:
+            pad_len = max_len - seq.size(0)
+            if pad_len > 0:
+                pad_tensor = seq.new_full((pad_len,), padding_value)
+                seq = torch.cat((pad_tensor, seq), dim=0)
+            padded.append(seq)
+        return torch.stack(padded, dim=0)
+
+    return torch.nn.utils.rnn.pad_sequence(
+        sequences,
+        batch_first=True,
+        padding_value=padding_value,
+    )
 from federatedscope.llm.dataset.llm_dataset import DefaultToken, \
     LLMDataset, PROMPT_DICT
 from federatedscope.core.data.utils import download_url
@@ -115,14 +232,16 @@ class LLMDataCollator(object):
     def __call__(self, instances):
         input_ids, labels = tuple([instance[key] for instance in instances]
                                   for key in ("input_ids", "labels"))
-        input_ids = torch.nn.utils.rnn.pad_sequence(
+        input_ids = _pad_tensor_sequence(
             input_ids,
-            batch_first=True,
-            padding_value=self.tokenizer.pad_token_id)
-        labels = torch.nn.utils.rnn.pad_sequence(
+            padding_value=self.tokenizer.pad_token_id,
+            padding_side=self.tokenizer.padding_side,
+        )
+        labels = _pad_tensor_sequence(
             labels,
-            batch_first=True,
-            padding_value=DefaultToken.IGNORE_INDEX.value)
+            padding_value=DefaultToken.IGNORE_INDEX.value,
+            padding_side=self.tokenizer.padding_side,
+        )
         return dict(
             input_ids=input_ids,
             labels=labels,
@@ -201,8 +320,11 @@ def get_tokenizer(model_name, cache_dir, tok_len=128, padding_side=None):
     from transformers import AutoTokenizer, GPT2Tokenizer
 
     if padding_side is None:
-        config_name = 'gpt2' \
-                if model_name == 'CarperAI/openai_summarize_tldr_sft' else model_name
+        config_name = (
+            'gpt2'
+            if model_name == 'CarperAI/openai_summarize_tldr_sft'
+            else model_name
+        )
         try:
             config = AutoConfig.from_pretrained(
                 config_name,
@@ -235,6 +357,12 @@ def get_tokenizer(model_name, cache_dir, tok_len=128, padding_side=None):
             padding_side=padding_side,
             use_fast=False,
         )
+
+    # Some tokenizers ignore the constructor argument when remote code overrides
+    # their `__init__`. Ensure the attribute is set explicitly for downstream
+    # callers that rely on it when batching reward-model inputs.
+    if padding_side is not None:
+        tokenizer.padding_side = padding_side
 
     special_tokens = dict()
     if tokenizer.pad_token is None:
