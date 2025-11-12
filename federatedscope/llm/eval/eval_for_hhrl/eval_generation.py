@@ -84,6 +84,8 @@ def main():
     except Exception as err:
         print(f"An error occurred: {err}. Finishing evaluation.")
 
+    print(results)
+
     # ------------------- Save and Display Results -------------------
     # Save detailed results
     results_path = os.path.join(init_cfg.outdir,
