@@ -1,5 +1,5 @@
 use_gpu: True
-device: 1
+device: 2
 early_stop:
   patience: 0
 federate:
@@ -10,8 +10,11 @@ federate:
   save_to: "checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3.ckpt"
   ignore_weight: True
   save_freq: 50
-  share_local_model: True
+  share_local_model: False  # Must be False for process_num to work
   online_aggr: False
+  # Multi-GPU parallelization: set to number of GPUs you want to use (e.g., 2, 4, 8)
+  # This will use StandaloneMultiGPURunner to parallelize clients across GPUs
+  process_num: 2  # Change this to match your number of available GPUs
 data:
   root: /hdd/hdd3/kjb/
   type: 'hh-rlhf@llm'
@@ -20,6 +23,7 @@ data:
 llm:
   use: True
   tok_len: 1024
+  max_new_token: 512
   accelerator:
     use: False
   chat:
@@ -50,6 +54,10 @@ train:
     betas: (0.9, 0.95)
     lr: 0.00001
   is_enable_half: True
+  # DataParallel: Use multiple GPUs for a single model (alternative to process_num)
+  # Example: [0, 1] to use GPU 0 and 1, or [0, 1, 2, 3] for 4 GPUs
+  # Note: This is model-level parallelization, different from process_num
+  # data_para_dids: [0, 1]  # Uncomment and set GPU IDs if you prefer DataParallel
 criterion:
   type: CrossEntropyLoss
 trainer:
@@ -57,7 +65,10 @@ trainer:
   choices: ['A', 'B']
 eval:
   freq: 50
-  metrics: ['loss', 'acc']
+  metrics: ['loss', 'acc', 'avg_harmlessness', 'avg_helpfulness']
   best_res_update_round_wise_key: test_loss
   count_flops: False
+  # Limit the number of samples for reward model evaluation to speed up
+  # Set to -1 to evaluate on all samples (slower but more accurate)
+  max_samples_for_reward: 100
 expname: hhrl/choice_gemma/fedbiscuit_u3

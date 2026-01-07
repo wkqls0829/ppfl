@@ -27,7 +27,13 @@ def recv_mode_para(model_para, src_rank):
 def setup_multigpu_runner(cfg, server_class, client_class, unseen_clients_id,
                           server_resource_info, client_resource_info):
     processes = []
-    mp.set_start_method("spawn")
+    # Set start method only if not already set (to avoid "context has already been set" error)
+    try:
+        mp.set_start_method("spawn", force=False)
+    except RuntimeError:
+        # Context has already been set, which is fine
+        # We can continue using the existing context
+        logger.info("Multiprocessing context already set, using existing context")
 
     # init parameter
     client2server_queue = mp.Queue()

@@ -14,6 +14,12 @@ tid=10000
 # export CUDA_VISIBLE_DEVICES=1
 # export CUDA_LAUNCH_BLOCKING=1 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 
+
+# Set PYTHONPATH to use the current directory's federatedscope instead of other installations
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
+
 nohup python -u federatedscope/main.py \
     --cfg cfg/gemma_hhrl.yaml \
     > outputs/${tid}.log 2>&1 &

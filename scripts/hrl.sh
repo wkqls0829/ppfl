@@ -1,4 +1,4 @@
-#!/bin/bash
+bin/bash
 
 num_client=30
 data_path=~/dplora/news/data/30/1

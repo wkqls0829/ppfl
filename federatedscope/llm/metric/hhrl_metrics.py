@@ -61,7 +61,19 @@ def _get_or_compute_hhrl_scores(ctx):
         "num_beams": 1
     }
 
-    for batch in tqdm(eval_loader, desc="Evaluating with Reward Models"):
+    # Limit the number of samples for evaluation to speed up
+    # Default: evaluate on max 100 samples, or all if less than 100
+    max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 100)
+    if max_eval_samples <= 0:
+        max_eval_samples = float('inf')  # Evaluate on all samples
+    
+    total_samples_evaluated = 0
+    should_limit = max_eval_samples != float('inf')
+
+    for batch_idx, batch in enumerate(tqdm(eval_loader, desc="Evaluating with Reward Models")):
+        # Stop early if we've reached the max number of samples
+        if should_limit and total_samples_evaluated >= max_eval_samples:
+            break
         # The dataloader provides tokenized inputs. We need to decode them
         # back to strings to get the prompt.
         input_ids = batch['input_ids'].to(ctx.device)
@@ -87,6 +99,15 @@ def _get_or_compute_hhrl_scores(ctx):
 
         # The full text for the reward model is the generated text
         # The prompt for the reward model is the original input text
+        # Limit the number of samples per batch if needed
+        batch_size = len(completions)
+        if should_limit and total_samples_evaluated + batch_size > max_eval_samples:
+            # Only evaluate the remaining samples needed
+            remaining = max_eval_samples - total_samples_evaluated
+            completions = completions[:remaining]
+            prompts = prompts[:remaining]
+            batch_size = remaining
+
         harmless_scores = harmless_reward_model.get_rewards(completions,
                                                             prompts)
         helpful_scores = helpful_reward_model.get_rewards(completions,
@@ -94,6 +115,12 @@ def _get_or_compute_hhrl_scores(ctx):
 
         all_harmless_scores.extend(harmless_scores)
         all_helpful_scores.extend(helpful_scores)
+        
+        total_samples_evaluated += batch_size
+        
+        # Stop if we've reached the limit
+        if should_limit and total_samples_evaluated >= max_eval_samples:
+            break
 
     ctx.tokenizer.padding_side = original_padding_side
     ctx.tokenizer.pad_token = original_pad_token
@@ -101,8 +128,12 @@ def _get_or_compute_hhrl_scores(ctx):
     results = {}
     if all_harmless_scores:
         results['avg_harmlessness'] = np.mean(all_harmless_scores)
+        if should_limit:
+            logger.info(f"Evaluated {len(all_harmless_scores)} samples for harmlessness (limited from full dataset)")
     if all_helpful_scores:
         results['avg_helpfulness'] = np.mean(all_helpful_scores)
+        if should_limit:
+            logger.info(f"Evaluated {len(all_helpful_scores)} samples for helpfulness (limited from full dataset)")
 
     setattr(ctx, cache_key, results)
     return results
