@@ -105,18 +105,37 @@ def get_llm(config, load_from_prev_ckpt=False, **kwargs):
     if load_from_prev_ckpt:
         # Here we load from the most recent one
         num_ckpt = config.federate.total_round_num // config.federate.save_freq
-        prefix = ['final_'] + \
-            [str(i*config.federate.save_freq) + '_'
-             for i in range(num_ckpt, -1, -1)] + ['']
         dirname, filename = os.path.split(config.federate.save_to)
-        for pre in prefix:
+        
+        # Check if filename already starts with 'final_', if so, don't add it again
+        prefix_list = []
+        if not filename.startswith('final_'):
+            prefix_list.append('final_')
+        
+        prefix_list.extend([
+            str(i*config.federate.save_freq) + '_'
+            for i in range(num_ckpt, -1, -1)
+        ])
+        prefix_list.append('')
+        
+        for pre in prefix_list:
             ckpt_path = os.path.join(dirname, pre + filename)
             logger.info(f'Attempt to load from {ckpt_path}')
             if os.path.exists(ckpt_path):
                 ckpt = torch.load(ckpt_path, map_location='cpu')
-                model.load_state_dict(ckpt['model'])
-                logger.info(f'Model of Round {ckpt["cur_round"]} loads '
-                            f'from the checkpoint {ckpt_path}')
-                break
+                # Filter out meta tensors and handle them properly
+                model_state = ckpt['model']
+                filtered_state = {}
+                for key, value in model_state.items():
+                    if not hasattr(value, 'is_meta') or not value.is_meta:
+                        filtered_state[key] = value
+                    else:
+                        logger.warning(f"Skipping meta tensor for key: {key}")
+                
+                if filtered_state:
+                    model.load_state_dict(filtered_state, strict=False)
+                    logger.info(f'Model of Round {ckpt.get("cur_round", "unknown")} loads '
+                                f'from the checkpoint {ckpt_path}')
+                    break
 
     return model

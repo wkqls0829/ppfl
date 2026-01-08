@@ -1,5 +1,5 @@
 use_gpu: True
-device: 0  # Will be remapped by CUDA_VISIBLE_DEVICES
+device: 2
 early_stop:
   patience: 0
 federate:
@@ -7,18 +7,16 @@ federate:
   client_num: 10
   sample_client_num: 5
   total_round_num: 150
-  save_to: "checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_parallel.ckpt"  # Different from hhst.sh to avoid collision
+  save_to: "checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_vpl.ckpt"
   ignore_weight: True
   save_freq: 50
   share_local_model: True
   online_aggr: False
-
 data:
   root: /hdd/hdd3/kjb/
   type: 'hh-rlhf@llm'
   splits: [0.9,0.09,0.01]
   splitter: 'meta'
-
 llm:
   use: True
   tok_len: 1024
@@ -37,14 +35,15 @@ llm:
       use: True
       round: 50
     args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
+  # Variational Preference Learning (VPL) parameters
+  vpl_latent_dim: 32  # Dimension of user-specific latent space
+  vpl_kl_weight: 0.1  # Weight for KL divergence term in ELBO loss
+  vpl_feature_method: 'choice_logits'  # Feature extraction method
   grad_accum_step: 2
-
 dataloader:
   batch_size: 4
-
 model:
   type: 'google/gemma-2b@huggingface_llm'
-
 train:
   local_update_steps: 30
   batch_or_epoch: batch
@@ -53,20 +52,22 @@ train:
     betas: (0.9, 0.95)
     lr: 0.00001
   is_enable_half: True
-
 criterion:
   type: CrossEntropyLoss
-
 trainer:
-  type: llmrewardchoicetrainer
+  type: vplrewardchoicetrainer  # Use VPL trainer instead of llmrewardchoicetrainer
   choices: ['A', 'B']
-
 eval:
   freq: 50
-  metrics: ['loss', 'acc', 'avg_harmlessness', 'avg_helpfulness']
+  metrics: ['loss', 'acc', 'avg_harmlessness', 'avg_helpfulness', 'vpl_kl_loss', 'vpl_reconstruction_loss']
   best_res_update_round_wise_key: test_loss
   count_flops: False
   # Limit the number of samples for reward model evaluation to speed up
-  max_samples_for_reward: 100
-
-expname: hhrl/choice_gemma/fedbiscuit_u3_parallel  # Different from hhst.sh to avoid collision
+  max_samples_for_reward: 20
+expname: hhrl/choice_gemma/fedbiscuit_u3_vpl
+wandb:
+  use: True  # Enable wandb tracking
+  name_user: ''  # Your wandb username (leave empty for default)
+  name_project: 'ppfl-hhrl'  # Project name in wandb (same as HHRL for comparison)
+  online_track: True  # Track results online (real-time)
+  client_train_info: True  # Track client training information

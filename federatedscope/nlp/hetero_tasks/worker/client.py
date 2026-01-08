@@ -125,6 +125,10 @@ class ATCClient(Client):
                 eval_metrics = self.trainer.evaluate(
                     target_data_split_name=split)
 
+                if eval_metrics is None or not isinstance(eval_metrics, dict):
+                    logger.warning(f'Client #{self.ID} evaluation for {split} returned invalid metrics, skipping')
+                    continue
+
                 if self._cfg.federate.mode == 'distributed':
                     logger.info(
                         self._monitor.format_eval_res(eval_metrics,

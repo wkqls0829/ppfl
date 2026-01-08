@@ -1,16 +1,9 @@
 #!/bin/bash
 
-num_client=30
-data_path=~/dplora/news/data/30/1
-data_name=news
-num_rounds=100
-client_epochs=1
-model=FacebookAI/roberta-base #google-bert/bert-base-cased
-mode=ttlora
-projection_type=global_mag #BA_mag
-learning_rate=5e-4
+# Test script for hh-rlhf training with reduced rounds
+# This is a quick test version of hhst.sh
 
-tid=10000
+tid=10001  # Different test ID
 # export CUDA_VISIBLE_DEVICES=1
 # export CUDA_LAUNCH_BLOCKING=1 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True 
@@ -20,7 +13,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
 
+# Run with test configuration (5 rounds instead of 150)
 nohup python -u federatedscope/main.py \
-    --cfg cfg/gemma_hhrl.yaml \
-    federate.save_to checkpoints/hhrl_choice_gemma_fedbiscuit_u3_${tid}.ckpt \
+    --cfg cfg/gemma_hhrl_test.yaml \
+    federate.save_to checkpoints/test_hhrl_choice_gemma_fedbiscuit_u3_${tid}.ckpt \
     > outputs/${tid}.log 2>&1 &

@@ -47,6 +47,8 @@ class BaseServer(Worker):
                                ['model_para', 'evaluate', 'finish'])
         self.register_handlers('metrics', self.callback_funcs_for_metrics,
                                ['converged'])
+        self.register_handlers('train_metrics', self.callback_funcs_for_train_metrics,
+                               ['train_metrics'])
 
     @abc.abstractmethod
     def run(self):

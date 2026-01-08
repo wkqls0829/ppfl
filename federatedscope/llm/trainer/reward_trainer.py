@@ -124,6 +124,9 @@ class DPORewardTrainer(LLMTrainer):
 
     def _hook_on_fit_start_init(self, ctx):
         super()._hook_on_fit_start_init(ctx)
+        
+        # Set tokenizer in ctx for metrics evaluation
+        ctx.tokenizer = self.tokenizer
 
         ctx.ys_pred = CtxVar([], LIFECYCLE.ROUTINE)
 
@@ -326,6 +329,38 @@ class DPORewardTrainer(LLMTrainer):
         ctx.ys_true = CtxVar(np.concatenate(ctx.ys_true), LIFECYCLE.ROUTINE)
         ctx.ys_pred = CtxVar(np.concatenate(ctx.ys_pred), LIFECYCLE.ROUTINE)
         results = ctx.monitor.eval(ctx)
+        
+        # Log to wandb if enabled
+        if ctx.cfg.wandb.use and ctx.cfg.wandb.online_track:
+            try:
+                import wandb
+                wandb_metrics = {}
+                
+                # Log loss metrics
+                if f'{ctx.cur_split}_loss' in results:
+                    wandb_metrics[f'{ctx.cur_split}/loss'] = results[f'{ctx.cur_split}_loss']
+                if f'{ctx.cur_split}_avg_loss' in results:
+                    wandb_metrics[f'{ctx.cur_split}/avg_loss'] = results[f'{ctx.cur_split}_avg_loss']
+                
+                # Log accuracy metrics separately for better visualization
+                if f'{ctx.cur_split}_acc' in results:
+                    wandb_metrics[f'{ctx.cur_split}/accuracy'] = results[f'{ctx.cur_split}_acc']
+                
+                # Use round as step for x-axis in wandb (if available)
+                step = None
+                if hasattr(ctx, 'cur_round'):
+                    step = ctx.cur_round
+                
+                if wandb_metrics:
+                    if step is not None:
+                        wandb.log(wandb_metrics, step=step)
+                    else:
+                        wandb.log(wandb_metrics)
+            except ImportError:
+                logger.warning("wandb not installed, skipping metrics logging")
+            except Exception as e:
+                logger.warning(f"Failed to log metrics to wandb: {e}")
+        
         setattr(ctx, 'eval_metrics', results)
 
 

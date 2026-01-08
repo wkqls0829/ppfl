@@ -119,6 +119,9 @@ class LLMMultiLoRAClient(Client):
                                 target_data_split_name='val')
                             logger.info(
                                 f'Adapter {i} with the results: {metrics}')
+                            if metrics is None or not isinstance(metrics, dict) or 'val_avg_loss' not in metrics:
+                                logger.warning(f'Adapter {i} evaluation returned invalid metrics, skipping')
+                                continue
                             if i == 0 or min_loss > metrics['val_avg_loss']:
                                 min_loss, adapter_indices = metrics[
                                     'val_avg_loss'], [i]
@@ -184,7 +187,11 @@ class LLMMultiLoRAClient(Client):
                     target_data_split_name='val')
                 logger.info(f'Client {self.ID} Adapter {i} with '
                             f'the results: {adap_metrics}')
-                metrics[f'adapter_{i}_avg_loss'] = adap_metrics['val_avg_loss']
+                if adap_metrics is None or not isinstance(adap_metrics, dict) or 'val_avg_loss' not in adap_metrics:
+                    logger.warning(f'Client {self.ID} Adapter {i} evaluation returned invalid metrics, using random value')
+                    metrics[f'adapter_{i}_avg_loss'] = random.random()
+                else:
+                    metrics[f'adapter_{i}_avg_loss'] = adap_metrics['val_avg_loss']
 
         self.comm_manager.send(
             Message(msg_type='grouping',

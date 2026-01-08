@@ -213,7 +213,7 @@ class Server(BaseServer):
             if 'client_resource_info' in kwargs else None
 
         # Initialize communication manager and message buffer
-        self.msg_buffer = {'train': dict(), 'eval': dict()}
+        self.msg_buffer = {'train': dict(), 'eval': dict(), 'train_metrics': dict()}
         self.staled_msg_buffer = list()
         if self.mode == 'standalone':
             comm_queue = kwargs.get('shared_comm_queue', None)
@@ -499,6 +499,15 @@ class Server(BaseServer):
             # Due to lazy load, we merge two state dict
             merged_param = merge_param_dict(model.state_dict().copy(), result)
             model.load_state_dict(merged_param, strict=False)
+            
+        # Aggregate train metrics after aggregation (for previous round if available)
+        prev_round = self.state - 1
+        if prev_round in self.msg_buffer.get('train_metrics', {}):
+            train_msg_buffer = self.msg_buffer.get('train', {}).get(prev_round, {})
+            train_metrics_buffer = self.msg_buffer['train_metrics'][prev_round]
+            # Only aggregate if we have metrics from all clients
+            if len(train_metrics_buffer) == len(train_msg_buffer) and len(train_msg_buffer) > 0:
+                self._aggregate_train_metrics(prev_round)
 
         return aggregated_num
 
@@ -613,6 +622,11 @@ class Server(BaseServer):
                             metrics_all_clients[key] = list()
                         metrics_all_clients[key].append(
                             float(client_eval_results[key]))
+                # Skip if metrics_all_clients is empty
+                if not metrics_all_clients:
+                    logger.warning(f'No evaluation metrics received from clients for {merge_type} clients, skipping update_best_result')
+                    continue
+                    
                 formatted_logs = self._monitor.format_eval_res(
                     metrics_all_clients,
                     rnd=round,
@@ -667,6 +681,65 @@ class Server(BaseServer):
                                                    self.state)
 
         return formatted_logs_all_set
+
+    def _aggregate_train_metrics(self, round):
+        """
+        Aggregate train metrics (train_loss, train_avg_loss, train_avg_helpfulness, 
+        train_avg_harmlessness) from all clients and log to wandb.
+        """
+        if round not in self.msg_buffer.get('train_metrics', {}):
+            return
+        
+        train_metrics_buffer = self.msg_buffer['train_metrics'][round]
+        train_msg_buffer = self.msg_buffer.get('train', {}).get(round, {})
+        
+        if not train_metrics_buffer or len(train_metrics_buffer) == 0:
+            return
+        
+        # Collect all metrics with sample sizes for weighted average
+        all_metrics = {}
+        total_samples = 0
+        
+        for client_id, (sample_size, metrics) in train_metrics_buffer.items():
+            if not isinstance(metrics, dict):
+                continue
+            total_samples += sample_size
+            
+            for key, value in metrics.items():
+                if key not in all_metrics:
+                    all_metrics[key] = []
+                all_metrics[key].append((sample_size, value))
+        
+        if total_samples == 0:
+            return
+        
+        # Calculate weighted average for each metric
+        aggregated_metrics = {}
+        for key, values in all_metrics.items():
+            if len(values) == 0:
+                continue
+            
+            # Calculate weighted average
+            weighted_sum = sum(sample_size * value for sample_size, value in values)
+            aggregated_metrics[key] = weighted_sum / total_samples
+        
+        if aggregated_metrics:
+            # Log to console
+            logger.info(f'Round {round} - Aggregated Train Metrics: {aggregated_metrics}')
+            
+            # Log to wandb if enabled
+            if self._cfg.wandb.use and self._cfg.wandb.online_track:
+                try:
+                    import wandb
+                    wandb_metrics = {}
+                    for key, value in aggregated_metrics.items():
+                        wandb_metrics[f'aggregated_{key}'] = value
+                    wandb_metrics['round'] = round
+                    wandb.log(wandb_metrics)
+                except ImportError:
+                    logger.warning("wandb not installed, skipping train metrics logging")
+                except Exception as e:
+                    logger.warning(f"Failed to log train metrics to wandb: {e}")
 
     def broadcast_model_para(self,
                              msg_type='model_para',
@@ -957,6 +1030,9 @@ class Server(BaseServer):
                 for split in self._cfg.eval.split:
                     eval_metrics = trainer.evaluate(
                         target_data_split_name=split)
+                    if eval_metrics is None or not isinstance(eval_metrics, dict):
+                        logger.warning(f'Server evaluation for {split} returned invalid metrics, skipping')
+                        continue
                     metrics.update(**eval_metrics)
                 formatted_eval_res = self._monitor.format_eval_res(
                     metrics,
@@ -1038,6 +1114,35 @@ class Server(BaseServer):
                                       sample_client_num=1)
 
         return move_on_flag
+
+    def callback_funcs_for_train_metrics(self, message: Message):
+        """
+        Handle train metrics from clients and aggregate them.
+        """
+        if self.is_finish:
+            return 'finish'
+
+        round = message.state
+        sender = message.sender
+        content = message.content
+        
+        if round == self.state or round == self.state - 1:
+            if round not in self.msg_buffer['train_metrics']:
+                self.msg_buffer['train_metrics'][round] = dict()
+            # Save the train metrics from this client
+            self.msg_buffer['train_metrics'][round][sender] = content
+            
+            # Check if we have metrics from all clients and aggregate
+            # Use round-1 if current round is just starting, otherwise use current round
+            check_round = round
+            train_msg_buffer = self.msg_buffer['train'].get(check_round, {})
+            train_metrics_buffer = self.msg_buffer['train_metrics'].get(check_round, {})
+            
+            # Only aggregate if we have metrics from all clients that sent model params
+            if len(train_metrics_buffer) == len(train_msg_buffer) and len(train_msg_buffer) > 0:
+                self._aggregate_train_metrics(check_round)
+        
+        return False  # Don't trigger aggregation, just store metrics
 
     def callback_funcs_for_join_in(self, message: Message):
         """

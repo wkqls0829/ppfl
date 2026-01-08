@@ -1,6 +1,7 @@
 import os
 import sys
 import argparse
+import logging
 
 DEV_MODE = False  # simplify the federatedscope re-setup everytime we change
 # the source codes of federatedscope
@@ -19,6 +20,8 @@ from federatedscope.llm.model.model_builder import get_llm
 from federatedscope.llm.dataloader.dataloader import get_tokenizer
 from federatedscope.llm.rlhf.standalone_training import \
     RLHF_finetuning
+
+logger = logging.getLogger(__name__)
 
 if os.environ.get('https_proxy'):
     del os.environ['https_proxy']
@@ -62,29 +65,47 @@ if __name__ == '__main__':
 
     init_cfg.freeze()
 
+    # Determine target device from config before loading models
+    gpu_manager = GPUManager(gpu_available=init_cfg.use_gpu,
+                             specified_device=init_cfg.device)
+    _server_device = gpu_manager.auto_choice()
+    logger.info(f"Using device from config: {_server_device} (device={init_cfg.device})")
+    
+    # Use specified device for device_map instead of 'auto'
+    # This ensures models are loaded on the designated GPU
+    if init_cfg.use_gpu and init_cfg.device >= 0:
+        target_device_map = f'cuda:{init_cfg.device}'
+    else:
+        target_device_map = _server_device
+    
     # load selector
     selector_backbone_name, _ = selector_cfg.model.type.split('@')
     selector_model = get_llm(selector_cfg,
                              load_from_prev_ckpt=True,
-                             device_map='auto')
+                             device_map=target_device_map)
     selector_tokenizer, _ = get_tokenizer(selector_backbone_name,
                                           selector_cfg.data.root,
                                           selector_cfg.llm.tok_len)
 
     # load llm
     model_name, _ = init_cfg.model.type.split('@')
-    model = get_llm(init_cfg, device_map='auto')
+    model = get_llm(init_cfg, device_map=target_device_map)
     tokenizer, _ = get_tokenizer(model_name, init_cfg.data.root,
                                  init_cfg.llm.tok_len)
     generator_tokenizer, _ = get_tokenizer(model_name,
                                            init_cfg.data.root,
                                            init_cfg.llm.tok_len,
                                            padding_side="left")
+    
+    # Ensure models are on the correct device (in case device_map didn't work as expected)
+    if hasattr(selector_model, 'to'):
+        selector_model = selector_model.to(_server_device)
+    if hasattr(model, 'to'):
+        model = model.to(_server_device)
+    
+    logger.info(f"Models loaded on device: {_server_device}")
 
     # start rlhf training
-    gpu_manager = GPUManager(gpu_available=init_cfg.use_gpu,
-                             specified_device=init_cfg.device)
-    _server_device = gpu_manager.auto_choice()
     RLHF_finetuning(
         model,
         tokenizer,

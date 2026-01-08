@@ -660,6 +660,11 @@ class Monitor(object):
             # update different keys round-wise: if find better
             # round_wise_update_key, update others at the same time
             else:
+                # Skip if new_results is empty
+                if not new_results:
+                    logger.warning(f'Empty results provided to update_best_result, skipping')
+                    return False
+                    
                 found_round_wise_update_key = False
                 sorted_keys = []
                 for key in new_results:

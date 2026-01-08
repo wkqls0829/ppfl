@@ -10,7 +10,7 @@ mode=ttlora
 projection_type=global_mag #BA_mag
 learning_rate=5e-4
 
-tid=20000
+tid=20100
 # export CUDA_LAUNCH_BLOCKING=1 
 # export CUDA_VISIBLE_DEVICES=2 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -21,8 +21,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
 
 nohup python -u federatedscope/llm/rlhf/main.py \
-    --selector-cfg-file cfg/gemma_hhrl.yaml \
+    --selector-cfg-file cfg/gemma_hhrl_vpl.yaml \
     --cfg cfg/gemma_hhrl_rl.yaml \
-    federate.save_to checkpoints/hhrl_rlhf_gemma_choice_gemma_fedbiscuit_u3_${tid}.ckpt \
-    expname hhrl/rlhf_gemma/hhrl_choice_gemma_fedbiscuit_u3 \
+    federate.save_to checkpoints/hhrl_rlhf_gemma_vpl_choice_gemma_fedbiscuit_u3_${tid}.ckpt \
+    expname hhrl/rlhf_gemma/hhrl_choice_gemma_fedbiscuit_u3_vpl \
     > outputs/${tid}.log 2>&1 &

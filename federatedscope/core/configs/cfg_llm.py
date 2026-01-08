@@ -20,6 +20,13 @@ def extend_llm_cfg(cfg):
     cfg.llm.reward_coeff = 0.1
 
     # ---------------------------------------------------------------------- #
+    # Variational Preference Learning (VPL) for LLM
+    # ---------------------------------------------------------------------- #
+    cfg.llm.vpl_latent_dim = 32  # Dimension of user-specific latent space
+    cfg.llm.vpl_kl_weight = 0.1  # Weight for KL divergence term in ELBO
+    cfg.llm.vpl_feature_method = 'choice_logits'  # Method for feature extraction: 'choice_logits', 'mean_pool', 'max_pool'
+
+    # ---------------------------------------------------------------------- #
     # RLHF for LLM
     # ---------------------------------------------------------------------- #
     cfg.llm.rlhf = False

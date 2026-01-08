@@ -126,9 +126,13 @@ class OffsiteTuningServer(Server):
                 for split in self._cfg.eval.split:
                     eval_metrics = trainer.evaluate(
                         target_data_split_name=split)
+                    if eval_metrics is None or not isinstance(eval_metrics, dict):
+                        logger.warning(f'Server evaluation for {split} returned invalid metrics, skipping')
+                        continue
                     for key, value in eval_metrics.items():
                         metrics['emulator.' + key] = value
-                metrics.update(**raw_metrics)
+                if raw_metrics is not None and isinstance(raw_metrics, dict):
+                    metrics.update(**raw_metrics)
                 formatted_eval_res = self._monitor.format_eval_res(
                     metrics,
                     rnd=self.state,
@@ -172,6 +176,7 @@ class OffsiteTuningServer(Server):
             for key, value in content.items()
         }
         if self._cfg.llm.offsite_tuning.eval_type == 'full':
-            self.msg_buffer['eval'][rnd][sender].update(**self.raw_metrics)
+            if self.raw_metrics is not None and isinstance(self.raw_metrics, dict):
+                self.msg_buffer['eval'][rnd][sender].update(**self.raw_metrics)
 
         return self.check_and_move_on(check_eval_result=True)

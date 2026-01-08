@@ -440,6 +440,23 @@ class Client(BaseClient):
                                 init_timestamp=timestamp,
                                 instance_number=sample_size),
                             content=(sample_size, shared_model_para)))
+                
+                # Send train metrics to server for aggregation
+                if results and isinstance(results, dict):
+                    train_metrics = {}
+                    for key in ['train_loss', 'train_avg_loss', 'train_avg_helpfulness', 'train_avg_harmlessness']:
+                        if key in results:
+                            train_metrics[key] = results[key]
+                    if train_metrics:
+                        self.comm_manager.send(
+                            Message(msg_type='train_metrics',
+                                    sender=self.ID,
+                                    receiver=[sender],
+                                    state=self.state,
+                                    timestamp=self._gen_timestamp(
+                                        init_timestamp=timestamp,
+                                        instance_number=sample_size),
+                                    content=(sample_size, train_metrics)))
 
     def callback_funcs_for_assign_id(self, message: Message):
         """
@@ -535,6 +552,10 @@ class Client(BaseClient):
                 eval_metrics = self.trainer.evaluate(
                     target_data_split_name=split)
 
+                if eval_metrics is None or not isinstance(eval_metrics, dict):
+                    logger.warning(f'Client #{self.ID} evaluation for {split} returned invalid metrics, skipping')
+                    continue
+
                 if self._cfg.federate.mode == 'distributed':
                     logger.info(
                         self._monitor.format_eval_res(eval_metrics,
@@ -566,8 +587,15 @@ class Client(BaseClient):
 
             self.history_results = merge_dict_of_results(
                 self.history_results, formatted_eval_res['Results_raw'])
-            self.early_stopper.track_and_check(self.history_results[
-                self._cfg.eval.best_res_update_round_wise_key])
+            
+            # Safely check for early stopping
+            if self._cfg.eval.best_res_update_round_wise_key in self.history_results:
+                self.early_stopper.track_and_check(self.history_results[
+                    self._cfg.eval.best_res_update_round_wise_key])
+            else:
+                logger.warning(f'Client #{self.ID}: best_res_update_round_wise_key '
+                             f'"{self._cfg.eval.best_res_update_round_wise_key}" not found in '
+                             f'history_results. Available keys: {list(self.history_results.keys())}')
 
         self.comm_manager.send(
             Message(msg_type='metrics',

@@ -6,10 +6,10 @@ federate:
   mode: standalone
   client_num: 10
   sample_client_num: 5
-  total_round_num: 150
-  save_to: "checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3.ckpt"
+  total_round_num: 5  # Reduced for testing
+  save_to: "checkpoints/test_hhrl_choice_gemma_fedbiscuit_u3_vpl.ckpt"
   ignore_weight: True
-  save_freq: 50
+  save_freq: 10
   share_local_model: True
   online_aggr: False
 data:
@@ -30,23 +30,24 @@ llm:
     count: 3
     warmup:
       use: True
-      round: 50
+      round: 2  # Reduced for testing
     grouping:
       use: True
-      round: 50
+      round: 2  # Reduced for testing
     args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
-  # reward_coeff: 0.1
-  grad_accum_step: 2
+  # Variational Preference Learning (VPL) parameters
+  vpl_latent_dim: 32  # Dimension of user-specific latent space
+  vpl_kl_weight: 0.1  # Weight for KL divergence term in ELBO loss
+  vpl_feature_method: 'choice_logits'  # Feature extraction method
+  grad_accum_step: 4  # Increased to reduce memory usage (effective batch size = batch_size * grad_accum_step)
 dataloader:
-  batch_size: 4
+  batch_size: 2  # Reduced from 4 to 2 to prevent OOM
 model:
   type: 'google/gemma-2b@huggingface_llm'
 train:
-  local_update_steps: 30
+  local_update_steps: 10  # Reduced for testing
   batch_or_epoch: batch
   optimizer:
-    # type: RMSprop
-    # lr: 0.000001
     type: AdamW
     betas: (0.9, 0.95)
     lr: 0.00001
@@ -54,21 +55,19 @@ train:
 criterion:
   type: CrossEntropyLoss
 trainer:
-  type: llmrewardchoicetrainer
+  type: vplrewardchoicetrainer  # Use VPL trainer
   choices: ['A', 'B']
 eval:
-  freq: 50
-  metrics: ['loss', 'acc', 'avg_harmlessness', 'avg_helpfulness']
-  best_res_update_round_wise_key: test_loss
+  freq: 2  # More frequent evaluation for testing
+  metrics: ['loss', 'acc', 'avg_harmlessness', 'avg_helpfulness', 'vpl_kl_loss', 'vpl_reconstruction_loss']
+  best_res_update_round_wise_key: train_avg_loss
   count_flops: False
   # Limit the number of samples for reward model evaluation to speed up
-  # Set to -1 to evaluate on all samples (slower but more accurate)
-  # Reduced from 100 to 20 to speed up evaluation (24 iterations -> ~5 iterations)
-  max_samples_for_reward: 20
-expname: hhrl/choice_gemma/fedbiscuit_u3
+  max_samples_for_reward: 10  # Further reduced for testing
+expname: hhrl/choice_gemma/fedbiscuit_u3_vpl_test
 wandb:
   use: True  # Enable wandb tracking
   name_user: ''  # Your wandb username (leave empty for default)
-  name_project: 'ppfl-hhrl'  # Project name in wandb
+  name_project: 'ppfl-hhrl'  # Project name in wandb (same as HHRL for comparison)
   online_track: True  # Track results online (real-time)
   client_train_info: True  # Track client training information

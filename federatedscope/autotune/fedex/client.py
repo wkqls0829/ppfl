@@ -78,6 +78,9 @@ class FedExClient(Client):
         metrics = {}
         for split in self._cfg.eval.split:
             eval_metrics = self.trainer.evaluate(target_data_split_name=split)
+            if eval_metrics is None or not isinstance(eval_metrics, dict):
+                logger.warning(f'Client #{self.ID} evaluation for {split} returned invalid metrics, skipping')
+                continue
             for key in eval_metrics:
 
                 if self._cfg.federate.mode == 'distributed':

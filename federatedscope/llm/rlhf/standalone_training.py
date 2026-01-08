@@ -128,8 +128,14 @@ def get_rlhf_prompts_dataset(config):
     return (data_root, list_train_prompts, generation_prompt, selector_prompt)
 
 
-def get_input_data(list_data_dict, w=10):
-    for left in tqdm(range(0, len(list_data_dict), w)):
+def get_input_data(list_data_dict, w=5):
+    """
+    Yield batches of data for generation.
+    Reduced default batch size to 5 to avoid OOM during text generation.
+    """
+    total_batches = (len(list_data_dict) + w - 1) // w
+    logger.info(f"Total batches to generate: {total_batches}, batch size: {w}, total prompts: {len(list_data_dict)}")
+    for left in tqdm(range(0, len(list_data_dict), w), desc="Generating text pairs", total=total_batches, miniters=1, mininterval=10.0):
         yield list_data_dict[left:left + w]
 
 
@@ -165,36 +171,68 @@ class RLHF_finetuning:
         self.device = device
         self._monitor = Monitor(config, monitored_object=self)
 
-    def load_pairwise_data(self):
+    def load_pairwise_data(self, saveto=None):
         # Name of a file saving the generated texts of original model
         _, model_name = self.config.model.type.split("@")[0].split('/', 1)
         dataset_name, _ = self.config.data.type.split("@")
         num_comp = max(2, self.config.llm.num_completions)
+        
+        # Extract tid from saveto if provided, otherwise from config.federate.save_to
+        tid_suffix = ""
+        if saveto:
+            # Extract tid from saveto (e.g., "hhrl_rlhf_gemma_choice_gemma_fedbiscuit_u3_20000.ckpt" -> "20000")
+            import re
+            tid_match = re.search(r'_(\d+)\.ckpt$', saveto)
+            if tid_match:
+                tid_suffix = f"_{tid_match.group(1)}"
+        elif hasattr(self.config, 'federate') and hasattr(self.config.federate, 'save_to'):
+            # Try to extract tid from save_to path
+            import re
+            tid_match = re.search(r'_(\d+)\.ckpt$', self.config.federate.save_to)
+            if tid_match:
+                tid_suffix = f"_{tid_match.group(1)}"
+        
         gen_fp = os.path.join(
             self.data_root,
-            f"rlhf_pair_data_{model_name}_{dataset_name}_{num_comp}.json")
+            f"rlhf_pair_data_{model_name}_{dataset_name}_{num_comp}{tid_suffix}.json")
 
         if os.path.exists(gen_fp):
             # load the file with generated responses
-            list_pairwise_data = json.load(open(gen_fp, "r"))
-            logger.info("Successfully loaded the generated text "
-                        f"from {gen_fp}")
+            logger.info(f"Found existing generated text pairs file: {gen_fp}")
+            with open(gen_fp, "r", encoding='utf-8') as f:
+                list_pairwise_data = json.load(f)
+            logger.info(f"Successfully loaded {len(list_pairwise_data)} text pairs "
+                        f"from {os.path.abspath(gen_fp)}")
+            logger.info("Skipping text generation. To regenerate, delete the file above.")
         else:
             # generate the output
-            logger.info("The generated text file does not exist. "
-                        "Create a new one.")
+            logger.info(f"The generated text file does not exist. "
+                        f"Create a new one. Total prompts: {len(self.list_train_prompts)}")
+            logger.info("Starting text generation (this may take a while)...")
+            
+            # Limit the number of prompts for faster generation during testing
+            # You can adjust this or remove it for full dataset
+            max_prompts = getattr(self.config, 'max_prompts_for_generation', len(self.list_train_prompts))
+            prompts_to_use = self.list_train_prompts[:max_prompts]
+            if len(prompts_to_use) < len(self.list_train_prompts):
+                logger.info(f"Limiting generation to {max_prompts} prompts for faster processing")
+            
             list_pairwise_data = self._generate_pairwise_data(
-                self.list_train_prompts,
+                prompts_to_use,
                 self.model,
                 self.generator_tokenizer,
                 self.generation_prompt,
                 max_new_tokens=self.config.llm.max_new_token,
                 num_completions=self.config.llm.num_completions)
 
-            # save the data to a file
-            json.dump(list_pairwise_data, open(gen_fp, "w"))
-            logger.info("The generation process is done, and save "
-                        f"to {gen_fp}.")
+            # Save the data to a file with indentation for readability
+            logger.info(f"Saving generated text pairs to {gen_fp}...")
+            with open(gen_fp, "w", encoding='utf-8') as f:
+                json.dump(list_pairwise_data, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"The generation process is done, and saved "
+                        f"to {gen_fp}. Generated {len(list_pairwise_data)} pairs")
+            logger.info(f"You can view the generated pairs in: {os.path.abspath(gen_fp)}")
 
         return list_pairwise_data
 
@@ -203,10 +241,14 @@ class RLHF_finetuning:
         fp = os.path.join(self.data_root, f"generated_choose_{saveto}.json")
 
         if os.path.exists(fp):
-            list_preference_data = json.load(open(fp, "r"))
-
+            logger.info(f"Found existing selector preference data file: {fp}")
+            with open(fp, "r", encoding='utf-8') as f:
+                list_preference_data = json.load(f)
+            logger.info(f"Successfully loaded {len(list_preference_data)} preference data "
+                        f"from {os.path.abspath(fp)}")
+            logger.info("Skipping preference selection. To regenerate, delete the file above.")
         else:
-            list_pairwise_data = self.load_pairwise_data()
+            list_pairwise_data = self.load_pairwise_data(saveto=saveto)
 
             # choose the better one based on the given output
             logger.info("Select the better response.")
@@ -217,9 +259,10 @@ class RLHF_finetuning:
                 self.selector_prompt,
             )
             logger.info(list_preference_data[0])
-            # save the choice to a file
-            json.dump(list_preference_data, open(fp, "w"))
-            logger.info(f"Save the selection results to file {fp}")
+            # save the choice to a file with indentation for readability
+            with open(fp, "w", encoding='utf-8') as f:
+                json.dump(list_preference_data, f, indent=2, ensure_ascii=False)
+            logger.info(f"Saved the selection results to {os.path.abspath(fp)}")
 
             if early_exiting:
                 # For choosing the answer
@@ -235,7 +278,22 @@ class RLHF_finetuning:
             saveto, early_exiting)
 
         # move selector model to cpu
-        self.selector_model.cpu()
+        # Check if model has meta tensors and handle them properly
+        try:
+            # First, ensure all parameters are on actual device (not meta)
+            has_meta = False
+            for param in self.selector_model.parameters():
+                if param.is_meta:
+                    has_meta = True
+                    break
+            
+            if not has_meta:
+                self.selector_model.cpu()
+            else:
+                logger.warning("Selector model contains meta tensors, skipping .cpu() call")
+        except Exception as e:
+            logger.warning(f"Error moving selector model to CPU: {e}, continuing...")
+        
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -249,7 +307,17 @@ class RLHF_finetuning:
             output_B="output_B",
             choice="choice",
         )
+        
+        # Create ClientData and ensure it's properly initialized
         data = ClientData(self.config, train_dataset, None, None)
+        # Ensure setup() is called after super().__init__() to create 'train' key in the dict
+        if 'train' not in data:
+            data.setup(self.config)
+        
+        # Verify train key exists
+        if 'train' not in data:
+            logger.error(f"Failed to create 'train' key in ClientData. train_dataset length: {len(train_dataset) if train_dataset else 'None'}")
+            raise ValueError("ClientData does not have 'train' key after setup. Check train_dataset.")
 
         # create DPO trainer
         self.trainer = DPORewardTrainer(
@@ -271,6 +339,30 @@ class RLHF_finetuning:
                                                           role="Server",
                                                           return_raw=True)
             logger.info(train_log_res)
+            
+            # Log to wandb if enabled
+            if self.config.wandb.use and self.config.wandb.online_track:
+                try:
+                    import wandb
+                    wandb_metrics = {}
+                    
+                    # Log loss metrics
+                    if 'train_loss' in results:
+                        wandb_metrics['train/loss'] = results['train_loss']
+                    if 'train_avg_loss' in results:
+                        wandb_metrics['train/avg_loss'] = results['train_avg_loss']
+                    
+                    # Log accuracy metrics separately for better visualization
+                    if 'train_acc' in results:
+                        wandb_metrics['train/accuracy'] = results['train_acc']
+                    
+                    # Use round as step for x-axis in wandb
+                    if wandb_metrics:
+                        wandb.log(wandb_metrics, step=r)
+                except ImportError:
+                    logger.warning("wandb not installed, skipping metrics logging")
+                except Exception as e:
+                    logger.warning(f"Failed to log metrics to wandb: {e}")
             # Save the checkpoint
             if (r + 1) % self.config.federate.save_freq == 0:
                 if saveto in self.config.federate.save_to:
@@ -297,45 +389,113 @@ class RLHF_finetuning:
             num_return_sequences=max(2, num_completions),
         )
 
-        model_device = _get_model_device(model)
+        # Use self.device instead of detecting from model (which may be on CPU)
+        model_device = self.device if hasattr(self, 'device') else _get_model_device(model)
+        
+        # Ensure model is on the correct device
+        if isinstance(model_device, str):
+            model_device = torch.device(model_device)
+        
+        logger.info(f"Model device: {model_device}, Generating text pairs for {len(list_data_dict)} prompts")
+        
+        # Move model to device if not already there
+        try:
+            current_device = next(model.parameters()).device
+            if current_device != model_device:
+                logger.info(f"Moving model from {current_device} to {model_device}")
+                model = model.to(model_device)
+        except Exception as e:
+            logger.warning(f"Could not move model to device {model_device}: {e}, using current device")
+            model_device = _get_model_device(model)
 
         new_list_data_dict = []
-        for input_data in get_input_data(list_data_dict):
-            input_texts = [prompt.format_map(data) for data in input_data]
-            input_text_tokens = tokenizer(
-                input_texts,
-                padding=True,
-                add_special_tokens=True,
-                return_tensors="pt",
-            ).to(model_device)
+        batch_idx = 0
+        total_batches = (len(list_data_dict) + 4) // 5
+        for input_data in get_input_data(list_data_dict, w=5):  # Reduce batch size from 10 to 5 to avoid OOM
+            batch_idx += 1
+            # Log batch info only for first batch or every 20 batches
+            log_batch_details = (batch_idx == 1 or batch_idx % 20 == 0)
+            
+            if log_batch_details:
+                logger.info(f"Processing batch {batch_idx}/{total_batches}, batch size: {len(input_data)}")
+            
+            try:
+                input_texts = [prompt.format_map(data) for data in input_data]
+                input_text_tokens = tokenizer(
+                    input_texts,
+                    padding=True,
+                    add_special_tokens=True,
+                    return_tensors="pt",
+                ).to(model_device)
 
+                if log_batch_details:
+                    logger.info(f"Starting generation for batch {batch_idx}, input_ids shape: {input_text_tokens['input_ids'].shape}, "
+                               f"max_new_tokens: {max_new_tokens}, num_return_sequences: {generate_kwargs['num_return_sequences']}")
+                
+                # Clear cache before generation
+                if torch.cuda.is_available() and 'cuda' in str(model_device):
+                    torch.cuda.empty_cache()
+                    if log_batch_details:
+                        logger.info(f"GPU memory before generation: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+                
+                # Ensure model is in eval mode
+                model.eval()
+                
+                if log_batch_details:
+                    logger.info(f"Calling model.generate() for batch {batch_idx} on device {model_device}...")
+                output_ids = model.generate(**input_text_tokens, **generate_kwargs)
+                
+                if log_batch_details:
+                    logger.info(f"Completed generation for batch {batch_idx}, output_ids shape: {output_ids.shape}")
+                    if torch.cuda.is_available() and 'cuda' in str(model_device):
+                        logger.info(f"GPU memory after generation: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
+                
+                responses = tokenizer.batch_decode(output_ids,
+                                                   skip_special_tokens=True,
+                                                   ignore_tokenization_space=True)
 
+                response_map = [[] for _ in input_data]
+                for res in responses:
+                    for idx, input_text in enumerate(input_texts):
+                        if input_text in res:
+                            gen_res = res.replace(input_text, "").strip()
+                            response_map[idx].append(gen_res.replace("</s>", ""))
+                            # response_map[idx].append(
+                            #     " " + gen_res.replace("</s>", ""))
+                            break
 
-            output_ids = model.generate(**input_text_tokens, **generate_kwargs)
-            responses = tokenizer.batch_decode(output_ids,
-                                               skip_special_tokens=True,
-                                               ignore_tokenization_space=True)
+                # Log only first sample of first batch for debugging, rest just summary
+                log_sample_details = (batch_idx == 1 and len(new_list_data_dict) == 0)
+                
+                for i, data in enumerate(input_data):
+                    if log_sample_details and i == 0:
+                        # Log first sample of first batch in detail (truncated)
+                        data_preview = str(data)[:300] + "..." if len(str(data)) > 300 else str(data)
+                        logger.info(f"Sample data (first of batch {batch_idx}, preview): {data_preview}")
+                        for j, res in enumerate(response_map[i]):
+                            # Truncate long responses in log
+                            res_preview = res[:200] + "..." if len(res) > 200 else res
+                            logger.info(f'Generated {j}-th response (preview): {res_preview}')
+                    elif batch_idx % 20 == 0 and i == 0:
+                        # Log summary every 20 batches
+                        logger.info(f"Batch {batch_idx}: Processed {len(input_data)} samples, "
+                                   f"generated {len(response_map[i])} responses per sample")
 
-            response_map = [[] for _ in input_data]
-            for res in responses:
-                for idx, input_text in enumerate(input_texts):
-                    if input_text in res:
-                        gen_res = res.replace(input_text, "").strip()
-                        response_map[idx].append(gen_res.replace("</s>", ""))
-                        # response_map[idx].append(
-                        #     " " + gen_res.replace("</s>", ""))
-                        break
-
-            for i, data in enumerate(input_data):
-                logger.info(data)
-                for j, res in enumerate(response_map[i]):
-                    logger.info(f'Generated {j}-th response: {res}')
-
-                for output_A, output_B in combinations(response_map[i], 2):
-                    new_data = copy.deepcopy(data)
-                    new_data["output_A"] = output_A
-                    new_data["output_B"] = output_B
-                    new_list_data_dict.append(new_data)
+                    for output_A, output_B in combinations(response_map[i], 2):
+                        new_data = copy.deepcopy(data)
+                        new_data["output_A"] = output_A
+                        new_data["output_B"] = output_B
+                        new_list_data_dict.append(new_data)
+                        
+                # Clear cache after generation
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    gc.collect()
+                    
+            except Exception as e:
+                logger.error(f"Error in batch {batch_idx} generation: {e}", exc_info=True)
+                # Skip this batch and continue
+                continue
 
         return new_list_data_dict
 

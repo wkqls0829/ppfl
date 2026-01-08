@@ -74,25 +74,42 @@ def _get_or_compute_hhrl_scores(ctx):
         # Stop early if we've reached the max number of samples
         if should_limit and total_samples_evaluated >= max_eval_samples:
             break
-        # The dataloader provides tokenized inputs. We need to decode them
-        # back to strings to get the prompt.
-        input_ids = batch['input_ids'].to(ctx.device)
+        
+        # Handle different data formats: RLHF uses win_input_ids/lose_input_ids, 
+        # regular training uses input_ids
+        if 'win_input_ids' in batch:
+            # RLHF format: use win_input_ids for evaluation
+            input_ids = batch['win_input_ids'].to(ctx.device)
+            attention_mask = batch.get('win_attention_mask', None)
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(ctx.device)
+        elif 'input_ids' in batch:
+            # Regular format
+            input_ids = batch['input_ids'].to(ctx.device)
+            attention_mask = batch.get('attention_mask', None)
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(ctx.device)
+        else:
+            logger.warning(f"Batch {batch_idx} does not contain 'input_ids' or 'win_input_ids', skipping...")
+            continue
         
         # Decode the entire input_ids to get the formatted prompt string
         # This is what the model sees as input.
         prompts = ctx.tokenizer.batch_decode(input_ids,
                                              skip_special_tokens=True)
 
-
-        attention_mask = batch['attention_mask'].to(ctx.device)
-
-
-
-        generated_ids = ctx.model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=ctx.cfg.llm.max_new_token,
-            **generation_kwargs)
+        # Generate with or without attention_mask
+        if attention_mask is not None:
+            generated_ids = ctx.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=ctx.cfg.llm.max_new_token,
+                **generation_kwargs)
+        else:
+            generated_ids = ctx.model.generate(
+                input_ids=input_ids,
+                max_new_tokens=ctx.cfg.llm.max_new_token,
+                **generation_kwargs)
         
         completions = ctx.tokenizer.batch_decode(
             generated_ids, skip_special_tokens=True)

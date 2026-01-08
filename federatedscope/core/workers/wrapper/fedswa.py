@@ -100,6 +100,9 @@ def wrap_swa_server(server):
                 for split in self._cfg.eval.split:
                     eval_metrics = trainer.evaluate(
                         target_data_split_name=split)
+                    if eval_metrics is None or not isinstance(eval_metrics, dict):
+                        logger.warning(f'Server evaluation for {split} returned invalid metrics, skipping')
+                        continue
                     metrics.update(**eval_metrics)
 
                 formatted_eval_res = self._monitor.format_eval_res(
