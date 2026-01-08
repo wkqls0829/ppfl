@@ -17,6 +17,6 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 nohup python -u federatedscope/llm/rlhf/main.py \
     --selector-cfg-file cfg/reward_eval.yaml \
     --cfg cfg/reward_eval_rl.yaml \
-    federate.save_to checkpoints/hhrl_rlhf_gemma_choice_gemma_fedbiscuit_u3.ckpt \
+    federate.save_to /hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_gemma_fedbiscuit_u3.ckpt \
     expname hhrl/rlhf_gemma/hhrl_choice_gemma_fedbiscuit_u3 \
     > outputs/${tid}.log 2>&1 &

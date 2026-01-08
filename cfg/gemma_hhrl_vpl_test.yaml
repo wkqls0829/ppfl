@@ -7,7 +7,7 @@ federate:
   client_num: 10
   sample_client_num: 5
   total_round_num: 5  # Reduced for testing
-  save_to: "checkpoints/test_hhrl_choice_gemma_fedbiscuit_u3_vpl.ckpt"
+  save_to: "/hdd/hdd3/kjb/checkpoints/test_hhrl_choice_gemma_fedbiscuit_u3_vpl.ckpt"
   ignore_weight: True
   save_freq: 10
   share_local_model: True

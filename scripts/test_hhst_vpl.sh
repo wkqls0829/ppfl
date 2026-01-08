@@ -16,5 +16,5 @@ export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
 # Run with VPL test configuration (5 rounds instead of 150)
 nohup python -u federatedscope/main.py \
     --cfg cfg/gemma_hhrl_vpl_test.yaml \
-    federate.save_to checkpoints/test_hhrl_choice_gemma_fedbiscuit_u3_vpl_${tid}.ckpt \
+    federate.save_to /hdd/hdd3/kjb/checkpoints/test_hhrl_choice_gemma_fedbiscuit_u3_vpl_${tid}.ckpt \
     > outputs/${tid}.log 2>&1 &

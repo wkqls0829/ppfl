@@ -23,6 +23,6 @@ export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
 nohup python -u federatedscope/llm/rlhf/main.py \
     --selector-cfg-file cfg/gemma_hhrl.yaml \
     --cfg cfg/gemma_hhrl_rl.yaml \
-    federate.save_to checkpoints/hhrl_rlhf_gemma_choice_gemma_fedbiscuit_u3_${tid}.ckpt \
+    federate.save_to /hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_gemma_fedbiscuit_u3_${tid}.ckpt \
     expname hhrl/rlhf_gemma/hhrl_choice_gemma_fedbiscuit_u3 \
     > outputs/${tid}.log 2>&1 &

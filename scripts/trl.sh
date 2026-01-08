@@ -17,6 +17,6 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 nohup python -u federatedscope/llm/rlhf/main.py \
     --selector-cfg-file fedbiscuit_script/tldr/tldr_choice_gemma_fedbiscuit_u3.yaml \
     --cfg fedbiscuit_script/tldr/tldr_rlhf_fedbiscuit_gemma.yaml llm.accelerator.use True \
-    federate.save_to checkpoints/tldr_rlhf_gemma__tldr_choice_gemma_fedbiscuit_u3.ckpt \
+    federate.save_to /hdd/hdd3/kjb/checkpoints/tldr_rlhf_gemma__tldr_choice_gemma_fedbiscuit_u3.ckpt \
     expname tldr/rlhf_gemma/tldr_choice_gemma_fedbiscuit_u3 \
     > outputs/${tid}.log 2>&1 &

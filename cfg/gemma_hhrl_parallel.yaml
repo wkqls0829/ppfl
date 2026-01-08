@@ -7,7 +7,7 @@ federate:
   client_num: 10
   sample_client_num: 5
   total_round_num: 150
-  save_to: "checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_parallel.ckpt"  # Different from hhst.sh to avoid collision
+  save_to: "/hdd/hdd3/kjb/checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_parallel.ckpt"  # Different from hhst.sh to avoid collision
   ignore_weight: True
   save_freq: 50
   share_local_model: True
