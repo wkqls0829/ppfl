@@ -312,21 +312,31 @@ class LLMMultiLoRAServer(Server):
         # start feature engineering (This part is for hard code)
         if self.check_client_join_in():
             logger.info('Waited all clients join, start now...')
-            self.trigger_for_feat_engr(self.broadcast_model_para, {
-                'msg_type': 'adapter_eval',
-                'filter_unseen_clients': False,
-            })
+            # Only send adapter_eval message if grouping is enabled
+            if self._cfg.llm.adapter.grouping.use:
+                self.trigger_for_feat_engr(self.broadcast_model_para, {
+                    'msg_type': 'adapter_eval',
+                    'filter_unseen_clients': False,
+                })
+                logger.info('Server: Performing a grouping step...')
 
             logger.info(
                 '----------- Starting training (Round #{:d}) -------------'.
                 format(self.state))
-            logger.info('Server: Performing a grouping step...')
 
     def callback_funcs_for_grouping(self, message: Message):
         rnd = message.state
         sender = message.sender
         content = message.content
 
+        # Only process adapter_eval if grouping is enabled
+        if not self._cfg.llm.adapter.grouping.use:
+            return False
+        
+        # Initialize adapter_eval if not already initialized
+        if 'adapter_eval' not in self.msg_buffer:
+            self.msg_buffer['adapter_eval'] = dict()
+        
         if rnd not in self.msg_buffer['adapter_eval'].keys():
             self.msg_buffer['adapter_eval'][rnd] = dict()
 
