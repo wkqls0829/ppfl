@@ -219,6 +219,28 @@ class LLMMultiLoRAServer(Server):
                     if 'vpl_orthogonal_loss' in client_results:
                         vpl_metrics_all_clients['vpl_orthogonal_loss'].append(float(client_results['vpl_orthogonal_loss']))
                 
+                # Check if this is HRL dataset for reward model metrics
+                dataset_type = getattr(self._cfg.data, 'type', '').lower()
+                is_hrl = 'hh-rlhf' in dataset_type or 'hrl' in dataset_type
+                
+                # Collect reward model metrics for HRL
+                reward_metrics_all_clients = {
+                    'avg_harmlessness': [],
+                    'avg_helpfulness': []
+                }
+                if is_hrl:
+                    for client_id in eval_msg_buffer:
+                        if eval_msg_buffer[client_id] is None:
+                            continue
+                        if client_id in self.unseen_clients_id:
+                            continue
+                        
+                        client_results = eval_msg_buffer[client_id]
+                        if 'avg_harmlessness' in client_results:
+                            reward_metrics_all_clients['avg_harmlessness'].append(float(client_results['avg_harmlessness']))
+                        if 'avg_helpfulness' in client_results:
+                            reward_metrics_all_clients['avg_helpfulness'].append(float(client_results['avg_helpfulness']))
+                
                 # Log aggregated metrics (averaged over all clients)
                 wandb_metrics = {}
                 if vpl_metrics_all_clients['vpl_total_loss']:
@@ -229,6 +251,13 @@ class LLMMultiLoRAServer(Server):
                     wandb_metrics['server/train/vpl_kl_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_kl_loss'])
                 if vpl_metrics_all_clients['vpl_orthogonal_loss']:
                     wandb_metrics['server/train/vpl_orthogonal_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_orthogonal_loss'])
+                
+                # Log reward model metrics for HRL (averaged)
+                if is_hrl:
+                    if reward_metrics_all_clients['avg_harmlessness']:
+                        wandb_metrics['server/train/avg_harmlessness_avg'] = np.mean(reward_metrics_all_clients['avg_harmlessness'])
+                    if reward_metrics_all_clients['avg_helpfulness']:
+                        wandb_metrics['server/train/avg_helpfulness_avg'] = np.mean(reward_metrics_all_clients['avg_helpfulness'])
                 
                 # Log individual client metrics (for designated clients)
                 # Log first 3 clients as designated clients (or all if less than 3)
@@ -246,6 +275,13 @@ class LLMMultiLoRAServer(Server):
                         wandb_metrics[f'client_{client_id}/train/vpl_kl_loss'] = float(client_results['vpl_kl_loss'])
                     if 'vpl_orthogonal_loss' in client_results:
                         wandb_metrics[f'client_{client_id}/train/vpl_orthogonal_loss'] = float(client_results['vpl_orthogonal_loss'])
+                    
+                    # Log reward model metrics for HRL (individual clients)
+                    if is_hrl:
+                        if 'avg_harmlessness' in client_results:
+                            wandb_metrics[f'client_{client_id}/train/avg_harmlessness'] = float(client_results['avg_harmlessness'])
+                        if 'avg_helpfulness' in client_results:
+                            wandb_metrics[f'client_{client_id}/train/avg_helpfulness'] = float(client_results['avg_helpfulness'])
                 
                 if wandb_metrics:
                     wandb.log(wandb_metrics, step=round)

@@ -162,7 +162,18 @@ def init_wandb(cfg):
     tmp_cfg.de_arguments()
     cfg_yaml = yaml.safe_load(tmp_cfg.dump())
 
-    wandb.init(project=cfg.wandb.name_project,
+    # Auto-set project name based on dataset type for VPL-GP experiments
+    project_name = cfg.wandb.name_project
+    if hasattr(cfg.llm, 'vpl_latent_dim'):  # VPL is enabled
+        dataset_type_lower = dataset_name.lower()
+        if 'hh-rlhf' in dataset_type_lower or 'hrl' in dataset_type_lower:
+            # HRL dataset: use vpl-gp-rl project
+            project_name = 'vpl-gp-rl'
+        elif project_name == '' or project_name is None:
+            # HHST or other: use vpl-gp-selector as default
+            project_name = 'vpl-gp-selector'
+
+    wandb.init(project=project_name,
                entity=cfg.wandb.name_user,
                config=cfg_yaml,
                group=dataset_name,
