@@ -51,6 +51,14 @@ class LLMMultiLoRAClient(Client):
         self.register_handlers('set_active_adapter_idx',
                                self.callback_funcs_for_setting_adapter_idx,
                                [None])
+        # Register VPL-GP prior handler
+        self.register_handlers('vpl_gp_prior',
+                               self.callback_funcs_for_vpl_gp_prior,
+                               [None])
+        # Register VPL orthogonal labels handler
+        self.register_handlers('vpl_orthogonal_labels',
+                               self.callback_funcs_for_vpl_orthogonal_labels,
+                               [None])
 
     def callback_funcs_for_model_para(self, message: Message):
         round = message.state
