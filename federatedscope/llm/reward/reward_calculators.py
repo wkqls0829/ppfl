@@ -5,8 +5,26 @@ import nltk
 from typing import List, Tuple, Any
 import torch
 from scipy.spatial.distance import cosine
+import warnings
 
 logger = logging.getLogger(__name__)
+
+# Suppress decoder-only right-padding warnings for reward model tokenizers
+warnings.filterwarnings(
+    "ignore",
+    message=".*decoder-only architecture.*right-padding.*",
+    category=UserWarning
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*right-padding was detected.*",
+    category=UserWarning
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*right-padding.*",
+    category=UserWarning
+)
 
 try:
     # Try to initialize nltk requirements
@@ -42,12 +60,17 @@ def cal_gpt2_harmless_probabilities(
     probabilities = []
     raw_scores = []
 
+    # Ensure tokenizer has padding_side='left' for decoder-only models
+    original_padding_side = tokenizer.padding_side
+    tokenizer.padding_side = 'left'
+
     with torch.no_grad():
         for q, a in zip(questions, continuations):
             inputs = tokenizer(q,
                                a,
                                return_tensors='pt',
-                               truncation=True).to(model.device)
+                               truncation=True,
+                               padding=True).to(model.device)
             outputs = model(**inputs)
 
             prob = torch.sigmoid(outputs.logits).squeeze().item()
@@ -55,6 +78,9 @@ def cal_gpt2_harmless_probabilities(
 
             raw_score = outputs.logits.squeeze().item()
             raw_scores.append(raw_score)
+
+    # Restore original padding side
+    tokenizer.padding_side = original_padding_side
 
     return probabilities, raw_scores
 
@@ -82,12 +108,17 @@ def cal_gpt2_helpful_probabilities(
     probabilities = []
     raw_scores = []
 
+    # Ensure tokenizer has padding_side='left' for decoder-only models
+    original_padding_side = tokenizer.padding_side
+    tokenizer.padding_side = 'left'
+
     with torch.no_grad():
         for q, a in zip(questions, continuations):
             inputs = tokenizer(q,
                                a,
                                return_tensors='pt',
-                               truncation=True).to(model.device)
+                               truncation=True,
+                               padding=True).to(model.device)
             outputs = model(**inputs)
 
             prob = torch.sigmoid(outputs.logits).squeeze().item()
@@ -95,5 +126,8 @@ def cal_gpt2_helpful_probabilities(
 
             raw_score = outputs.logits.squeeze().item()
             raw_scores.append(raw_score)
+
+    # Restore original padding side
+    tokenizer.padding_side = original_padding_side
 
     return probabilities, raw_scores

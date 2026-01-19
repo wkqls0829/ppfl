@@ -2,6 +2,32 @@ import torch
 import numpy as np
 from tqdm import tqdm
 import logging
+import inspect
+import warnings
+
+# Suppress decoder-only right-padding warnings globally
+# This warning appears when using decoder-only models with right-padding
+warnings.filterwarnings(
+    "ignore",
+    message=".*decoder-only architecture.*right-padding.*",
+    category=UserWarning
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*right-padding was detected.*",
+    category=UserWarning
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*right-padding.*",
+    category=UserWarning
+)
+# Also suppress the specific transformers warning
+warnings.filterwarnings(
+    "ignore",
+    message=".*padding_side='left'.*",
+    category=UserWarning
+)
 
 import federatedscope.register as register
 from federatedscope.llm.reward.reward_model_implementations import (
@@ -31,8 +57,28 @@ def _get_or_compute_hhrl_scores(ctx):
     """
     A helper function that computes reward scores and caches them in the `ctx`
     to avoid redundant computation within the same evaluation round.
+    
+    Note: Cache is cleared between rounds to ensure fresh computation.
+    Note: Reward model evaluation is only for HRL (hh-rlhf) dataset, not for HHST.
     """
+    # Check dataset type - only evaluate for hh-rlhf (HRL), not for hhst
+    dataset_type = getattr(ctx.cfg.data, 'type', '').lower()
+    if 'hh-rlhf' not in dataset_type and 'hrl' not in dataset_type:
+        # Skip reward model evaluation for non-HRL datasets (e.g., HHST)
+        logger.debug(f"Skipping reward model evaluation for dataset type: {dataset_type} (only for HRL/hh-rlhf)")
+        return {}
+    
     cache_key = f'{ctx.cur_split}_hhrl_scores'
+    # Clear cache if round has changed (for training, we want fresh metrics each round)
+    round_cache_key = f'{cache_key}_round'
+    current_round = getattr(ctx, 'cur_round', None)
+    cached_round = getattr(ctx, round_cache_key, None)
+    
+    # If round has changed, clear the cache
+    if cached_round is not None and current_round is not None and cached_round != current_round:
+        if hasattr(ctx, cache_key):
+            delattr(ctx, cache_key)
+    
     if hasattr(ctx, cache_key):
         return getattr(ctx, cache_key)
 
@@ -48,37 +94,105 @@ def _get_or_compute_hhrl_scores(ctx):
     all_harmless_scores = []
     all_helpful_scores = []
 
-    for batch in tqdm(eval_loader, desc="Evaluating with Reward Models"):
-        # The dataloader provides tokenized inputs. We need to decode them
-        # back to strings to get the prompt.
-        input_ids = batch['input_ids'].to(ctx.device)
+    original_padding_side = ctx.tokenizer.padding_side
+    original_pad_token = ctx.tokenizer.pad_token
+    original_pad_token_id = getattr(ctx.tokenizer, 'pad_token_id', None)
+
+    # Set padding_side to 'left' for decoder-only architectures BEFORE any operations
+    ctx.tokenizer.padding_side = 'left'
+    if ctx.tokenizer.pad_token is None:
+        ctx.tokenizer.pad_token = ctx.tokenizer.eos_token
+    if ctx.tokenizer.pad_token_id is None:
+        ctx.tokenizer.pad_token_id = ctx.tokenizer.eos_token_id
+
+    # Suppress the decoder-only right-padding warning since we've set padding_side='left'
+    # This warning comes from transformers library during generation
+    # Apply comprehensive warning filters
+    warnings.filterwarnings(
+        "ignore",
+        message=".*decoder-only architecture.*right-padding.*",
+        category=UserWarning
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=".*right-padding.*",
+        category=UserWarning
+    )
+    warnings.filterwarnings(
+        "ignore",
+        message=".*padding_side.*",
+        category=UserWarning
+    )
+
+    generation_kwargs = {
+        "do_sample": False,
+        "num_beams": 1
+    }
+
+    # Limit the number of samples for evaluation to speed up
+    # Default: evaluate on max 100 samples, or all if less than 100
+    max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 100)
+    if max_eval_samples <= 0:
+        max_eval_samples = float('inf')  # Evaluate on all samples
+    
+    total_samples_evaluated = 0
+    should_limit = max_eval_samples != float('inf')
+
+    for batch_idx, batch in enumerate(tqdm(eval_loader, desc="Evaluating with Reward Models")):
+        # Stop early if we've reached the max number of samples
+        if should_limit and total_samples_evaluated >= max_eval_samples:
+            break
+        
+        # Handle different data formats: RLHF uses win_input_ids/lose_input_ids, 
+        # regular training uses input_ids
+        if 'win_input_ids' in batch:
+            # RLHF format: use win_input_ids for evaluation
+            input_ids = batch['win_input_ids'].to(ctx.device)
+            attention_mask = batch.get('win_attention_mask', None)
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(ctx.device)
+        elif 'input_ids' in batch:
+            # Regular format
+            input_ids = batch['input_ids'].to(ctx.device)
+            attention_mask = batch.get('attention_mask', None)
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(ctx.device)
+        else:
+            logger.warning(f"Batch {batch_idx} does not contain 'input_ids' or 'win_input_ids', skipping...")
+            continue
         
         # Decode the entire input_ids to get the formatted prompt string
         # This is what the model sees as input.
         prompts = ctx.tokenizer.batch_decode(input_ids,
                                              skip_special_tokens=True)
 
-        if not hasattr(ctx.model, 'generate'):
-            raise AttributeError(
-                "The model in ctx does not have a `generate` method.")
-
-        attention_mask = batch['attention_mask'].to(ctx.device)
-        generation_kwargs = {
-            k: v
-            for k, v in ctx.cfg.llm.generation.kwargs.items()
-        }
-
-        generated_ids = ctx.model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=ctx.cfg.llm.max_new_token,
-            **generation_kwargs)
+        # Generate with or without attention_mask
+        if attention_mask is not None:
+            generated_ids = ctx.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=ctx.cfg.llm.max_new_token,
+                **generation_kwargs)
+        else:
+            generated_ids = ctx.model.generate(
+                input_ids=input_ids,
+                max_new_tokens=ctx.cfg.llm.max_new_token,
+                **generation_kwargs)
         
         completions = ctx.tokenizer.batch_decode(
             generated_ids, skip_special_tokens=True)
 
         # The full text for the reward model is the generated text
         # The prompt for the reward model is the original input text
+        # Limit the number of samples per batch if needed
+        batch_size = len(completions)
+        if should_limit and total_samples_evaluated + batch_size > max_eval_samples:
+            # Only evaluate the remaining samples needed
+            remaining = max_eval_samples - total_samples_evaluated
+            completions = completions[:remaining]
+            prompts = prompts[:remaining]
+            batch_size = remaining
+
         harmless_scores = harmless_reward_model.get_rewards(completions,
                                                             prompts)
         helpful_scores = helpful_reward_model.get_rewards(completions,
@@ -86,14 +200,33 @@ def _get_or_compute_hhrl_scores(ctx):
 
         all_harmless_scores.extend(harmless_scores)
         all_helpful_scores.extend(helpful_scores)
+        
+        total_samples_evaluated += batch_size
+        
+        # Stop if we've reached the limit
+        if should_limit and total_samples_evaluated >= max_eval_samples:
+            break
+
+    # Restore original tokenizer settings
+    ctx.tokenizer.padding_side = original_padding_side
+    ctx.tokenizer.pad_token = original_pad_token
+    if original_pad_token_id is not None:
+        ctx.tokenizer.pad_token_id = original_pad_token_id
 
     results = {}
     if all_harmless_scores:
         results['avg_harmlessness'] = np.mean(all_harmless_scores)
+        if should_limit:
+            logger.info(f"Evaluated {len(all_harmless_scores)} samples for harmlessness (limited from full dataset)")
     if all_helpful_scores:
         results['avg_helpfulness'] = np.mean(all_helpful_scores)
+        if should_limit:
+            logger.info(f"Evaluated {len(all_helpful_scores)} samples for helpfulness (limited from full dataset)")
 
     setattr(ctx, cache_key, results)
+    # Store current round for cache invalidation
+    if hasattr(ctx, 'cur_round'):
+        setattr(ctx, f'{cache_key}_round', ctx.cur_round)
     return results
 
 
