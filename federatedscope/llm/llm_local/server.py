@@ -2,6 +2,8 @@ import logging
 import torch
 import random
 import math
+import numpy as np
+from collections import defaultdict
 from federatedscope.core.message import Message
 
 from federatedscope.core.workers.server import Server
@@ -45,6 +47,14 @@ class LLMMultiLoRAServer(Server):
 
         if self._cfg.llm.adapter.grouping.use:
             self.msg_buffer['adapter_eval'] = dict()
+        
+        # VPL-GP related attributes
+        self.vpl_gp_prior_mus = None
+        self.vpl_gp_prior_logvars = None
+        self.vpl_gp_prior_weights = None
+        self.vpl_orthogonal_client_labels = None
+        self.client_z_values_dict = defaultdict(list)  # {client_id: [z_values]}
+        self.client_orthogonal_prototypes_dict = {}  # {client_id: prototypes}
 
     def _register_default_handlers(self):
         super()._register_default_handlers()
@@ -153,6 +163,16 @@ class LLMMultiLoRAServer(Server):
             merged_param = merge_param_dict(model.state_dict().copy(), result)
             model.load_state_dict(merged_param, strict=False)
 
+        # VPL-GP: Collect z distributions from clients (only if GP prior is enabled)
+        if hasattr(self._cfg.llm, 'vpl_use_gp_prior') and self._cfg.llm.vpl_use_gp_prior:
+            self._collect_vpl_gp_prior_distributions()
+            self._compute_balanced_orthogonal_labels()
+        
+        # Always collect z values for visualization (even if GP prior is disabled)
+        # This allows t-SNE visualization for all VPL experiments
+        if hasattr(self._cfg.llm, 'vpl_latent_dim'):  # VPL is enabled
+            self._collect_z_values_for_visualization()
+        
         return aggregated_num
 
     def trigger_for_start(self):
@@ -254,3 +274,391 @@ class LLMMultiLoRAServer(Server):
         self._start_new_training_round(skip_grouping=True)
 
         return True  # move_on_flag
+    
+    def _compute_manual_orthogonal_labels(self, train_msg_buffer):
+        """
+        Assign manual orthogonal labels based on client data type.
+        Harmless clients (first half) get label 0, helpful clients (second half) get label 1.
+        Only assigns labels to clients that participated in this round.
+        """
+        if not (hasattr(self._cfg.llm, 'vpl_use_manual_orthogonal_labels') and 
+                self._cfg.llm.vpl_use_manual_orthogonal_labels):
+            return None
+        
+        # Get participating client IDs
+        participating_clients = sorted(train_msg_buffer.keys())
+        num_participants = len(participating_clients)
+        
+        if num_participants == 0:
+            return {}
+        
+        # Assign labels: first half = 0 (harmless), second half = 1 (helpful)
+        labels = {}
+        split_point = num_participants // 2
+        for idx, client_id in enumerate(participating_clients):
+            if idx < split_point:
+                labels[client_id] = 0
+            else:
+                labels[client_id] = 1
+        
+        logger.info(f"Assigned manual orthogonal labels: {labels}")
+        return labels
+    
+    def _collect_vpl_gp_prior_distributions(self):
+        """
+        Collect z distributions (mu, logvar) from clients for VPL-GP mixture prior.
+        Called after _perform_federated_aggregation.
+        """
+        train_msg_buffer = self.msg_buffer['train'][self.state]
+        
+        client_mus = []
+        client_logvars = []
+        client_weights = []
+        client_ids = []
+        
+        for client_id in train_msg_buffer.keys():
+            if self.model_num == 1:
+                _, model_para = train_msg_buffer[client_id]
+            else:
+                _, model_para_multiple = train_msg_buffer[client_id]
+                model_para = model_para_multiple[0]  # Use first model
+            
+            # Extract z distribution from model parameters
+            if 'client_z_mu' in model_para and 'client_z_logvar' in model_para:
+                mu = model_para['client_z_mu']
+                logvar = model_para['client_z_logvar']
+                
+                # Convert to tensors if needed
+                if not isinstance(mu, torch.Tensor):
+                    mu = torch.tensor(mu, dtype=torch.float32)
+                if not isinstance(logvar, torch.Tensor):
+                    logvar = torch.tensor(logvar, dtype=torch.float32)
+                
+                client_mus.append(mu)
+                client_logvars.append(logvar)
+                client_ids.append(client_id)
+                
+                # Use sample size as weight
+                sample_size = model_para.get('sample_size', 1)
+                client_weights.append(sample_size)
+        
+        if len(client_mus) == 0:
+            return
+        
+        # Normalize weights
+        total_weight = sum(client_weights)
+        if total_weight > 0:
+            client_weights = [w / total_weight for w in client_weights]
+        
+        # Stack tensors
+        client_mus = torch.stack(client_mus)  # (num_clients, latent_dim)
+        client_logvars = torch.stack(client_logvars)  # (num_clients, latent_dim)
+        client_weights = torch.tensor(client_weights, dtype=torch.float32)
+        
+        # Update prior (accumulate across rounds)
+        if self.vpl_gp_prior_mus is None:
+            # First round: initialize
+            self.vpl_gp_prior_mus = client_mus
+            self.vpl_gp_prior_logvars = client_logvars
+            self.vpl_gp_prior_weights = client_weights
+            self._vpl_gp_client_ids = client_ids  # Initialize client IDs
+            updated_count = len(client_mus)
+            from_previous = 0
+        else:
+            # Update existing clients and add new ones
+            existing_client_ids = set(getattr(self, '_vpl_gp_client_ids', []))
+            current_client_ids = set(client_ids)
+            
+            # Update existing
+            updated_indices = []
+            new_mus = []
+            new_logvars = []
+            new_weights = []
+            new_ids = []
+            
+            for idx, cid in enumerate(client_ids):
+                if cid in existing_client_ids:
+                    # Update existing
+                    old_idx = self._vpl_gp_client_ids.index(cid)
+                    self.vpl_gp_prior_mus[old_idx] = client_mus[idx]
+                    self.vpl_gp_prior_logvars[old_idx] = client_logvars[idx]
+                    self.vpl_gp_prior_weights[old_idx] = client_weights[idx]
+                    updated_indices.append(old_idx)
+                else:
+                    # New client
+                    new_mus.append(client_mus[idx])
+                    new_logvars.append(client_logvars[idx])
+                    new_weights.append(client_weights[idx])
+                    new_ids.append(cid)
+            
+            # Append new clients
+            if len(new_mus) > 0:
+                new_mus = torch.stack(new_mus)
+                new_logvars = torch.stack(new_logvars)
+                new_weights = torch.stack(new_weights)
+                
+                self.vpl_gp_prior_mus = torch.cat([self.vpl_gp_prior_mus, new_mus], dim=0)
+                self.vpl_gp_prior_logvars = torch.cat([self.vpl_gp_prior_logvars, new_logvars], dim=0)
+                self.vpl_gp_prior_weights = torch.cat([self.vpl_gp_prior_weights, new_weights], dim=0)
+                
+                # Update client ID list
+                if not hasattr(self, '_vpl_gp_client_ids'):
+                    self._vpl_gp_client_ids = []
+                self._vpl_gp_client_ids.extend(new_ids)
+            
+            # Renormalize weights
+            total_weight = self.vpl_gp_prior_weights.sum()
+            if total_weight > 0:
+                self.vpl_gp_prior_weights = self.vpl_gp_prior_weights / total_weight
+            
+            updated_count = len(updated_indices) + len(new_ids)
+            from_previous = len(existing_client_ids) - len(updated_indices)
+        
+        # Store client IDs for tracking
+        if not hasattr(self, '_vpl_gp_client_ids'):
+            self._vpl_gp_client_ids = client_ids
+        
+        logger.info(f"Collected {len(client_mus)} client z distributions for VPL-GP prior. "
+                   f"Total clients in prior: {len(self.vpl_gp_prior_mus)} "
+                   f"(updated: {updated_count}, from previous rounds: {from_previous})")
+    
+    def _compute_balanced_orthogonal_labels(self):
+        """
+        Compute balanced orthogonal labels using k-means on z means.
+        Falls back to manual labels if configured.
+        """
+        train_msg_buffer = self.msg_buffer['train'][self.state]
+        
+        # Try manual labels first
+        manual_labels = self._compute_manual_orthogonal_labels(train_msg_buffer)
+        if manual_labels is not None:
+            self.vpl_orthogonal_client_labels = manual_labels
+            # Count labels for logging
+            label_counts = defaultdict(int)
+            for client_id, label in manual_labels.items():
+                label_counts[label] += 1
+            logger.info(f"Computed balanced orthogonal labels for {len(manual_labels)} clients "
+                      f"at round {self.state}: {dict(label_counts)}")
+            return
+        
+        # Otherwise, use k-means on z means
+        if self.vpl_gp_prior_mus is None or len(self.vpl_gp_prior_mus) == 0:
+            return
+        
+        try:
+            from sklearn.cluster import KMeans
+            
+            # Get z means for participating clients
+            participating_client_ids = sorted(train_msg_buffer.keys())
+            if len(participating_client_ids) < 2:
+                return
+            
+            # Map client IDs to indices in prior
+            client_id_to_idx = {cid: idx for idx, cid in enumerate(self._vpl_gp_client_ids)}
+            z_means = []
+            valid_client_ids = []
+            
+            for client_id in participating_client_ids:
+                if client_id in client_id_to_idx:
+                    idx = client_id_to_idx[client_id]
+                    z_means.append(self.vpl_gp_prior_mus[idx].cpu().numpy())
+                    valid_client_ids.append(client_id)
+            
+            if len(z_means) < 2:
+                return
+            
+            z_means = np.array(z_means)
+            
+            # K-means with 2 clusters
+            kmeans = KMeans(n_clusters=2, random_state=42, n_init=10)
+            labels = kmeans.fit_predict(z_means)
+            
+            # Create label dict
+            self.vpl_orthogonal_client_labels = {
+                client_id: int(label) for client_id, label in zip(valid_client_ids, labels)
+            }
+            
+            # Count labels for logging
+            label_counts = defaultdict(int)
+            for label in labels:
+                label_counts[int(label)] += 1
+            
+            logger.info(f"Computed balanced orthogonal labels for {len(valid_client_ids)} clients "
+                      f"at round {self.state}: {dict(label_counts)}")
+        except Exception as e:
+            logger.warning(f"Failed to compute balanced orthogonal labels: {e}")
+    
+    def _collect_z_values_for_visualization(self):
+        """
+        Collect z values from clients for t-SNE visualization.
+        """
+        train_msg_buffer = self.msg_buffer['train'][self.state]
+        
+        z_values_list = []
+        client_ids_list = []
+        
+        for client_id in train_msg_buffer.keys():
+            if self.model_num == 1:
+                _, model_para = train_msg_buffer[client_id]
+            else:
+                _, model_para_multiple = train_msg_buffer[client_id]
+                model_para = model_para_multiple[0]
+            
+            # Extract z values
+            if 'client_z_values' in model_para:
+                z_values = model_para['client_z_values']
+                if isinstance(z_values, torch.Tensor):
+                    z_values = z_values.cpu().numpy()
+                elif isinstance(z_values, list):
+                    z_values = np.array(z_values)
+                
+                if len(z_values.shape) == 1:
+                    z_values = z_values.reshape(1, -1)
+                
+                z_values_list.append(z_values)
+                client_ids_list.extend([client_id] * len(z_values))
+        
+        if len(z_values_list) == 0:
+            return
+        
+        # Concatenate all z values
+        all_z_values = np.concatenate(z_values_list, axis=0)
+        
+        # Store in dict
+        for client_id in set(client_ids_list):
+            client_z_mask = np.array(client_ids_list) == client_id
+            client_z = all_z_values[client_z_mask]
+            self.client_z_values_dict[client_id].extend(client_z.tolist())
+        
+        # Visualize every 10 rounds (or every round if configured)
+        visualize_freq = getattr(self._cfg.llm, 'vpl_tsne_visualize_freq', 10)
+        if self.state % visualize_freq == 0:
+            self._visualize_cross_client_z()
+        
+        total_points = sum(len(v) for v in self.client_z_values_dict.values())
+        unique_clients = len(self.client_z_values_dict)
+        logger.info(f"Round {self.state}: Collected z values from {len(set(client_ids_list))} clients. "
+                   f"Total accumulated: {total_points} points across {unique_clients} clients")
+    
+    def _visualize_cross_client_z(self):
+        """
+        Visualize cross-client z values using t-SNE.
+        """
+        try:
+            from federatedscope.llm.llm_local.z_visualization import visualize_cross_client_z
+            
+            # Prepare z values and labels
+            z_values_list = []
+            client_labels_list = []
+            orthogonal_labels_list = []
+            
+            for client_id, z_list in self.client_z_values_dict.items():
+                if len(z_list) == 0:
+                    continue
+                
+                client_z = np.array(z_list)
+                z_values_list.append(client_z)
+                client_labels_list.extend([client_id] * len(client_z))
+                
+                # Get orthogonal label if available
+                if self.vpl_orthogonal_client_labels and client_id in self.vpl_orthogonal_client_labels:
+                    orthogonal_labels_list.extend([self.vpl_orthogonal_client_labels[client_id]] * len(client_z))
+                else:
+                    orthogonal_labels_list.extend([-1] * len(client_z))
+            
+            if len(z_values_list) == 0:
+                return
+            
+            all_z = np.concatenate(z_values_list, axis=0)
+            
+            # Get orthogonal prototypes if available
+            orthogonal_prototypes = None
+            if hasattr(self, 'client_orthogonal_prototypes_dict') and len(self.client_orthogonal_prototypes_dict) > 0:
+                # Collect prototypes from all clients
+                prototypes_list = []
+                for client_id, prototypes in self.client_orthogonal_prototypes_dict.items():
+                    if prototypes is not None:
+                        if isinstance(prototypes, torch.Tensor):
+                            prototypes = prototypes.cpu().numpy()
+                        prototypes_list.append(prototypes)
+                
+                if len(prototypes_list) > 0:
+                    orthogonal_prototypes = np.concatenate(prototypes_list, axis=0)
+            
+            visualize_cross_client_z(
+                z_values=all_z,
+                client_labels=client_labels_list,
+                orthogonal_labels=orthogonal_labels_list if len(orthogonal_labels_list) > 0 else None,
+                orthogonal_prototypes=orthogonal_prototypes,
+                round_num=self.state,
+                output_dir=self._cfg.outdir,
+                wandb_project=self._cfg.wandb.name_project if self._cfg.wandb.use else None
+            )
+        except Exception as e:
+            logger.warning(f"Failed to visualize cross-client z: {e}")
+    
+    def broadcast_model_para(self,
+                             msg_type='model_para',
+                             sample_client_num=-1,
+                             filter_unseen_clients=True):
+        """
+        Override to broadcast VPL-GP prior and orthogonal labels.
+        """
+        # Call parent method
+        super().broadcast_model_para(
+            msg_type=msg_type,
+            sample_client_num=sample_client_num,
+            filter_unseen_clients=filter_unseen_clients
+        )
+        
+        # Broadcast VPL-GP prior if available
+        if (hasattr(self._cfg.llm, 'vpl_use_gp_prior') and 
+            self._cfg.llm.vpl_use_gp_prior and 
+            self.vpl_gp_prior_mus is not None and
+            self.state > 0):  # Don't broadcast at round 0
+            
+            # Prepare prior data
+            prior_content = {
+                'vpl_gp_prior_mus': self.vpl_gp_prior_mus.cpu().tolist(),
+                'vpl_gp_prior_logvars': self.vpl_gp_prior_logvars.cpu().tolist(),
+                'vpl_gp_prior_weights': self.vpl_gp_prior_weights.cpu().tolist(),
+            }
+            
+            # Broadcast to all clients
+            client_num_to_sample = sample_client_num if sample_client_num > 0 else self.client_num
+            selected_clients = self.sampler.sample(
+                size=client_num_to_sample,
+                current_round=self.state
+            )
+            
+            for receiver in selected_clients:
+                self.comm_manager.send(
+                    Message(msg_type='vpl_gp_prior',
+                           sender=self.ID,
+                           receiver=[receiver],
+                           state=self.state,
+                           timestamp=self.cur_timestamp,
+                           content=prior_content))
+            
+            logger.info(f"Broadcasting VPL-GP prior with {len(self.vpl_gp_prior_mus)} client distributions at round {self.state}")
+        
+        # Broadcast orthogonal labels if available
+        if (self.vpl_orthogonal_client_labels is not None and
+            self.state > 0):  # Don't broadcast at round 0
+            
+            client_num_to_sample = sample_client_num if sample_client_num > 0 else self.client_num
+            selected_clients = self.sampler.sample(
+                size=client_num_to_sample,
+                current_round=self.state
+            )
+            
+            for receiver in selected_clients:
+                self.comm_manager.send(
+                    Message(msg_type='vpl_orthogonal_labels',
+                           sender=self.ID,
+                           receiver=[receiver],
+                           state=self.state,
+                           timestamp=self.cur_timestamp,
+                           content=self.vpl_orthogonal_client_labels))
+            
+            logger.info(f"Broadcasting orthogonal labels to clients at round {self.state}")

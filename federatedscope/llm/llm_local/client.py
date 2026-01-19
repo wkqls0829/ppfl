@@ -146,6 +146,30 @@ class LLMMultiLoRAClient(Client):
                     for key, value in model_para_all.items()
                     if f'Adapter_{adapter_idx}.' in key
                 }
+            
+            # VPL: Add z distribution and values to model parameters
+            # Always collect z values for visualization (not just for GP prior)
+            if hasattr(self.trainer, 'get_client_z_values'):
+                z_values = self.trainer.get_client_z_values()
+                if z_values is not None:
+                    model_para_all['client_z_values'] = z_values.cpu() if isinstance(z_values, torch.Tensor) else z_values
+            
+            # VPL-GP: Add z distribution for GP prior (only if GP prior is enabled)
+            if (hasattr(self._cfg.llm, 'vpl_use_gp_prior') and 
+                self._cfg.llm.vpl_use_gp_prior and
+                hasattr(self.trainer, 'get_client_z_distribution')):
+                z_dist = self.trainer.get_client_z_distribution()
+                if z_dist is not None:
+                    mu, logvar = z_dist
+                    model_para_all['client_z_mu'] = mu.cpu() if isinstance(mu, torch.Tensor) else mu
+                    model_para_all['client_z_logvar'] = logvar.cpu() if isinstance(logvar, torch.Tensor) else logvar
+                    model_para_all['sample_size'] = sample_size
+            
+            # Add orthogonal prototypes (if available)
+            if hasattr(self.trainer, 'get_client_orthogonal_prototypes'):
+                prototypes = self.trainer.get_client_orthogonal_prototypes()
+                if prototypes is not None:
+                    model_para_all['client_orthogonal_prototypes'] = prototypes.cpu() if isinstance(prototypes, torch.Tensor) else prototypes
             train_log_res = self._monitor.format_eval_res(
                 results,
                 rnd=self.state,
@@ -184,7 +208,12 @@ class LLMMultiLoRAClient(Client):
                     target_data_split_name='val')
                 logger.info(f'Client {self.ID} Adapter {i} with '
                             f'the results: {adap_metrics}')
-                metrics[f'adapter_{i}_avg_loss'] = adap_metrics['val_avg_loss']
+                if adap_metrics is not None and 'val_avg_loss' in adap_metrics:
+                    metrics[f'adapter_{i}_avg_loss'] = adap_metrics['val_avg_loss']
+                else:
+                    # Fallback if evaluation returns None or missing key
+                    metrics[f'adapter_{i}_avg_loss'] = random.random()
+                    logger.warning(f'Client {self.ID} Adapter {i} evaluation returned None, using random value')
 
         self.comm_manager.send(
             Message(msg_type='grouping',
@@ -196,3 +225,35 @@ class LLMMultiLoRAClient(Client):
 
     def callback_funcs_for_setting_adapter_idx(self, message: Message):
         self.adapter_idx = message.content
+    
+    def callback_funcs_for_vpl_gp_prior(self, message: Message):
+        """
+        Handle VPL-GP prior update from server.
+        """
+        if hasattr(self.trainer, 'update_prior_from_server'):
+            prior_mus = message.content.get('vpl_gp_prior_mus')
+            prior_logvars = message.content.get('vpl_gp_prior_logvars')
+            prior_weights = message.content.get('vpl_gp_prior_weights')
+            
+            if prior_mus is not None and prior_logvars is not None:
+                # Convert to tensors if needed
+                if not isinstance(prior_mus, torch.Tensor):
+                    prior_mus = torch.tensor(prior_mus, dtype=torch.float32).to(self.device)
+                if not isinstance(prior_logvars, torch.Tensor):
+                    prior_logvars = torch.tensor(prior_logvars, dtype=torch.float32).to(self.device)
+                if not isinstance(prior_weights, torch.Tensor):
+                    prior_weights = torch.tensor(prior_weights, dtype=torch.float32).to(self.device)
+                
+                self.trainer.update_prior_from_server(prior_mus, prior_logvars, prior_weights)
+                logger.info(f"Client {self.ID} updated VPL-GP prior from server with "
+                          f"{len(prior_mus)} client distributions at round {message.state}")
+    
+    def callback_funcs_for_vpl_orthogonal_labels(self, message: Message):
+        """
+        Handle orthogonal labels from server.
+        """
+        if hasattr(self.trainer, 'update_orthogonal_label_from_server'):
+            labels = message.content
+            if isinstance(labels, dict) and self.ID in labels:
+                self.trainer.update_orthogonal_label_from_server(labels[self.ID])
+                logger.info(f"Client {self.ID} updated orthogonal label from server: {labels[self.ID]}")

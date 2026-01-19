@@ -1,0 +1,144 @@
+"""
+t-SNE visualization for cross-client z values in VPL-GP.
+"""
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.manifold import TSNE
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+
+def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
+                             orthogonal_prototypes=None, round_num=0,
+                             output_dir=None, wandb_project=None):
+    """
+    Visualize cross-client z values using t-SNE.
+    
+    Args:
+        z_values: Array of z values (num_points, latent_dim)
+        client_labels: List of client IDs for each z value (num_points,)
+        orthogonal_labels: Optional list of orthogonal labels (num_points,)
+        orthogonal_prototypes: Optional array of orthogonal prototypes (num_prototypes, latent_dim)
+        round_num: Current round number
+        output_dir: Output directory for saving plots
+        wandb_project: WandB project name (optional)
+    """
+    if len(z_values) == 0:
+        logger.warning("No z values to visualize")
+        return
+    
+    # Convert to numpy if needed
+    if not isinstance(z_values, np.ndarray):
+        z_values = np.array(z_values)
+    
+    num_points = len(z_values)
+    num_clients = len(set(client_labels))
+    
+    logger.info(f"Round {round_num}: Visualizing z from {num_clients} clients "
+               f"across {round_num + 1} rounds ({num_points} total points, shape: {z_values.shape})")
+    
+    # Apply t-SNE
+    if num_points < 2:
+        logger.warning("Not enough points for t-SNE (need at least 2)")
+        return
+    
+    # Reduce perplexity if we have few points
+    perplexity = min(30, max(5, num_points - 1))
+    
+    try:
+        tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity, n_iter=1000)
+        z_2d = tsne.fit_transform(z_values)
+    except Exception as e:
+        logger.warning(f"t-SNE failed: {e}, using PCA instead")
+        from sklearn.decomposition import PCA
+        pca = PCA(n_components=2)
+        z_2d = pca.fit_transform(z_values)
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 10))
+    
+    # Plot z values colored by client
+    unique_clients = sorted(set(client_labels))
+    colors = plt.cm.tab20(np.linspace(0, 1, len(unique_clients)))
+    client_color_map = {cid: colors[i % len(colors)] for i, cid in enumerate(unique_clients)}
+    
+    for client_id in unique_clients:
+        mask = np.array(client_labels) == client_id
+        if mask.sum() > 0:
+            ax.scatter(z_2d[mask, 0], z_2d[mask, 1], 
+                      c=[client_color_map[client_id]], 
+                      label=f'Client {client_id}',
+                      alpha=0.6, s=50)
+    
+    # Plot orthogonal prototypes if available
+    if orthogonal_prototypes is not None:
+        if not isinstance(orthogonal_prototypes, np.ndarray):
+            orthogonal_prototypes = np.array(orthogonal_prototypes)
+        
+        if len(orthogonal_prototypes) > 0:
+            # Project prototypes to 2D using the same t-SNE transform
+            # Note: We need to refit with prototypes included, or use a different approach
+            # For simplicity, we'll project prototypes separately
+            try:
+                # Combine z_values and prototypes for t-SNE
+                combined = np.vstack([z_values, orthogonal_prototypes])
+                tsne_combined = TSNE(n_components=2, random_state=42, 
+                                    perplexity=perplexity, n_iter=1000)
+                combined_2d = tsne_combined.fit_transform(combined)
+                prototypes_2d = combined_2d[-len(orthogonal_prototypes):]
+                
+                # Plot prototypes with distinct markers
+                for i, prototype_2d in enumerate(prototypes_2d):
+                    ax.scatter(prototype_2d[0], prototype_2d[1],
+                             marker='*', s=500, c='red', 
+                             edgecolors='black', linewidths=2,
+                             label=f'Prototype {i}' if i < 2 else None,
+                             zorder=10)
+            except Exception as e:
+                logger.warning(f"Failed to project prototypes: {e}")
+    
+    # Plot orthogonal labels if available
+    if orthogonal_labels is not None:
+        unique_orth_labels = sorted(set(orthogonal_labels))
+        if len(unique_orth_labels) > 1:
+            # Add a second plot or overlay
+            for orth_label in unique_orth_labels:
+                if orth_label >= 0:  # Skip -1 (unlabeled)
+                    mask = np.array(orthogonal_labels) == orth_label
+                    if mask.sum() > 0:
+                        # Draw contour or highlight
+                        ax.scatter(z_2d[mask, 0], z_2d[mask, 1],
+                                 edgecolors='black', linewidths=1,
+                                 alpha=0.3, s=60, zorder=5)
+    
+    ax.set_xlabel('t-SNE Dimension 1', fontsize=12)
+    ax.set_ylabel('t-SNE Dimension 2', fontsize=12)
+    ax.set_title(f'Cross-Client Z Visualization (Round {round_num})', fontsize=14)
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save plot
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+        save_path = os.path.join(output_dir, f'cross_client_z_tsne_round_{round_num}.png')
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        logger.info(f"Saved cross-client z visualization to {save_path}")
+    
+    # Log to WandB if available
+    if wandb_project:
+        try:
+            import wandb
+            wandb.log({
+                f'visualization/cross_client_z_tsne_round_{round_num}': wandb.Image(fig)
+            }, step=round_num)
+            logger.info(f"Logged cross-client z t-SNE visualization to wandb at round {round_num}")
+        except ImportError:
+            logger.warning("wandb not installed, skipping visualization logging")
+        except Exception as e:
+            logger.warning(f"Failed to log visualization to wandb: {e}")
+    
+    plt.close(fig)
