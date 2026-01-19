@@ -319,10 +319,12 @@ class LLMMultiLoRAServer(Server):
                     'filter_unseen_clients': False,
                 })
                 logger.info('Server: Performing a grouping step...')
-
-            logger.info(
-                '----------- Starting training (Round #{:d}) -------------'.
-                format(self.state))
+            else:
+                # If grouping is not enabled, start training round directly
+                logger.info(
+                    '----------- Starting training (Round #{:d}) -------------'.
+                    format(self.state))
+                self._start_new_training_round()
 
     def callback_funcs_for_grouping(self, message: Message):
         rnd = message.state
