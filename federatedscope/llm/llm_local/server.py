@@ -789,9 +789,22 @@ class LLMMultiLoRAServer(Server):
                 'vpl_gp_prior_weights': self.vpl_gp_prior_weights.cpu().tolist(),
             }
             
-            # Broadcast to all clients
-            client_num_to_sample = sample_client_num if sample_client_num > 0 else self.client_num
-            selected_clients = self.sampler.sample(size=client_num_to_sample)
+            # Use same logic as parent class: sample if sample_client_num > 0, else broadcast to all
+            if sample_client_num > 0:
+                # Check if sampler is available and has idle clients
+                if self.sampler is not None:
+                    idle_clients = np.nonzero(self.sampler.client_state)[0]
+                    if len(idle_clients) > 0:
+                        selected_clients = self.sampler.sample(size=sample_client_num)
+                    else:
+                        # All clients are working, use all clients instead
+                        selected_clients = list(self.comm_manager.neighbors.keys())
+                        logger.warning(f"No idle clients available, broadcasting to all {len(selected_clients)} clients")
+                else:
+                    selected_clients = list(self.comm_manager.neighbors.keys())
+            else:
+                # Broadcast to all clients
+                selected_clients = list(self.comm_manager.neighbors.keys())
             
             for receiver in selected_clients:
                 self.comm_manager.send(
@@ -802,14 +815,28 @@ class LLMMultiLoRAServer(Server):
                            timestamp=self.cur_timestamp,
                            content=prior_content))
             
-            logger.info(f"Broadcasting VPL-GP prior with {len(self.vpl_gp_prior_mus)} client distributions at round {self.state}")
+            logger.info(f"Broadcasting VPL-GP prior with {len(self.vpl_gp_prior_mus)} client distributions to {len(selected_clients)} clients at round {self.state}")
         
         # Broadcast orthogonal labels if available
         if (self.vpl_orthogonal_client_labels is not None and
             self.state > 0):  # Don't broadcast at round 0
             
-            client_num_to_sample = sample_client_num if sample_client_num > 0 else self.client_num
-            selected_clients = self.sampler.sample(size=client_num_to_sample)
+            # Use same logic as parent class: sample if sample_client_num > 0, else broadcast to all
+            if sample_client_num > 0:
+                # Check if sampler is available and has idle clients
+                if self.sampler is not None:
+                    idle_clients = np.nonzero(self.sampler.client_state)[0]
+                    if len(idle_clients) > 0:
+                        selected_clients = self.sampler.sample(size=sample_client_num)
+                    else:
+                        # All clients are working, use all clients instead
+                        selected_clients = list(self.comm_manager.neighbors.keys())
+                        logger.warning(f"No idle clients available, broadcasting to all {len(selected_clients)} clients")
+                else:
+                    selected_clients = list(self.comm_manager.neighbors.keys())
+            else:
+                # Broadcast to all clients
+                selected_clients = list(self.comm_manager.neighbors.keys())
             
             for receiver in selected_clients:
                 self.comm_manager.send(
@@ -820,4 +847,4 @@ class LLMMultiLoRAServer(Server):
                            timestamp=self.cur_timestamp,
                            content=self.vpl_orthogonal_client_labels))
             
-            logger.info(f"Broadcasting orthogonal labels to clients at round {self.state}")
+            logger.info(f"Broadcasting orthogonal labels to {len(selected_clients)} clients at round {self.state}")
