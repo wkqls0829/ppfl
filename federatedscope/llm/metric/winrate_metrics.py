@@ -27,6 +27,7 @@ warnings.filterwarnings(
 
 
 # Prompt templates for win-lose evaluation
+# Note: The choice token format is ": A" or ": B" (as used in reward_choice_trainer)
 HELPFULNESS_PROMPT_TEMPLATE = """Below is a conversation between a human and an AI assistant, followed by two responses. Which response is more helpful? State your choice with a single capital letter, i.e., "A" if RESPONSE A is more helpful, "B" if RESPONSE B is more helpful.
 
 ### CONVERSATION:
