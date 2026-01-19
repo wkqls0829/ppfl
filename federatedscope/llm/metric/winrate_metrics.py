@@ -229,12 +229,17 @@ def _get_winrate_scores(ctx, prompt_template, metric_name="winrate"):
     ctx.tokenizer.padding_side = original_padding_side
     
     # Calculate winrate (percentage choosing A, which is typically the better response)
+    # In hh-rlhf, output_A is chosen (better), output_B is rejected (worse)
+    # So winrate = % choosing A = % where choice == 0
     results = {}
     if len(all_choices) > 0:
-        winrate = (1.0 - np.mean(all_choices)) * 100.0  # 0 = A, 1 = B, so winrate = % choosing A
+        num_choose_a = sum(1 for c in all_choices if c == 0)
+        winrate = (num_choose_a / len(all_choices)) * 100.0
         results[f'{metric_name}_winrate'] = winrate
         if should_limit:
-            logger.info(f"Evaluated {len(all_choices)} samples for {metric_name} winrate (limited from full dataset)")
+            logger.info(f"Evaluated {len(all_choices)} samples for {metric_name} winrate: {winrate:.2f}% (limited from full dataset)")
+        else:
+            logger.info(f"Evaluated {len(all_choices)} samples for {metric_name} winrate: {winrate:.2f}%")
     
     setattr(ctx, cache_key, results)
     if hasattr(ctx, 'cur_round'):
