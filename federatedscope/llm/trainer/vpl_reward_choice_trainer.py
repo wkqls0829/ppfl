@@ -425,36 +425,6 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             self.z_history = []
         z_cpu = z.detach().cpu()
         self.z_history.append(z_cpu)
-
-        # This allows t-SNE visualization even when GP prior is disabled
-        if not hasattr(self, 'z_history'):
-            self.z_history = []
-        z_cpu = z.detach().cpu()
-        self.z_history.append(z_cpu)
-# Collect z values for visualization (always collect, not just for GP prior)
-        # This allows t-SNE visualization even when GP prior is disabled
-        if not hasattr(self, 'z_history'):
-            self.z_history = []
-        z_cpu = z.detach().cpu()
-        self.z_history.append(z_cpu)
-# Collect z values for visualization (always collect, not just for GP prior)
-        # This allows t-SNE visualization even when GP prior is disabled
-        if not hasattr(self, 'z_history'):
-            self.z_history = []
-        z_cpu = z.detach().cpu()
-        self.z_history.append(z_cpu)
-# Collect z values for visualization (always collect, not just for GP prior)
-        # This allows t-SNE visualization even when GP prior is disabled
-        if not hasattr(self, 'z_history'):
-            self.z_history = []
-        z_cpu = z.detach().cpu()
-        self.z_history.append(z_cpu)
-# Collect z values for visualization (always collect, not just for GP prior)
-        # This allows t-SNE visualization even when GP prior is disabled
-        if not hasattr(self, 'z_history'):
-            self.z_history = []
-        z_cpu = z.detach().cpu()
-        self.z_history.append(z_cpu)
         
         # Compute KL divergence: KL(q(z|x) || p(z)) or KL(q(z|x) || p_mixture(z))
         # If GP prior is enabled, uses mixture prior; otherwise uses standard normal prior
