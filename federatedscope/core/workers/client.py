@@ -543,7 +543,8 @@ class Client(BaseClient):
                                                           self.ID),
                                                       return_raw=True))
 
-                metrics.update(**eval_metrics)
+                if eval_metrics is not None:
+                    metrics.update(**eval_metrics)
 
             formatted_eval_res = self._monitor.format_eval_res(
                 metrics,
