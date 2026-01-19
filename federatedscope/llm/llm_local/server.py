@@ -226,7 +226,9 @@ class LLMMultiLoRAServer(Server):
                 # Collect reward model metrics for HRL
                 reward_metrics_all_clients = {
                     'avg_harmlessness': [],
-                    'avg_helpfulness': []
+                    'avg_helpfulness': [],
+                    'helpfulness_winrate': [],
+                    'harmlessness_winrate': []
                 }
                 if is_hrl:
                     for client_id in eval_msg_buffer:
@@ -240,6 +242,10 @@ class LLMMultiLoRAServer(Server):
                             reward_metrics_all_clients['avg_harmlessness'].append(float(client_results['avg_harmlessness']))
                         if 'avg_helpfulness' in client_results:
                             reward_metrics_all_clients['avg_helpfulness'].append(float(client_results['avg_helpfulness']))
+                        if 'helpfulness_winrate' in client_results:
+                            reward_metrics_all_clients['helpfulness_winrate'].append(float(client_results['helpfulness_winrate']))
+                        if 'harmlessness_winrate' in client_results:
+                            reward_metrics_all_clients['harmlessness_winrate'].append(float(client_results['harmlessness_winrate']))
                 
                 # Log aggregated metrics (averaged over all clients)
                 wandb_metrics = {}
@@ -258,6 +264,10 @@ class LLMMultiLoRAServer(Server):
                         wandb_metrics['server/train/avg_harmlessness_avg'] = np.mean(reward_metrics_all_clients['avg_harmlessness'])
                     if reward_metrics_all_clients['avg_helpfulness']:
                         wandb_metrics['server/train/avg_helpfulness_avg'] = np.mean(reward_metrics_all_clients['avg_helpfulness'])
+                    if reward_metrics_all_clients['helpfulness_winrate']:
+                        wandb_metrics['server/train/helpfulness_winrate_avg'] = np.mean(reward_metrics_all_clients['helpfulness_winrate'])
+                    if reward_metrics_all_clients['harmlessness_winrate']:
+                        wandb_metrics['server/train/harmlessness_winrate_avg'] = np.mean(reward_metrics_all_clients['harmlessness_winrate'])
                 
                 # Log individual client metrics (for designated clients)
                 # Log first 3 clients as designated clients (or all if less than 3)
@@ -282,6 +292,10 @@ class LLMMultiLoRAServer(Server):
                             wandb_metrics[f'client_{client_id}/train/avg_harmlessness'] = float(client_results['avg_harmlessness'])
                         if 'avg_helpfulness' in client_results:
                             wandb_metrics[f'client_{client_id}/train/avg_helpfulness'] = float(client_results['avg_helpfulness'])
+                        if 'helpfulness_winrate' in client_results:
+                            wandb_metrics[f'client_{client_id}/train/helpfulness_winrate'] = float(client_results['helpfulness_winrate'])
+                        if 'harmlessness_winrate' in client_results:
+                            wandb_metrics[f'client_{client_id}/train/harmlessness_winrate'] = float(client_results['harmlessness_winrate'])
                 
                 if wandb_metrics:
                     wandb.log(wandb_metrics, step=round)
