@@ -791,10 +791,7 @@ class LLMMultiLoRAServer(Server):
             
             # Broadcast to all clients
             client_num_to_sample = sample_client_num if sample_client_num > 0 else self.client_num
-            selected_clients = self.sampler.sample(
-                size=client_num_to_sample,
-                current_round=self.state
-            )
+            selected_clients = self.sampler.sample(size=client_num_to_sample)
             
             for receiver in selected_clients:
                 self.comm_manager.send(
@@ -812,10 +809,7 @@ class LLMMultiLoRAServer(Server):
             self.state > 0):  # Don't broadcast at round 0
             
             client_num_to_sample = sample_client_num if sample_client_num > 0 else self.client_num
-            selected_clients = self.sampler.sample(
-                size=client_num_to_sample,
-                current_round=self.state
-            )
+            selected_clients = self.sampler.sample(size=client_num_to_sample)
             
             for receiver in selected_clients:
                 self.comm_manager.send(
