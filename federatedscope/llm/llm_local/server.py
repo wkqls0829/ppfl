@@ -570,21 +570,27 @@ class LLMMultiLoRAServer(Server):
     def _compute_balanced_orthogonal_labels(self):
         """
         Compute balanced orthogonal labels using k-means on z means.
-        Falls back to manual labels if configured.
+        Uses manual labels if configured, otherwise uses k-means.
+        For hh-rlhf dataset, k is fixed to 2.
         """
         train_msg_buffer = self.msg_buffer['train'][self.state]
         
-        # Try manual labels first
-        manual_labels = self._compute_manual_orthogonal_labels(train_msg_buffer)
-        if manual_labels is not None:
-            self.vpl_orthogonal_client_labels = manual_labels
-            # Count labels for logging
-            label_counts = defaultdict(int)
-            for client_id, label in manual_labels.items():
-                label_counts[label] += 1
-            logger.info(f"Computed balanced orthogonal labels for {len(manual_labels)} clients "
-                      f"at round {self.state}: {dict(label_counts)}")
-            return
+        # Check if manual labels are explicitly requested
+        use_manual = (hasattr(self._cfg.llm, 'vpl_use_manual_orthogonal_labels') and 
+                     self._cfg.llm.vpl_use_manual_orthogonal_labels)
+        
+        if use_manual:
+            # Use manual labels if explicitly configured
+            manual_labels = self._compute_manual_orthogonal_labels(train_msg_buffer)
+            if manual_labels is not None:
+                self.vpl_orthogonal_client_labels = manual_labels
+                # Count labels for logging
+                label_counts = defaultdict(int)
+                for client_id, label in manual_labels.items():
+                    label_counts[label] += 1
+                logger.info(f"Computed manual orthogonal labels for {len(manual_labels)} clients "
+                          f"at round {self.state}: {dict(label_counts)}")
+                return
         
         # Otherwise, use k-means on z means
         if self.vpl_gp_prior_mus is None or len(self.vpl_gp_prior_mus) == 0:
@@ -614,8 +620,22 @@ class LLMMultiLoRAServer(Server):
             
             z_means = np.array(z_means)
             
-            # K-means with 2 clusters
-            kmeans = KMeans(n_clusters=2, random_state=42, n_init=10)
+            # Determine number of clusters (k)
+            # For hh-rlhf dataset, k is fixed to 2
+            dataset_type = getattr(self._cfg.data, 'type', '').lower()
+            if 'hh-rlhf' in dataset_type or 'hrl' in dataset_type:
+                n_clusters = 2
+                logger.info(f"Using k=2 for hh-rlhf dataset")
+            else:
+                # Use config value, default to number of prototypes
+                n_clusters = getattr(self._cfg.llm, 'vpl_num_prototypes', 2)
+                logger.info(f"Using k={n_clusters} from config (vpl_num_prototypes)")
+            
+            # Ensure n_clusters doesn't exceed number of clients
+            n_clusters = min(n_clusters, len(z_means))
+            
+            # K-means clustering
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
             labels = kmeans.fit_predict(z_means)
             
             # Create label dict
@@ -628,7 +648,7 @@ class LLMMultiLoRAServer(Server):
             for label in labels:
                 label_counts[int(label)] += 1
             
-            logger.info(f"Computed balanced orthogonal labels for {len(valid_client_ids)} clients "
+            logger.info(f"Computed k-means orthogonal labels (k={n_clusters}) for {len(valid_client_ids)} clients "
                       f"at round {self.state}: {dict(label_counts)}")
         except Exception as e:
             logger.warning(f"Failed to compute balanced orthogonal labels: {e}")

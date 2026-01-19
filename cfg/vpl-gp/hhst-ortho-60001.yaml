@@ -45,7 +45,8 @@ llm:
   # Orthogonal loss parameters (ENABLED for this experiment)
   vpl_orthogonal_weight: 10.0  # Pull loss weight (CLOP paper)
   vpl_orthogonal_orthonorm_weight: 0.1  # Orthonormal constraint weight
-  vpl_use_manual_orthogonal_labels: True  # Use server-computed orthogonal labels
+  vpl_use_manual_orthogonal_labels: False  # Use k-means automatic labeling (not manual)
+  vpl_num_prototypes: 2  # Number of orthogonal prototypes (k for k-means). For hh-rlhf, this is fixed to 2
   grad_accum_step: 2
 dataloader:
   batch_size: 4
