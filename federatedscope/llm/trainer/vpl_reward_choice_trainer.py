@@ -540,19 +540,30 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         if hasattr(ctx, 'vpl_kl_loss_total') and ctx.num_samples > 0:
             results['vpl_kl_loss'] = ctx.vpl_kl_loss_total / ctx.num_samples
             results['vpl_reconstruction_loss'] = ctx.vpl_reconstruction_loss_total / ctx.num_samples
+            # Add orthogonal loss if enabled
+            if self.vpl_orthogonal_weight > 0.0 and hasattr(ctx, 'vpl_orthogonal_loss_total'):
+                results['vpl_orthogonal_loss'] = ctx.vpl_orthogonal_loss_total / ctx.num_samples
             # Add vpl_total for monitor formatting (required by format_eval_res)
             if 'vpl_total' not in results:
                 results['vpl_total'] = ctx.num_samples
             
-            # Log VPL metrics to wandb if enabled
-            if ctx.cfg.wandb.use and ctx.cfg.wandb.online_track:
+            # Log VPL metrics to wandb if enabled (client-side logging)
+            if ctx.cfg.wandb.use and ctx.cfg.wandb.online_track and ctx.cfg.wandb.client_train_info:
                 try:
                     import wandb
+                    client_id = getattr(ctx, 'client_id', None)
+                    client_prefix = f'client_{client_id}/' if client_id is not None else 'client/'
+                    
                     wandb_metrics = {
-                        f'{ctx.cur_mode}/vpl_kl_loss': results['vpl_kl_loss'],
-                        f'{ctx.cur_mode}/vpl_reconstruction_loss': results['vpl_reconstruction_loss'],
-                        f'{ctx.cur_mode}/vpl_elbo_loss': results.get('loss', 0.0),  # Total loss includes ELBO
+                        f'{client_prefix}{ctx.cur_mode}/vpl_total_loss': results.get('loss', 0.0),
+                        f'{client_prefix}{ctx.cur_mode}/vpl_reconstruction_loss': results['vpl_reconstruction_loss'],
+                        f'{client_prefix}{ctx.cur_mode}/vpl_kl_loss': results['vpl_kl_loss'],
                     }
+                    
+                    # Add orthogonal loss if enabled
+                    if self.vpl_orthogonal_weight > 0.0 and 'vpl_orthogonal_loss' in results:
+                        wandb_metrics[f'{client_prefix}{ctx.cur_mode}/vpl_orthogonal_loss'] = results['vpl_orthogonal_loss']
+                    
                     # Use round as step for x-axis in wandb (if available)
                     step = None
                     if hasattr(ctx, 'cur_round'):

@@ -174,6 +174,89 @@ class LLMMultiLoRAServer(Server):
             self._collect_z_values_for_visualization()
         
         return aggregated_num
+    
+    def merge_eval_results_from_all_clients(self):
+        """
+        Override to add VPL-specific wandb logging for aggregated results.
+        """
+        # Call parent method to get aggregated results
+        formatted_logs_all_set = super().merge_eval_results_from_all_clients()
+        
+        # Log VPL metrics to wandb if enabled (server-side aggregated logging)
+        if (self._cfg.wandb.use and self._cfg.wandb.online_track and 
+            hasattr(self._cfg.llm, 'vpl_latent_dim')):  # VPL is enabled
+            try:
+                import wandb
+                
+                # Extract VPL metrics from aggregated results
+                round = max(self.msg_buffer['eval'].keys())
+                eval_msg_buffer = self.msg_buffer['eval'][round]
+                
+                # Collect VPL metrics from all clients
+                vpl_metrics_all_clients = {
+                    'vpl_total_loss': [],
+                    'vpl_reconstruction_loss': [],
+                    'vpl_kl_loss': [],
+                    'vpl_orthogonal_loss': []
+                }
+                client_ids = []
+                
+                for client_id in eval_msg_buffer:
+                    if eval_msg_buffer[client_id] is None:
+                        continue
+                    if client_id in self.unseen_clients_id:
+                        continue  # Skip unseen clients for aggregated metrics
+                    
+                    client_results = eval_msg_buffer[client_id]
+                    client_ids.append(client_id)
+                    
+                    if 'loss' in client_results:
+                        vpl_metrics_all_clients['vpl_total_loss'].append(float(client_results['loss']))
+                    if 'vpl_reconstruction_loss' in client_results:
+                        vpl_metrics_all_clients['vpl_reconstruction_loss'].append(float(client_results['vpl_reconstruction_loss']))
+                    if 'vpl_kl_loss' in client_results:
+                        vpl_metrics_all_clients['vpl_kl_loss'].append(float(client_results['vpl_kl_loss']))
+                    if 'vpl_orthogonal_loss' in client_results:
+                        vpl_metrics_all_clients['vpl_orthogonal_loss'].append(float(client_results['vpl_orthogonal_loss']))
+                
+                # Log aggregated metrics (averaged over all clients)
+                wandb_metrics = {}
+                if vpl_metrics_all_clients['vpl_total_loss']:
+                    wandb_metrics['server/train/vpl_total_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_total_loss'])
+                if vpl_metrics_all_clients['vpl_reconstruction_loss']:
+                    wandb_metrics['server/train/vpl_reconstruction_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_reconstruction_loss'])
+                if vpl_metrics_all_clients['vpl_kl_loss']:
+                    wandb_metrics['server/train/vpl_kl_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_kl_loss'])
+                if vpl_metrics_all_clients['vpl_orthogonal_loss']:
+                    wandb_metrics['server/train/vpl_orthogonal_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_orthogonal_loss'])
+                
+                # Log individual client metrics (for designated clients)
+                # Log first 3 clients as designated clients (or all if less than 3)
+                designated_clients = client_ids[:min(3, len(client_ids))]
+                for client_id in designated_clients:
+                    if eval_msg_buffer[client_id] is None:
+                        continue
+                    client_results = eval_msg_buffer[client_id]
+                    
+                    if 'loss' in client_results:
+                        wandb_metrics[f'client_{client_id}/train/vpl_total_loss'] = float(client_results['loss'])
+                    if 'vpl_reconstruction_loss' in client_results:
+                        wandb_metrics[f'client_{client_id}/train/vpl_reconstruction_loss'] = float(client_results['vpl_reconstruction_loss'])
+                    if 'vpl_kl_loss' in client_results:
+                        wandb_metrics[f'client_{client_id}/train/vpl_kl_loss'] = float(client_results['vpl_kl_loss'])
+                    if 'vpl_orthogonal_loss' in client_results:
+                        wandb_metrics[f'client_{client_id}/train/vpl_orthogonal_loss'] = float(client_results['vpl_orthogonal_loss'])
+                
+                if wandb_metrics:
+                    wandb.log(wandb_metrics, step=round)
+                    logger.info(f"Logged VPL metrics to wandb for round {round}: {len(wandb_metrics)} metrics")
+                    
+            except ImportError:
+                logger.warning("wandb not installed, skipping VPL metrics logging")
+            except Exception as e:
+                logger.warning(f"Failed to log VPL metrics to wandb: {e}")
+        
+        return formatted_logs_all_set
 
     def trigger_for_start(self):
         # start feature engineering (This part is for hard code)

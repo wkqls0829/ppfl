@@ -74,6 +74,6 @@ expname: vplgp_hhst_ortho_t60001
 wandb:
   use: True
   name_user: ''
-  name_project: 'fvpl-selector'
+  name_project: 'vpl-gp-selector'
   online_track: True
   client_train_info: True
