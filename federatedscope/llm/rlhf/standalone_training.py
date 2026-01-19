@@ -191,12 +191,59 @@ class RLHF_finetuning:
 
             # choose the better one based on the given output
             logger.info("Select the better response.")
-            list_preference_data = self._choose_better_response(
-                list_pairwise_data,
-                self.selector_model,
-                self.selector_tokenizer,
-                self.selector_prompt,
-            )
+            
+            # Check if using variational selection
+            use_variational_selection = getattr(self.config.llm, 'rlhf_use_variational_selection', False)
+            
+            if use_variational_selection:
+                logger.info("Using variational selection with VPL posterior.")
+                from federatedscope.llm.rlhf.variational_selector import variational_better_response
+                from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint
+                
+                # Load VPL components from selector checkpoint
+                selector_ckpt_path = getattr(self.config.llm, 'rlhf_selector_checkpoint', None)
+                if selector_ckpt_path is None:
+                    # Try to infer from selector config
+                    selector_ckpt_path = getattr(self.config.llm, 'selector_save_to', None)
+                
+                variational_encoder = None
+                feature_extractor = None
+                latent_projection = None
+                
+                if selector_ckpt_path and os.path.exists(selector_ckpt_path):
+                    logger.info(f"Loading VPL components from {selector_ckpt_path}")
+                    variational_encoder, feature_extractor, latent_projection = load_vpl_components_from_checkpoint(
+                        selector_ckpt_path, self.config, device=self.device
+                    )
+                
+                if variational_encoder is None:
+                    logger.warning("Could not load VPL components. Falling back to standard selection.")
+                    use_variational_selection = False
+            
+            if use_variational_selection:
+                # Use variational selection
+                choices = [self.selector_tokenizer(f": {c}")["input_ids"][-1] for c in ["A", "B"]]
+                list_preference_data = variational_better_response(
+                    list_pairwise_data,
+                    self.selector_model,
+                    self.selector_tokenizer,
+                    variational_encoder,
+                    feature_extractor,
+                    self.selector_prompt,
+                    choices,
+                    device=self.device,
+                    use_feature_difference=getattr(self.config.llm, 'vpl_use_feature_difference', True),
+                    num_samples=getattr(self.config.llm, 'rlhf_variational_num_samples', 1),
+                    latent_projection=latent_projection
+                )
+            else:
+                # Use standard selection
+                list_preference_data = self._choose_better_response(
+                    list_pairwise_data,
+                    self.selector_model,
+                    self.selector_tokenizer,
+                    self.selector_prompt,
+                )
             logger.info(list_preference_data[0])
             # save the choice to a file
             json.dump(list_preference_data, open(fp, "w"))
