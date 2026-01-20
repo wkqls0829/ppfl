@@ -314,9 +314,9 @@ class LLMMultiLoRAServer(Server):
             logger.info('Waited all clients join, start now...')
             # Only send adapter_eval message if grouping is enabled
             if self._cfg.llm.adapter.grouping.use:
-            self.trigger_for_feat_engr(self.broadcast_model_para, {
-                'msg_type': 'adapter_eval',
-                'filter_unseen_clients': False,
+                self.trigger_for_feat_engr(self.broadcast_model_para, {
+                    'msg_type': 'adapter_eval',
+                    'filter_unseen_clients': False,
             })
                 logger.info('Server: Performing a grouping step...')
             else:
