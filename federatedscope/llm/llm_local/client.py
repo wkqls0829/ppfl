@@ -130,7 +130,8 @@ class LLMMultiLoRAClient(Client):
                             
                             # Check if metrics is None before accessing
                             if metrics is None:
-                                logger.warning(f"Client {self.ID}: metrics is None for adapter {i}, skipping")
+                                logger.warning(f"Client {self.ID}: metrics is None for adapter {i}, adding to indices anyway")
+                                adapter_indices.append(i)
                                 continue
                             
                             if i == 0 or min_loss > metrics['val_avg_loss']:
@@ -138,7 +139,13 @@ class LLMMultiLoRAClient(Client):
                                     'val_avg_loss'], [i]
                             elif min_loss == metrics['val_avg_loss']:
                                 adapter_indices.append(i)
-                        logger.info(adapter_indices)
+                        
+                        # If no adapters were evaluated successfully, use all adapters
+                        if len(adapter_indices) == 0:
+                            logger.warning(f"Client {self.ID}: No adapters evaluated successfully, using all adapters")
+                            adapter_indices = list(range(self._cfg.llm.adapter.count))
+                        
+                        logger.info(f"Client {self.ID}: Selected adapter indices: {adapter_indices}")
                         adapter_idx = random.choice(adapter_indices)
                 # activate the selected adapter for further training
                 logger.info(
