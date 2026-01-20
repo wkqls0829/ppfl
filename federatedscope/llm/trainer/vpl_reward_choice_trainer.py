@@ -71,17 +71,32 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             # Get prototype scale (distance from origin)
             prototype_scale = getattr(config.llm, 'vpl_prototype_scale', 5.0)  # Default: 5.0 (further from origin)
             
-            # Initialize with larger scale, then orthonormalize
-            self.orthogonal_prototypes = nn.Parameter(
-                torch.randn(num_prototypes, self.vpl_latent_dim, device=device) * 2.0
-            )
-            # Orthonormalize initial prototypes (QR decomposition makes norm=1)
-            with torch.no_grad():
-                Q, R = torch.linalg.qr(self.orthogonal_prototypes.T)
-                # Scale orthonormalized prototypes to be further from origin
-                self.orthogonal_prototypes.data = Q.T * prototype_scale
+            # Check if prototypes should be learnable or fixed
+            self.vpl_prototypes_learnable = getattr(config.llm, 'vpl_prototypes_learnable', False)  # Default: False (fixed)
+            
+            if self.vpl_prototypes_learnable:
+                # Learnable prototypes: Initialize as Parameter (will be updated by gradients)
+                self.orthogonal_prototypes = nn.Parameter(
+                    torch.randn(num_prototypes, self.vpl_latent_dim, device=device) * 2.0
+                )
+                # Orthonormalize initial prototypes (QR decomposition makes norm=1)
+                with torch.no_grad():
+                    Q, R = torch.linalg.qr(self.orthogonal_prototypes.T)
+                    # Scale orthonormalized prototypes to be further from origin
+                    self.orthogonal_prototypes.data = Q.T * prototype_scale
+                logger.info(f"Initialized {num_prototypes} LEARNABLE orthonormal prototypes for CLOP loss (scale={prototype_scale})")
+            else:
+                # Fixed prototypes: Initialize as buffer (not updated by gradients)
+                # Create orthonormal basis using identity matrix scaled by prototype_scale
+                prototypes = torch.eye(num_prototypes, self.vpl_latent_dim, device=device) * prototype_scale
+                # If latent_dim > num_prototypes, pad with zeros
+                if self.vpl_latent_dim > num_prototypes:
+                    padding = torch.zeros(num_prototypes, self.vpl_latent_dim - num_prototypes, device=device)
+                    prototypes = torch.cat([prototypes, padding], dim=1)
+                self.register_buffer('orthogonal_prototypes', prototypes)
+                logger.info(f"Initialized {num_prototypes} FIXED orthonormal prototypes for CLOP loss (scale={prototype_scale})")
+            
             self.orthogonal_label = None  # Will be set by server
-            logger.info(f"Initialized {num_prototypes} orthonormal prototypes for CLOP loss (scale={prototype_scale}, distance from origin={prototype_scale})")
         else:
             self.orthogonal_prototypes = None
             self.orthogonal_label = None
@@ -547,10 +562,11 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             ctx.vpl_orthogonal_loss_total += ctx.vpl_orthogonal_loss * ctx.batch_size
         
         # Apply orthonormal constraint to prototypes AFTER backward pass
-        # This ensures gradients are preserved during forward pass
+        # Only for learnable prototypes (fixed prototypes don't need this)
         if (self.vpl_orthogonal_weight > 0.0 and 
             self.orthogonal_prototypes is not None and 
-            ctx.cur_mode == MODE.TRAIN):
+            ctx.cur_mode == MODE.TRAIN and
+            getattr(self, 'vpl_prototypes_learnable', False)):
             # Only apply constraint periodically to avoid too frequent updates
             # Apply every batch or every N batches (e.g., every 5 batches)
             if ctx.cur_batch_i % 1 == 0:  # Apply every batch
@@ -760,8 +776,13 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         This should be called AFTER backward pass to maintain gradients during forward.
         
         Called in _hook_on_batch_end to ensure gradients are preserved during forward pass.
+        Only applies to learnable prototypes (fixed prototypes don't need this).
         """
         if self.orthogonal_prototypes is None:
+            return
+        
+        # Only apply to learnable prototypes
+        if not getattr(self, 'vpl_prototypes_learnable', False):
             return
         
         with torch.no_grad():
