@@ -654,13 +654,26 @@ class Server(BaseServer):
                     if form != "raw":
                         metric_name = form + "_unseen" if merge_type == \
                                                           "unseen" else form
-                        update_best_this_round_tmp = \
-                            self._monitor.update_best_result(
-                                self.best_results,
-                                formatted_logs[f"Results_{metric_name}"],
-                                results_type=f"unseen_client_summarized_{form}"
-                                if merge_type == "unseen" else
-                                f"client_summarized_{form}")
+                        # Only update if the key exists in formatted_logs and contains the required key
+                        if f"Results_{metric_name}" in formatted_logs:
+                            results_dict = formatted_logs[f"Results_{metric_name}"]
+                            if (results_dict and isinstance(results_dict, dict) and len(results_dict) > 0):
+                                # Check if best_res_update_round_wise_key exists if it's configured
+                                if (not hasattr(self._cfg.eval, 'best_res_update_round_wise_key') or
+                                    self._cfg.eval.best_res_update_round_wise_key in results_dict):
+                                    update_best_this_round_tmp = \
+                                        self._monitor.update_best_result(
+                                            self.best_results,
+                                            results_dict,
+                                            results_type=f"unseen_client_summarized_{form}"
+                                            if merge_type == "unseen" else
+                                            f"client_summarized_{form}")
+                                else:
+                                    update_best_this_round_tmp = False
+                            else:
+                                update_best_this_round_tmp = False
+                        else:
+                            update_best_this_round_tmp = False
                         if update_prior_tmp >= update_prior:
                             update_prior = update_prior_tmp
                             update_best_this_round = update_best_this_round_tmp
