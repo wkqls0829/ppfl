@@ -322,8 +322,8 @@ class LLMMultiLoRAServer(Server):
             else:
                 # If grouping is not enabled, start training round directly
                 logger.info(
-                '----------- Starting training (Round #{:d}) -------------'.
-                format(self.state))
+                    '----------- Starting training (Round #{:d}) -------------'.
+                    format(self.state))
                 self._start_new_training_round()
 
     def callback_funcs_for_grouping(self, message: Message):
