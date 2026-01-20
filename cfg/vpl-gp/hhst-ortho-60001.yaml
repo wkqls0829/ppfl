@@ -38,16 +38,16 @@ llm:
   # Variational Preference Learning with Gumbel-Softmax Prior (VPL-GP) parameters
   vpl_use_gp_prior: True
   vpl_latent_dim: 32
-  vpl_kl_weight: 0.1
+  vpl_kl_weight: 1.0  # Increased 10x from 0.1
   vpl_gp_temperature: 1.0
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
   # Orthogonal loss parameters (ENABLED for this experiment)
-  vpl_orthogonal_weight: 10.0  # Pull loss weight (CLOP paper)
+  vpl_orthogonal_weight: 100.0  # Pull loss weight (CLOP paper) - Increased 10x from 10.0
   vpl_orthogonal_orthonorm_weight: 0.1  # Orthonormal constraint weight
   vpl_use_manual_orthogonal_labels: False  # Use k-means automatic labeling (not manual)
   vpl_num_prototypes: 2  # Number of orthogonal prototypes (k for k-means). For hh-rlhf, this is fixed to 2
-  vpl_prototype_scale: 10.0  # Distance of prototypes from origin (default: 5.0, larger = further from origin)
+  vpl_prototype_scale: 5.0  # Distance of prototypes from origin (default: 5.0, larger = further from origin)
   vpl_tsne_visualize_freq: 10  # Generate t-SNE visualization every 10 rounds
   grad_accum_step: 2
 dataloader:

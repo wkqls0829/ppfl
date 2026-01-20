@@ -1,5 +1,5 @@
 use_gpu: True
-device: 0  # GPU 0 for hhst experiment (tid: 40000)
+device: 0  # GPU 0 for hhst experiment (tid: 40001)
 early_stop:
   patience: 0
 federate:
@@ -7,7 +7,7 @@ federate:
   client_num: 10
   sample_client_num: 5
   total_round_num: 50
-  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_40000.ckpt"
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_40001.ckpt"
   ignore_weight: True
   save_freq: 20  # Checkpoint 저장 빈도 줄여서 I/O 시간 감소
   share_local_model: True  # Single GPU mode
@@ -74,7 +74,7 @@ eval:
   best_res_update_round_wise_key: train_avg_loss  # Use train_avg_loss instead of val_avg_loss
   count_flops: False
   max_samples_for_reward: 100
-expname: vplgp_hhst_t40000
+expname: vplgp_hhst_t40001
 wandb:
   use: True
   name_user: ''
