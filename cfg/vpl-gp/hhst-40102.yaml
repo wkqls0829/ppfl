@@ -1,5 +1,5 @@
 use_gpu: True
-device: 1  # GPU 1 for hhst-ortho experiment (tid: 50002)
+device: 2  # GPU 2 for hhst experiment (tid: 40102)
 early_stop:
   patience: 0
 federate:
@@ -7,7 +7,7 @@ federate:
   client_num: 10
   sample_client_num: 5
   total_round_num: 50
-  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50002.ckpt"
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_40102.ckpt"
   ignore_weight: True
   save_freq: 20  # Checkpoint 저장 빈도 줄여서 I/O 시간 감소
   share_local_model: True  # Single GPU mode
@@ -38,16 +38,17 @@ llm:
   # Variational Preference Learning with Gumbel-Softmax Prior (VPL-GP) parameters
   vpl_use_gp_prior: True
   vpl_latent_dim: 32
-  vpl_kl_weight: 10.0  # Increased 10x from 1.0 (50001)
+  vpl_kl_weight: 10.0  # Increased 10x from 1.0 (40101)
   vpl_gp_temperature: 1.0
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
-  # Orthogonal loss parameters (ENABLED for this experiment)
-  vpl_orthogonal_weight: 1000.0  # Pull loss weight (CLOP paper) - Increased 10x from 100.0 (50001)
-  vpl_orthogonal_orthonorm_weight: 0.1  # Orthonormal constraint weight
-  vpl_use_manual_orthogonal_labels: False  # Use k-means automatic labeling (not manual)
-  vpl_num_prototypes: 2  # Number of orthogonal prototypes (k for k-means). For hh-rlhf, this is fixed to 2
-  vpl_prototype_scale: 5.0  # Distance of prototypes from origin (default: 5.0, larger = further from origin)
+  vpl_use_difference_only: True  # Use only difference embedding (removes general information)
+  # Orthogonal loss parameters (DISABLED for this experiment)
+  vpl_orthogonal_weight: 0.0  # Orthogonal loss disabled
+  vpl_orthogonal_orthonorm_weight: 0.0  # Orthonormal constraint disabled
+  vpl_use_manual_orthogonal_labels: False  # Not needed when orthogonal loss is disabled
+  vpl_num_prototypes: 2  # Number of orthogonal prototypes (not used when orthogonal loss is disabled)
+  vpl_prototype_scale: 5.0  # Distance of prototypes from origin (not used when orthogonal loss is disabled)
   vpl_tsne_visualize_freq: 10  # Generate t-SNE visualization every 10 rounds
   grad_accum_step: 2
 dataloader:
@@ -75,7 +76,7 @@ eval:
   best_res_update_round_wise_key: train_avg_loss  # Use train_avg_loss instead of val_avg_loss
   count_flops: False
   max_samples_for_reward: 100
-expname: vplgp_hhst_ortho_t50002
+expname: vplgp_hhst_t40102
 wandb:
   use: True
   name_user: ''
