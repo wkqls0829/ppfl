@@ -314,16 +314,16 @@ class LLMMultiLoRAServer(Server):
             logger.info('Waited all clients join, start now...')
             # Only send adapter_eval message if grouping is enabled
             if self._cfg.llm.adapter.grouping.use:
-                self.trigger_for_feat_engr(self.broadcast_model_para, {
-                    'msg_type': 'adapter_eval',
-                    'filter_unseen_clients': False,
+            self.trigger_for_feat_engr(self.broadcast_model_para, {
+                'msg_type': 'adapter_eval',
+                'filter_unseen_clients': False,
             })
                 logger.info('Server: Performing a grouping step...')
             else:
                 # If grouping is not enabled, start training round directly
-                logger.info(
-                    '----------- Starting training (Round #{:d}) -------------'.
-                    format(self.state))
+            logger.info(
+                '----------- Starting training (Round #{:d}) -------------'.
+                format(self.state))
                 self._start_new_training_round()
 
     def callback_funcs_for_grouping(self, message: Message):
@@ -790,17 +790,17 @@ class LLMMultiLoRAServer(Server):
             }
             
             # Use same logic as parent class: sample if sample_client_num > 0, else broadcast to all
-            if sample_client_num > 0:
+        if sample_client_num > 0:
                 # Check if sampler is available and has idle clients
                 if self.sampler is not None:
                     idle_clients = np.nonzero(self.sampler.client_state)[0]
                     if len(idle_clients) > 0:
                         selected_clients = self.sampler.sample(size=sample_client_num)
-                    else:
+        else:
                         # All clients are working, use all clients instead
                         selected_clients = list(self.comm_manager.neighbors.keys())
                         logger.warning(f"No idle clients available, broadcasting to all {len(selected_clients)} clients")
-                else:
+            else:
                     selected_clients = list(self.comm_manager.neighbors.keys())
             else:
                 # Broadcast to all clients
@@ -839,7 +839,7 @@ class LLMMultiLoRAServer(Server):
                 selected_clients = list(self.comm_manager.neighbors.keys())
             
             for receiver in selected_clients:
-                self.comm_manager.send(
+        self.comm_manager.send(
                     Message(msg_type='vpl_orthogonal_labels',
                     sender=self.ID,
                            receiver=[receiver],
