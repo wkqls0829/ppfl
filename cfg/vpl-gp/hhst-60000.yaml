@@ -9,7 +9,7 @@ federate:
   total_round_num: 50
   save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_60000.ckpt"
   ignore_weight: True
-  save_freq: 10
+  save_freq: 20  # Checkpoint 저장 빈도 줄여서 I/O 시간 감소
   share_local_model: True  # Single GPU mode
   online_aggr: False
 data:
@@ -50,6 +50,9 @@ llm:
   grad_accum_step: 2
 dataloader:
   batch_size: 4
+  num_workers: 4  # DataLoader 병렬화로 데이터 로딩 속도 향상
+  pin_memory: True  # GPU 전송 속도 향상
+  persistent_workers: True  # Worker 재사용으로 오버헤드 감소
 model:
   type: 'google/gemma-2b@huggingface_llm'
 train:
@@ -66,7 +69,7 @@ trainer:
   type: vplgprewardchoicetrainer  # Use VPL-GP trainer
   choices: ['A', 'B']
 eval:
-  freq: 2
+  freq: 5  # Evaluation 빈도 줄여서 전체 트레이닝 시간 단축
   metrics: ['loss', 'acc', 'vpl_kl_loss', 'vpl_reconstruction_loss']  # Removed reward model metrics for HHST
   best_res_update_round_wise_key: train_avg_loss  # Use train_avg_loss instead of val_avg_loss
   count_flops: False
