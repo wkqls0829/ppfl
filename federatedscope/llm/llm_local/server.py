@@ -303,7 +303,7 @@ class LLMMultiLoRAServer(Server):
                     
             except ImportError:
                 logger.warning("wandb not installed, skipping VPL metrics logging")
-                except Exception as e:
+            except Exception as e:
                 logger.warning(f"Failed to log VPL metrics to wandb: {e}")
 
         return formatted_logs_all_set
