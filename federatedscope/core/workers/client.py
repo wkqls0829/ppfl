@@ -553,11 +553,17 @@ class Client(BaseClient):
                 forms=['raw'],
                 return_raw=True)
             logger.info(formatted_eval_res)
-            update_best_this_round = self._monitor.update_best_result(
-                self.best_results,
-                formatted_eval_res['Results_raw'],
-                results_type=f"client #{self.ID}",
-            )
+            
+            # Only update best result if metrics are not empty
+            if formatted_eval_res and 'Results_raw' in formatted_eval_res and formatted_eval_res['Results_raw']:
+                update_best_this_round = self._monitor.update_best_result(
+                    self.best_results,
+                    formatted_eval_res['Results_raw'],
+                    results_type=f"client #{self.ID}",
+                )
+            else:
+                # Skip update if no results available
+                update_best_this_round = False
 
             if update_best_this_round and self._cfg.federate.save_client_model:
                 path = add_prefix_to_path(f'client_{self.ID}_',
