@@ -125,7 +125,7 @@ class LLMMultiLoRAServer(Server):
                     # Remove VPL-related keys that are not model parameters
                     # These should be handled separately, not by the aggregator
                     vpl_keys_to_remove = ['client_z_values', 'client_z_mu', 'client_z_logvar', 
-                                          'client_orthogonal_prototypes']
+                                          'client_orthogonal_prototypes', 'sample_size']
                     model_para_clean = {k: v for k, v in model_para.items() 
                                        if k not in vpl_keys_to_remove}
                     msg_list.append((sample_size, model_para_clean))
@@ -710,7 +710,7 @@ class LLMMultiLoRAServer(Server):
                 'client_orthogonal_prototypes' in model_para):
                 prototypes = model_para['client_orthogonal_prototypes']
                 if isinstance(prototypes, torch.Tensor):
-                    prototypes = prototypes.cpu().numpy()
+                    prototypes = prototypes.detach().cpu().numpy()  # Fix: detach() before numpy()
                 elif isinstance(prototypes, list):
                     prototypes = np.array(prototypes)
                 
