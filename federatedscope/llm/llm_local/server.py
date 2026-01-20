@@ -790,17 +790,17 @@ class LLMMultiLoRAServer(Server):
             }
             
             # Use same logic as parent class: sample if sample_client_num > 0, else broadcast to all
-        if sample_client_num > 0:
+            if sample_client_num > 0:
                 # Check if sampler is available and has idle clients
                 if self.sampler is not None:
                     idle_clients = np.nonzero(self.sampler.client_state)[0]
                     if len(idle_clients) > 0:
                         selected_clients = self.sampler.sample(size=sample_client_num)
-        else:
+                    else:
                         # All clients are working, use all clients instead
                         selected_clients = list(self.comm_manager.neighbors.keys())
                         logger.warning(f"No idle clients available, broadcasting to all {len(selected_clients)} clients")
-            else:
+                else:
                     selected_clients = list(self.comm_manager.neighbors.keys())
             else:
                 # Broadcast to all clients
