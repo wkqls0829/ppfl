@@ -661,13 +661,13 @@ class Server(BaseServer):
                                 # Check if best_res_update_round_wise_key exists if it's configured
                                 if (not hasattr(self._cfg.eval, 'best_res_update_round_wise_key') or
                                     self._cfg.eval.best_res_update_round_wise_key in results_dict):
-                        update_best_this_round_tmp = \
-                            self._monitor.update_best_result(
-                                self.best_results,
+                                    update_best_this_round_tmp = \
+                                        self._monitor.update_best_result(
+                                            self.best_results,
                                             results_dict,
-                                results_type=f"unseen_client_summarized_{form}"
-                                if merge_type == "unseen" else
-                                f"client_summarized_{form}")
+                                            results_type=f"unseen_client_summarized_{form}"
+                                            if merge_type == "unseen" else
+                                            f"client_summarized_{form}")
                                 else:
                                     update_best_this_round_tmp = False
                             else:
@@ -990,10 +990,10 @@ class Server(BaseServer):
                     len(formatted_eval_res['Results_raw']) > 0):
                     if (not hasattr(self._cfg.eval, 'best_res_update_round_wise_key') or
                         self._cfg.eval.best_res_update_round_wise_key in formatted_eval_res['Results_raw']):
-                self._monitor.update_best_result(
-                    self.best_results,
-                    formatted_eval_res['Results_raw'],
-                    results_type="server_global_eval")
+                        self._monitor.update_best_result(
+                            self.best_results,
+                            formatted_eval_res['Results_raw'],
+                            results_type="server_global_eval")
                 self.history_results = merge_dict_of_results(
                     self.history_results, formatted_eval_res)
                 self._monitor.save_formatted_results(formatted_eval_res)
