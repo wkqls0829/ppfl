@@ -314,10 +314,10 @@ class LLMMultiLoRAServer(Server):
             logger.info('Waited all clients join, start now...')
             # Only send adapter_eval message if grouping is enabled
             if self._cfg.llm.adapter.grouping.use:
-            self.trigger_for_feat_engr(self.broadcast_model_para, {
-                'msg_type': 'adapter_eval',
-                'filter_unseen_clients': False,
-            })
+                self.trigger_for_feat_engr(self.broadcast_model_para, {
+                    'msg_type': 'adapter_eval',
+                    'filter_unseen_clients': False,
+                })
                 logger.info('Server: Performing a grouping step...')
             else:
                 # If grouping is not enabled, start training round directly
@@ -839,12 +839,12 @@ class LLMMultiLoRAServer(Server):
                 selected_clients = list(self.comm_manager.neighbors.keys())
             
             for receiver in selected_clients:
-        self.comm_manager.send(
+                self.comm_manager.send(
                     Message(msg_type='vpl_orthogonal_labels',
-                    sender=self.ID,
-                           receiver=[receiver],
-                           state=self.state,
-                    timestamp=self.cur_timestamp,
-                           content=self.vpl_orthogonal_client_labels))
+                            sender=self.ID,
+                            receiver=[receiver],
+                            state=self.state,
+                            timestamp=self.cur_timestamp,
+                            content=self.vpl_orthogonal_client_labels))
             
             logger.info(f"Broadcasting orthogonal labels to {len(selected_clients)} clients at round {self.state}")
