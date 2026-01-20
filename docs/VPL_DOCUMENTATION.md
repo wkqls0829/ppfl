@@ -65,12 +65,22 @@ VPL extracts features from preference data to feed into the encoder:
 - Extract logits for choice tokens (A/B)
 - Concatenate logits from both choices
 - Input: `[logit_A_chosen, logit_B_chosen, logit_A_rejected, logit_B_rejected]`
+- Config: `vpl_feature_method: 'choice_logits'`, `vpl_use_feature_difference: False`
 
-**Option 2: Embedding Difference** (Recommended)
+**Option 2: Embedding Difference (Full)**
 - Extract embeddings for chosen and rejected responses
 - Compute difference: `chosen_emb - rejected_emb`
-- Input: `[chosen_emb, rejected_emb, chosen_emb - rejected_emb]`
-- Removes general information, keeps only preference signal
+- Input: `[chosen_emb, rejected_emb, chosen_emb - rejected_emb]` (3 * embedding_dim)
+- Config: `vpl_use_feature_difference: True`, `vpl_use_difference_only: False`
+- **Note**: Includes general information from chosen/rejected embeddings
+
+**Option 3: Embedding Difference (Difference Only)** ⭐ Recommended
+- Extract embeddings for chosen and rejected responses
+- Compute difference: `chosen_emb - rejected_emb`
+- Input: `chosen_emb - rejected_emb` only (embedding_dim)
+- Config: `vpl_use_feature_difference: True`, `vpl_use_difference_only: True`
+- **Advantage**: Removes general information, keeps only preference signal
+- **Use case**: When you want z to capture only preference differences, not response-specific information
 
 #### 3. Latent Conditioning
 
@@ -94,6 +104,8 @@ llm:
   vpl_kl_weight: 0.1              # Weight for KL divergence
   vpl_feature_method: 'choice_logits'  # or 'embedding_difference'
   vpl_use_feature_difference: True    # Use embedding difference
+  vpl_use_difference_only: True       # Use only difference (removes general info)
+  vpl_use_llm_feature_extractor: True  # Use MLP feature extractor
 
 trainer:
   type: vplrewardchoicetrainer
@@ -113,6 +125,19 @@ trainer:
 - **`vpl_feature_method`**: Feature extraction method
   - `'choice_logits'`: Use logits at choice token positions
   - `'embedding_difference'`: Use embedding difference (recommended)
+
+- **`vpl_use_feature_difference`**: Use embedding difference (default: False)
+  - `True`: Extract `chosen_emb - rejected_emb` from hidden states
+  - `False`: Use logits-based features
+
+- **`vpl_use_difference_only`**: Use only difference embedding (default: False)
+  - `True`: Input to feature extractor is `difference` only (removes general info)
+  - `False`: Input is `[chosen, rejected, difference]` (includes general info)
+  - **Recommended**: `True` for preference-only learning
+
+- **`vpl_use_llm_feature_extractor`**: Use MLP feature extractor (default: True)
+  - `True`: Use deeper MLP network (512 → 256 → 128)
+  - `False`: Use simpler feature extraction
 
 ## Training Process
 

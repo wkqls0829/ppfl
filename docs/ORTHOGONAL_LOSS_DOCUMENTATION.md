@@ -68,15 +68,23 @@ federatedscope/llm/llm_local/server.py                   # Label assignment
 
 ```python
 # Initialize orthonormal prototypes
-num_prototypes = num_clients  # or configurable
+num_prototypes = config.llm.vpl_num_prototypes  # or num_clients
+prototype_scale = config.llm.vpl_prototype_scale  # Default: 5.0
+
 self.orthogonal_prototypes = nn.Parameter(
     torch.randn(num_prototypes, latent_dim) * 2.0
 )
 
 # Orthonormalize using QR decomposition
 Q, R = torch.linalg.qr(self.orthogonal_prototypes.T)
-self.orthogonal_prototypes.data = Q.T
+# Scale orthonormalized prototypes to be further from origin
+self.orthogonal_prototypes.data = Q.T * prototype_scale
 ```
+
+**Prototype Scale**:
+- QR decomposition makes prototypes orthonormal (norm=1)
+- Scaling by `prototype_scale` places prototypes at distance `prototype_scale` from origin
+- This prevents prototypes from being too close to z embeddings
 
 #### 2. Label Assignment
 
@@ -140,8 +148,9 @@ if self.vpl_orthogonal_weight > 0.0:
 llm:
   vpl_orthogonal_weight: 10.0              # Pull loss weight
   vpl_orthogonal_orthonorm_weight: 0.1     # Orthonormal constraint weight
-  vpl_use_manual_orthogonal_labels: True  # Use server-computed labels
-  vpl_num_prototypes: 10                   # Number of prototypes (optional)
+  vpl_use_manual_orthogonal_labels: False # Use k-means (not manual)
+  vpl_num_prototypes: 2                    # Number of prototypes (k for k-means)
+  vpl_prototype_scale: 5.0                 # Distance of prototypes from origin
 ```
 
 ### Hyperparameters
@@ -154,9 +163,18 @@ llm:
   - Higher values: Stricter orthonormality
   - Lower values: More flexible prototype structure
 
-- **`vpl_use_manual_orthogonal_labels`**: Use server labels (default: True)
-  - `True`: Server computes balanced labels via k-means
-  - `False`: Auto-assign to closest prototype
+- **`vpl_use_manual_orthogonal_labels`**: Use server labels (default: False)
+  - `True`: Server assigns manual labels (first half get 0, second half get 1)
+  - `False`: Server computes balanced labels via k-means (recommended)
+
+- **`vpl_num_prototypes`**: Number of orthogonal prototypes (default: num_clients)
+  - For `hh-rlhf` dataset: Automatically fixed to 2
+  - For other datasets: Uses this value as k for k-means
+
+- **`vpl_prototype_scale`**: Distance of prototypes from origin (default: 5.0)
+  - Larger values: Prototypes further from origin, better separation
+  - Smaller values: Prototypes closer to origin
+  - **Note**: Prototypes are orthonormalized (norm=1), then scaled by this value
 
 ## Training Process
 

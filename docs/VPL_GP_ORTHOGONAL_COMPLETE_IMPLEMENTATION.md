@@ -89,9 +89,9 @@ def _extract_preference_features(self, logits, labels, choices, hidden_states):
     """
     Extract preference features using embedding difference.
     
-    Strategy: [chosen_emb, rejected_emb, chosen_emb - rejected_emb]
-    - Removes general information
-    - Keeps only preference signal
+    Strategy depends on config:
+    1. vpl_use_difference_only=False: [chosen_emb, rejected_emb, difference]
+    2. vpl_use_difference_only=True: [difference] only (removes general info)
     """
     # Extract embeddings at choice token positions
     chosen_emb = extract_embedding_at_choice(hidden_states, labels, choices[0])
@@ -100,32 +100,54 @@ def _extract_preference_features(self, logits, labels, choices, hidden_states):
     # Compute difference
     feature_diff = chosen_emb - rejected_emb
     
-    # Concatenate for richer representation
-    features = torch.cat([chosen_emb, rejected_emb, feature_diff], dim=-1)
+    # Choose feature combination based on config
+    if vpl_use_difference_only:
+        # Use only difference (removes general information)
+        features = feature_diff  # (embedding_dim,)
+    else:
+        # Concatenate for richer representation
+        features = torch.cat([chosen_emb, rejected_emb, feature_diff], dim=-1)  # (3 * embedding_dim,)
     
     return features
 ```
 
 **특징**:
 - Single forward pass: LLM의 hidden states 재사용
-- Preference-focused: 차이를 계산하여 일반 정보 제거
-- Richer representation: [chosen, rejected, difference] 결합
+- **Difference-only mode**: `vpl_use_difference_only=True`로 general information 제거
+- **Full mode**: `vpl_use_difference_only=False`로 richer representation 사용
 
 #### 2. Feature Extractor Network
 
+**Input dimension depends on `vpl_use_difference_only`**:
+
 ```python
-self.feature_extractor = nn.Sequential(
-    nn.Linear(embedding_dim * 3, 512),  # Input: [chosen, rejected, diff]
-    nn.ReLU(),
-    nn.Dropout(0.1),
-    nn.Linear(512, 256),
-    nn.ReLU(),
-    nn.Dropout(0.1),
-    nn.Linear(256, 128)  # Output: 128-dim features
-)
+if vpl_use_difference_only:
+    # Input: difference only
+    self.feature_extractor = nn.Sequential(
+        nn.Linear(embedding_dim, 512),  # Input: difference only
+        nn.ReLU(),
+        nn.Dropout(0.1),
+        nn.Linear(512, 256),
+        nn.ReLU(),
+        nn.Dropout(0.1),
+        nn.Linear(256, 128)  # Output: 128-dim features
+    )
+else:
+    # Input: [chosen, rejected, difference]
+    self.feature_extractor = nn.Sequential(
+        nn.Linear(embedding_dim * 3, 512),  # Input: [chosen, rejected, diff]
+        nn.ReLU(),
+        nn.Dropout(0.1),
+        nn.Linear(512, 256),
+        nn.ReLU(),
+        nn.Dropout(0.1),
+        nn.Linear(256, 128)  # Output: 128-dim features
+    )
 ```
 
 **역할**: Raw embeddings → Encoder-ready features
+- **Difference-only**: Removes general information, keeps only preference signal
+- **Full mode**: Includes general information from chosen/rejected embeddings
 
 #### 3. Variational Encoder
 
@@ -382,14 +404,23 @@ L_orthonorm = ||P^T P - I||²_F
 ```python
 # Initialize prototypes
 num_prototypes = config.llm.vpl_num_prototypes  # Default: num_clients
+prototype_scale = config.llm.vpl_prototype_scale  # Default: 5.0
+
 self.orthogonal_prototypes = nn.Parameter(
     torch.randn(num_prototypes, latent_dim) * 2.0
 )
 
 # Orthonormalize using QR decomposition
 Q, R = torch.linalg.qr(self.orthogonal_prototypes.T)
-self.orthogonal_prototypes.data = Q.T  # Now: P^T P = I
+# Scale orthonormalized prototypes to be further from origin
+self.orthogonal_prototypes.data = Q.T * prototype_scale  # Distance from origin = prototype_scale
 ```
+
+**Prototype Scale**:
+- QR decomposition makes prototypes orthonormal (norm=1, distance from origin=1)
+- Scaling by `prototype_scale` places prototypes at distance `prototype_scale` from origin
+- **Default**: 5.0 (prototypes are 5 units away from origin)
+- **Effect**: Better separation from z embeddings, which are typically near origin
 
 #### 2. Label Assignment
 
@@ -825,6 +856,8 @@ llm:
   vpl_kl_weight: 0.1                    # KL divergence weight
   vpl_feature_method: 'choice_logits'   # Feature extraction method
   vpl_use_feature_difference: True      # Use embedding difference
+  vpl_use_difference_only: True        # Use only difference (removes general info) ⭐ Recommended
+  vpl_use_llm_feature_extractor: True  # Use MLP feature extractor
   
   # GP Prior
   vpl_use_gp_prior: True                # Enable GP prior
@@ -836,6 +869,7 @@ llm:
   vpl_use_manual_orthogonal_labels: False  # Use k-means (not manual)
   vpl_num_prototypes: 2                 # Number of prototypes (k for k-means)
                                         # For hh-rlhf: automatically fixed to 2
+  vpl_prototype_scale: 5.0              # Distance of prototypes from origin
 
 # Trainer
 trainer:
@@ -858,7 +892,9 @@ eval:
 | `vpl_latent_dim` | 32 | Latent space 차원 | 16-64 |
 | `vpl_kl_weight` | 0.1 | KL divergence 가중치 | 0.01-1.0 |
 | `vpl_feature_method` | 'choice_logits' | Feature 추출 방법 | 'choice_logits' or 'embedding_difference' |
-| `vpl_use_feature_difference` | True | Embedding 차이 사용 | True (권장) |
+| `vpl_use_feature_difference` | False | Embedding 차이 사용 | True (권장) |
+| `vpl_use_difference_only` | False | Difference만 사용 (general info 제거) | True (preference-only 학습 시 권장) |
+| `vpl_use_llm_feature_extractor` | True | MLP feature extractor 사용 | True (권장) |
 
 #### GP Prior 하이퍼파라미터
 
@@ -875,6 +911,7 @@ eval:
 | `vpl_orthogonal_orthonorm_weight` | 0.1 | Orthonorm constraint 가중치 | 0.01-1.0 |
 | `vpl_use_manual_orthogonal_labels` | False | Manual labels 사용 | False (k-means 권장) |
 | `vpl_num_prototypes` | num_clients | 프로토타입 개수 | 2-10 (hh-rlhf: 2) |
+| `vpl_prototype_scale` | 5.0 | Prototype의 원점으로부터 거리 | 2.0-10.0 |
 
 ### 하이퍼파라미터 튜닝 가이드
 
