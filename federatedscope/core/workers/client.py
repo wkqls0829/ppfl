@@ -556,11 +556,11 @@ class Client(BaseClient):
             
             # Only update best result if metrics are not empty
             if formatted_eval_res and 'Results_raw' in formatted_eval_res and formatted_eval_res['Results_raw']:
-            update_best_this_round = self._monitor.update_best_result(
-                self.best_results,
-                formatted_eval_res['Results_raw'],
-                results_type=f"client #{self.ID}",
-            )
+                update_best_this_round = self._monitor.update_best_result(
+                    self.best_results,
+                    formatted_eval_res['Results_raw'],
+                    results_type=f"client #{self.ID}",
+                )
             else:
                 # Skip update if no results available
                 update_best_this_round = False
