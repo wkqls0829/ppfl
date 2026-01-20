@@ -983,10 +983,17 @@ class Server(BaseServer):
                     role='Server #',
                     forms=self._cfg.eval.report,
                     return_raw=self._cfg.federate.make_global_eval)
-                self._monitor.update_best_result(
-                    self.best_results,
-                    formatted_eval_res['Results_raw'],
-                    results_type="server_global_eval")
+                
+                # Only update best result if Results_raw is not empty and contains the key
+                if (formatted_eval_res and 'Results_raw' in formatted_eval_res and 
+                    formatted_eval_res['Results_raw'] and isinstance(formatted_eval_res['Results_raw'], dict) and
+                    len(formatted_eval_res['Results_raw']) > 0):
+                    if (not hasattr(self._cfg.eval, 'best_res_update_round_wise_key') or
+                        self._cfg.eval.best_res_update_round_wise_key in formatted_eval_res['Results_raw']):
+                        self._monitor.update_best_result(
+                            self.best_results,
+                            formatted_eval_res['Results_raw'],
+                            results_type="server_global_eval")
                 self.history_results = merge_dict_of_results(
                     self.history_results, formatted_eval_res)
                 self._monitor.save_formatted_results(formatted_eval_res)
