@@ -53,6 +53,7 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         # Check if using feature difference (embedding difference)
         self.vpl_use_feature_difference = getattr(config.llm, 'vpl_use_feature_difference', False)
         self.vpl_use_llm_feature_extractor = getattr(config.llm, 'vpl_use_llm_feature_extractor', True)
+        self.vpl_use_difference_only = getattr(config.llm, 'vpl_use_difference_only', False)  # Use only difference embedding (no chosen/rejected)
         
         # VPL-GP hyperparameters (integrated into main trainer)
         self.vpl_use_gp_prior = getattr(config.llm, 'vpl_use_gp_prior', False)
@@ -98,20 +99,35 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         # Strategy: Reuse hidden_states from main forward pass, no additional forward passes
         # According to original VPL paper: encoder takes [chosen_emb, rejected_emb] or similar
         if self.vpl_use_llm_feature_extractor and self.vpl_use_feature_difference:
-            # Original VPL uses: concat([chosen_emb, rejected_emb]) or [chosen_emb, rejected_emb, diff]
-            # We'll use: [chosen_emb, rejected_emb, chosen_emb - rejected_emb] for richer representation
-            # Input: 3 * embedding_dim (chosen + rejected + difference)
-            self.feature_extractor = nn.Sequential(
-                nn.Linear(embedding_dim * 3, 512),  # chosen + rejected + difference
-                nn.ReLU(),
-                nn.Dropout(0.1),
-                nn.Linear(512, 256),
-                nn.ReLU(),
-                nn.Dropout(0.1),
-                nn.Linear(256, 128)
-            ).to(device)
-            feature_extractor_output_dim = 128
-            logger.info("Using projection-based feature extractor with [chosen, rejected, difference] (reuses hidden_states from main forward pass)")
+            if self.vpl_use_difference_only:
+                # Use only difference embedding (removes general information, keeps only preference)
+                # Input: embedding_dim (difference only)
+                self.feature_extractor = nn.Sequential(
+                    nn.Linear(embedding_dim, 512),  # difference only
+                    nn.ReLU(),
+                    nn.Dropout(0.1),
+                    nn.Linear(512, 256),
+                    nn.ReLU(),
+                    nn.Dropout(0.1),
+                    nn.Linear(256, 128)
+                ).to(device)
+                feature_extractor_output_dim = 128
+                logger.info("Using projection-based feature extractor with [difference only] (removes general information, keeps only preference)")
+            else:
+                # Original VPL uses: concat([chosen_emb, rejected_emb]) or [chosen_emb, rejected_emb, diff]
+                # We'll use: [chosen_emb, rejected_emb, chosen_emb - rejected_emb] for richer representation
+                # Input: 3 * embedding_dim (chosen + rejected + difference)
+                self.feature_extractor = nn.Sequential(
+                    nn.Linear(embedding_dim * 3, 512),  # chosen + rejected + difference
+                    nn.ReLU(),
+                    nn.Dropout(0.1),
+                    nn.Linear(512, 256),
+                    nn.ReLU(),
+                    nn.Dropout(0.1),
+                    nn.Linear(256, 128)
+                ).to(device)
+                feature_extractor_output_dim = 128
+                logger.info("Using projection-based feature extractor with [chosen, rejected, difference] (reuses hidden_states from main forward pass)")
         else:
             # Use MLP feature extractor
             if self.vpl_use_feature_difference:
@@ -278,9 +294,14 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             
             # According to original VPL: use [chosen, rejected, difference] for richer representation
             # This allows the encoder to see both responses and their difference
+            # However, if vpl_use_difference_only=True, use only difference to remove general information
             if self.vpl_use_llm_feature_extractor:
-                # Concatenate: [chosen_emb, rejected_emb, difference]
-                feature_combined = torch.cat([chosen_emb, rejected_emb, feature_diff], dim=0)  # (hidden_dim * 3,)
+                if self.vpl_use_difference_only:
+                    # Use only difference (removes general information, keeps only preference)
+                    feature_combined = feature_diff  # (hidden_dim,)
+                else:
+                    # Concatenate: [chosen_emb, rejected_emb, difference]
+                    feature_combined = torch.cat([chosen_emb, rejected_emb, feature_diff], dim=0)  # (hidden_dim * 3,)
             else:
                 # Use only difference for efficiency
                 feature_combined = feature_diff  # (hidden_dim,)

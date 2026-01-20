@@ -1,0 +1,85 @@
+use_gpu: True
+device: 1  # GPU 1 for hhst-ortho experiment (tid: 50100)
+early_stop:
+  patience: 0
+federate:
+  mode: standalone
+  client_num: 10
+  sample_client_num: 5
+  total_round_num: 50
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50100.ckpt"
+  ignore_weight: True
+  save_freq: 20  # Checkpoint 저장 빈도 줄여서 I/O 시간 감소
+  share_local_model: True  # Single GPU mode
+  online_aggr: False
+data:
+  root: /hdd/hdd3/kjb/
+  type: 'hh-rlhf@llm'  # Using hh-rlhf dataset but without reward model evaluation
+  splits: [0.9,0.09,0.01]
+  splitter: 'meta'
+llm:
+  use: True
+  tok_len: 1024
+  max_new_token: 512
+  accelerator:
+    use: False
+  chat:
+    max_len: 512
+  adapter:
+    use: True
+    count: 3
+    warmup:
+      use: True
+      round: 2
+    grouping:
+      use: False
+      round: 2
+    args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
+  # Variational Preference Learning with Gumbel-Softmax Prior (VPL-GP) parameters
+  vpl_use_gp_prior: True
+  vpl_latent_dim: 32
+  vpl_kl_weight: 0.1
+  vpl_gp_temperature: 1.0
+  vpl_feature_method: 'choice_logits'
+  vpl_use_feature_difference: True
+  vpl_use_difference_only: True  # Use only difference embedding (removes general information)
+  # Orthogonal loss parameters (ENABLED for this experiment)
+  vpl_orthogonal_weight: 10.0  # Pull loss weight (CLOP paper)
+  vpl_orthogonal_orthonorm_weight: 0.1  # Orthonormal constraint weight
+  vpl_use_manual_orthogonal_labels: False  # Use k-means automatic labeling (not manual)
+  vpl_num_prototypes: 2  # Number of orthogonal prototypes (k for k-means). For hh-rlhf, this is fixed to 2
+  vpl_prototype_scale: 5.0  # Distance of prototypes from origin (default: 5.0, larger = further from origin)
+  vpl_tsne_visualize_freq: 10  # Generate t-SNE visualization every 10 rounds
+  grad_accum_step: 2
+dataloader:
+  batch_size: 4
+  num_workers: 4  # DataLoader 병렬화로 데이터 로딩 속도 향상
+  pin_memory: True  # GPU 전송 속도 향상
+model:
+  type: 'google/gemma-2b@huggingface_llm'
+train:
+  local_update_steps: 30
+  batch_or_epoch: batch
+  optimizer:
+    type: AdamW
+    betas: (0.9, 0.95)
+    lr: 0.00001
+  is_enable_half: True
+criterion:
+  type: CrossEntropyLoss
+trainer:
+  type: vplgprewardchoicetrainer  # Use VPL-GP trainer
+  choices: ['A', 'B']
+eval:
+  freq: 5  # Evaluation 빈도 줄여서 전체 트레이닝 시간 단축
+  metrics: ['loss', 'acc', 'vpl_kl_loss', 'vpl_reconstruction_loss']  # Removed reward model metrics for HHST
+  best_res_update_round_wise_key: train_avg_loss  # Use train_avg_loss instead of val_avg_loss
+  count_flops: False
+  max_samples_for_reward: 100
+expname: vplgp_hhst_ortho_t50100
+wandb:
+  use: True
+  name_user: ''
+  name_project: 'vpl-gp-selector'
+  online_track: True
+  client_train_info: True
