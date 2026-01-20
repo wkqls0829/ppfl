@@ -47,6 +47,7 @@ llm:
   vpl_orthogonal_orthonorm_weight: 0.0  # Orthonormal constraint disabled
   vpl_use_manual_orthogonal_labels: False  # Not needed when orthogonal loss is disabled
   vpl_num_prototypes: 2  # Number of orthogonal prototypes (not used when orthogonal loss is disabled)
+  vpl_tsne_visualize_freq: 5  # Generate t-SNE visualization every 5 rounds
   grad_accum_step: 2
 dataloader:
   batch_size: 4

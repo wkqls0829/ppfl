@@ -47,6 +47,7 @@ llm:
   vpl_orthogonal_orthonorm_weight: 0.1  # Orthonormal constraint weight
   vpl_use_manual_orthogonal_labels: False  # Use k-means automatic labeling (not manual)
   vpl_num_prototypes: 2  # Number of orthogonal prototypes (k for k-means). For hh-rlhf, this is fixed to 2
+  vpl_tsne_visualize_freq: 5  # Generate t-SNE visualization every 5 rounds
   grad_accum_step: 2
 dataloader:
   batch_size: 4

@@ -128,7 +128,10 @@ class LLMMultiLoRAClient(Client):
                             logger.info(
                                 f'Adapter {i} with the results: {metrics}')
                             if i == 0 or min_loss > metrics['val_avg_loss']:
-                                min_loss, adapter_indices = metrics[
+                                if metrics is None:
+            logger.warning(f"Client {self.ID}: metrics is None in callback_funcs_for_model_para, skipping adapter selection")
+            return
+        min_loss, adapter_indices = metrics[
                                     'val_avg_loss'], [i]
                             elif min_loss == metrics['val_avg_loss']:
                                 adapter_indices.append(i)

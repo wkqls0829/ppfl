@@ -696,7 +696,7 @@ class LLMMultiLoRAServer(Server):
             self.client_z_values_dict[client_id].extend(client_z.tolist())
         
         # Visualize every 10 rounds (or every round if configured)
-        visualize_freq = getattr(self._cfg.llm, 'vpl_tsne_visualize_freq', 10)
+        visualize_freq = getattr(self._cfg.llm, 'vpl_tsne_visualize_freq', 5)  # Default: every 5 rounds
         if self.state % visualize_freq == 0:
             self._visualize_cross_client_z()
         
