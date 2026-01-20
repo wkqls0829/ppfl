@@ -238,12 +238,12 @@ class RLHF_finetuning:
                 )
             else:
                 # Use standard selection
-                list_preference_data = self._choose_better_response(
-                    list_pairwise_data,
-                    self.selector_model,
-                    self.selector_tokenizer,
-                    self.selector_prompt,
-                )
+            list_preference_data = self._choose_better_response(
+                list_pairwise_data,
+                self.selector_model,
+                self.selector_tokenizer,
+                self.selector_prompt,
+            )
             logger.info(list_preference_data[0])
             # save the choice to a file
             json.dump(list_preference_data, open(fp, "w"))

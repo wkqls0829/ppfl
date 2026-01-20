@@ -16,6 +16,14 @@ def _load_reward_model_and_tokenizer(model_name, device=None):
     """
     logger.info(f"Loading reward model: {model_name}")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # Set padding_side to 'left' for decoder-only architectures (GPT-2)
+    # This must be set before any tokenization to avoid warnings
+    tokenizer.padding_side = 'left'
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    # Ensure padding token is set correctly
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
     model = AutoModelForSequenceClassification.from_pretrained(model_name)
     if device:
         model.to(device)

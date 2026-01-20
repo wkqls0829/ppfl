@@ -556,11 +556,11 @@ class Client(BaseClient):
             
             # Only update best result if metrics are not empty
             if formatted_eval_res and 'Results_raw' in formatted_eval_res and formatted_eval_res['Results_raw']:
-                update_best_this_round = self._monitor.update_best_result(
-                    self.best_results,
-                    formatted_eval_res['Results_raw'],
-                    results_type=f"client #{self.ID}",
-                )
+            update_best_this_round = self._monitor.update_best_result(
+                self.best_results,
+                formatted_eval_res['Results_raw'],
+                results_type=f"client #{self.ID}",
+            )
             else:
                 # Skip update if no results available
                 update_best_this_round = False
@@ -573,14 +573,14 @@ class Client(BaseClient):
 
             # Only merge and check early stopping if results are not empty
             if formatted_eval_res and 'Results_raw' in formatted_eval_res and formatted_eval_res['Results_raw']:
-                self.history_results = merge_dict_of_results(
-                    self.history_results, formatted_eval_res['Results_raw'])
+            self.history_results = merge_dict_of_results(
+                self.history_results, formatted_eval_res['Results_raw'])
                 
                 # Only call early stopper if the key exists in history_results
                 if (hasattr(self._cfg.eval, 'best_res_update_round_wise_key') and
                     self._cfg.eval.best_res_update_round_wise_key in self.history_results):
-                    self.early_stopper.track_and_check(self.history_results[
-                        self._cfg.eval.best_res_update_round_wise_key])
+            self.early_stopper.track_and_check(self.history_results[
+                self._cfg.eval.best_res_update_round_wise_key])
 
         self.comm_manager.send(
             Message(msg_type='metrics',

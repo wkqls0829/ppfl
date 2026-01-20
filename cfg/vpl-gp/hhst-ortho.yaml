@@ -1,5 +1,6 @@
 use_gpu: True
-device: 1  # GPU 1 for hhst-ortho experiment (tid: 50000)
+device: 0  # Base device, will be overridden by process_num
+backend: 'torch'
 early_stop:
   patience: 0
 federate:
@@ -7,14 +8,15 @@ federate:
   client_num: 10
   sample_client_num: 5
   total_round_num: 50
-  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50000.ckpt"
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_60000.ckpt"
   ignore_weight: True
-  save_freq: 20  # Checkpoint 저장 빈도 줄여서 I/O 시간 감소
-  share_local_model: True  # Single GPU mode
+  save_freq: 10
+  share_local_model: False  # Required for multi-GPU parallel training
   online_aggr: False
+  process_num: 8  # Number of GPUs to use (1 server + 7 clients). Adjust based on available GPUs
 data:
   root: /hdd/hdd3/kjb/
-  type: 'hh-rlhf@llm'  # Using hh-rlhf dataset but without reward model evaluation
+  type: 'hh-rlhf@llm'
   splits: [0.9,0.09,0.01]
   splitter: 'meta'
 llm:
@@ -45,14 +47,10 @@ llm:
   # Orthogonal loss parameters (ENABLED for this experiment)
   vpl_orthogonal_weight: 10.0  # Pull loss weight (CLOP paper)
   vpl_orthogonal_orthonorm_weight: 0.1  # Orthonormal constraint weight
-  vpl_use_manual_orthogonal_labels: False  # Use k-means automatic labeling (not manual)
-  vpl_num_prototypes: 2  # Number of orthogonal prototypes (k for k-means). For hh-rlhf, this is fixed to 2
-  vpl_tsne_visualize_freq: 10  # Generate t-SNE visualization every 10 rounds
+  vpl_use_manual_orthogonal_labels: True  # Use server-computed orthogonal labels
   grad_accum_step: 2
 dataloader:
   batch_size: 4
-  num_workers: 4  # DataLoader 병렬화로 데이터 로딩 속도 향상
-  pin_memory: True  # GPU 전송 속도 향상
 model:
   type: 'google/gemma-2b@huggingface_llm'
 train:
@@ -69,15 +67,15 @@ trainer:
   type: vplgprewardchoicetrainer  # Use VPL-GP trainer
   choices: ['A', 'B']
 eval:
-  freq: 5  # Evaluation 빈도 줄여서 전체 트레이닝 시간 단축
-  metrics: ['loss', 'acc', 'vpl_kl_loss', 'vpl_reconstruction_loss']  # Removed reward model metrics for HHST
-  best_res_update_round_wise_key: train_avg_loss  # Use train_avg_loss instead of val_avg_loss
+  freq: 2
+  metrics: ['loss', 'acc', 'avg_harmlessness', 'avg_helpfulness', 'vpl_kl_loss', 'vpl_reconstruction_loss']
+  best_res_update_round_wise_key: val_avg_loss
   count_flops: False
   max_samples_for_reward: 100
-expname: vplgp_hhst_ortho_t50000
+expname: vplgp_hhst_ortho_t60000
 wandb:
   use: True
   name_user: ''
-  name_project: 'vpl-gp-selector'
+  name_project: 'fvpl-selector'
   online_track: True
   client_train_info: True

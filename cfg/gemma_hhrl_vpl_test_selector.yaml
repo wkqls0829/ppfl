@@ -1,0 +1,73 @@
+use_gpu: True
+device: 2
+early_stop:
+  patience: 0
+federate:
+  mode: standalone
+  client_num: 10
+  sample_client_num: 5
+  total_round_num: 150
+  # Override save_to to point to the checkpoint from hhst.sh (tid=10100)
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vpl_10100.ckpt"
+  ignore_weight: True
+  save_freq: 50
+  share_local_model: True
+  online_aggr: False
+data:
+  root: /hdd/hdd3/kjb/
+  type: 'hh-rlhf@llm'
+  splits: [0.9,0.09,0.01]
+  splitter: 'meta'
+llm:
+  use: True
+  tok_len: 1024
+  max_new_token: 512
+  accelerator:
+    use: False
+  chat:
+    max_len: 512
+  adapter:
+    use: True
+    count: 3
+    warmup:
+      use: True
+      round: 50
+    grouping:
+      use: False  # Disabled to prevent loss jumps at grouping rounds
+      round: 50
+    args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
+  # Variational Preference Learning (VPL) parameters
+  vpl_latent_dim: 32  # Dimension of user-specific latent space
+  vpl_kl_weight: 0.1  # Weight for KL divergence term in ELBO loss
+  vpl_feature_method: 'choice_logits'  # Feature extraction method
+  grad_accum_step: 2
+dataloader:
+  batch_size: 4
+model:
+  type: 'google/gemma-2b@huggingface_llm'
+train:
+  local_update_steps: 30
+  batch_or_epoch: batch
+  optimizer:
+    type: AdamW
+    betas: (0.9, 0.95)
+    lr: 0.00001
+  is_enable_half: True
+criterion:
+  type: CrossEntropyLoss
+trainer:
+  type: vplrewardchoicetrainer  # Use VPL trainer instead of llmrewardchoicetrainer
+  choices: ['A', 'B']
+eval:
+  freq: 50
+  metrics: ['loss', 'acc', 'avg_harmlessness', 'avg_helpfulness', 'vpl_kl_loss', 'vpl_reconstruction_loss']
+  best_res_update_round_wise_key: test_loss
+  count_flops: False
+  max_samples_for_reward: 20
+expname: hhrl/choice_gemma/fedbiscuit_u3_vpl
+wandb:
+  use: True  # Enable wandb tracking
+  name_user: ''  # Your wandb username (leave empty for default)
+  name_project: 'fvpl-selector'  # Project name in wandb (binary selector training) in wandb
+  online_track: True  # Track results online (real-time)
+  client_train_info: True  # Track client training information

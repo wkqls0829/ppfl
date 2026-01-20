@@ -121,21 +121,42 @@ class LLMMultiLoRAServer(Server):
 
             for client_id in train_msg_buffer.keys():
                 if self.model_num == 1:
-                    msg_list.append(train_msg_buffer[client_id])
+                    sample_size, model_para = train_msg_buffer[client_id]
+                    # Remove VPL-related keys that are not model parameters
+                    # These should be handled separately, not by the aggregator
+                    vpl_keys_to_remove = ['client_z_values', 'client_z_mu', 'client_z_logvar', 
+                                          'client_orthogonal_prototypes']
+                    model_para_clean = {k: v for k, v in model_para.items() 
+                                       if k not in vpl_keys_to_remove}
+                    msg_list.append((sample_size, model_para_clean))
                 else:
                     train_data_size, model_para_multiple = \
                         train_msg_buffer[client_id]
-                    msg_list.append(
-                        (train_data_size, model_para_multiple[model_idx]))
+                    # Remove VPL-related keys from model_para_multiple[model_idx]
+                    vpl_keys_to_remove = ['client_z_values', 'client_z_mu', 'client_z_logvar', 
+                                          'client_orthogonal_prototypes']
+                    model_para_clean = {k: v for k, v in model_para_multiple[model_idx].items() 
+                                      if k not in vpl_keys_to_remove}
+                    msg_list.append((train_data_size, model_para_clean))
 
             for staled_message in self.staled_msg_buffer:
                 state, client_id, content = staled_message
                 if self.model_num == 1:
-                    msg_list.append(content)
+                    sample_size, model_para = content
+                    # Remove VPL-related keys that are not model parameters
+                    vpl_keys_to_remove = ['client_z_values', 'client_z_mu', 'client_z_logvar', 
+                                          'client_orthogonal_prototypes']
+                    model_para_clean = {k: v for k, v in model_para.items() 
+                                       if k not in vpl_keys_to_remove}
+                    msg_list.append((sample_size, model_para_clean))
                 else:
                     train_data_size, model_para_multiple = content
-                    msg_list.append(
-                        (train_data_size, model_para_multiple[model_idx]))
+                    # Remove VPL-related keys from model_para_multiple[model_idx]
+                    vpl_keys_to_remove = ['client_z_values', 'client_z_mu', 'client_z_logvar', 
+                                          'client_orthogonal_prototypes']
+                    model_para_clean = {k: v for k, v in model_para_multiple[model_idx].items() 
+                                      if k not in vpl_keys_to_remove}
+                    msg_list.append((train_data_size, model_para_clean))
 
             # Trigger the monitor here (for training)
             self._monitor.calc_model_metric(self.models[0].state_dict(),
@@ -655,7 +676,7 @@ class LLMMultiLoRAServer(Server):
     
     def _collect_z_values_for_visualization(self):
         """
-        Collect z values from clients for t-SNE visualization.
+        Collect z values and orthogonal prototypes from clients for t-SNE visualization.
         """
         train_msg_buffer = self.msg_buffer['train'][self.state]
         
@@ -682,6 +703,19 @@ class LLMMultiLoRAServer(Server):
                 
                 z_values_list.append(z_values)
                 client_ids_list.extend([client_id] * len(z_values))
+            
+            # Collect orthogonal prototypes (if orthogonal loss is enabled)
+            if (hasattr(self._cfg.llm, 'vpl_orthogonal_weight') and 
+                self._cfg.llm.vpl_orthogonal_weight > 0 and
+                'client_orthogonal_prototypes' in model_para):
+                prototypes = model_para['client_orthogonal_prototypes']
+                if isinstance(prototypes, torch.Tensor):
+                    prototypes = prototypes.cpu().numpy()
+                elif isinstance(prototypes, list):
+                    prototypes = np.array(prototypes)
+                
+                # Store prototypes (they should be the same across clients after QR decomposition)
+                self.client_orthogonal_prototypes_dict[client_id] = prototypes
         
         if len(z_values_list) == 0:
             return
@@ -736,19 +770,21 @@ class LLMMultiLoRAServer(Server):
             
             all_z = np.concatenate(z_values_list, axis=0)
             
-            # Get orthogonal prototypes if available
+            # Get orthogonal prototypes if available (only if orthogonal loss is enabled)
             orthogonal_prototypes = None
-            if hasattr(self, 'client_orthogonal_prototypes_dict') and len(self.client_orthogonal_prototypes_dict) > 0:
-                # Collect prototypes from all clients
-                prototypes_list = []
-                for client_id, prototypes in self.client_orthogonal_prototypes_dict.items():
-                    if prototypes is not None:
-                        if isinstance(prototypes, torch.Tensor):
-                            prototypes = prototypes.cpu().numpy()
-                        prototypes_list.append(prototypes)
-                
-                if len(prototypes_list) > 0:
-                    orthogonal_prototypes = np.concatenate(prototypes_list, axis=0)
+            if (hasattr(self._cfg.llm, 'vpl_orthogonal_weight') and 
+                self._cfg.llm.vpl_orthogonal_weight > 0 and
+                hasattr(self, 'client_orthogonal_prototypes_dict') and 
+                len(self.client_orthogonal_prototypes_dict) > 0):
+                # Take the first client's prototypes (they should be the same across clients after QR decomposition)
+                first_client_id = next(iter(self.client_orthogonal_prototypes_dict.keys()))
+                prototypes = self.client_orthogonal_prototypes_dict[first_client_id]
+                if prototypes is not None:
+                    if isinstance(prototypes, torch.Tensor):
+                        prototypes = prototypes.cpu().numpy()
+                    elif isinstance(prototypes, list):
+                        prototypes = np.array(prototypes)
+                    orthogonal_prototypes = prototypes
             
             visualize_cross_client_z(
                 z_values=all_z,
