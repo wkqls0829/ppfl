@@ -1,5 +1,5 @@
 use_gpu: True
-device: 0  # GPU 0 for FedVPL experiment (tid: 30000)
+device: 3  # GPU 3 for FedVPL experiment (tid: 30000)
 early_stop:
   patience: 0
 federate:
