@@ -562,6 +562,78 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         ctx.loss_batch = CtxVar(vpl_loss, LIFECYCLE.BATCH)
         ctx.batch_size = CtxVar(len(labels), LIFECYCLE.BATCH)
 
+    def _hook_on_batch_backward(self, ctx):
+        """
+        Override backward pass to use separate VPL optimizer.
+        This allows VPL components (feature_extractor, variational_encoder, latent_projection)
+        to learn faster while LLM is frozen (hidden_states.detach()).
+        """
+        if ctx.skip_this_batch:
+            return
+
+        # Use separate VPL optimizer if available
+        # This allows VPL components (feature_extractor, variational_encoder, latent_projection)
+        # to learn faster while LLM learns slowly or is frozen
+        use_vpl_optimizer = hasattr(ctx, 'vpl_optimizer') and ctx.vpl_optimizer is not None
+        
+        if ctx.cfg.llm.accelerator.use:
+            self.accelerator.backward(ctx.loss_task)
+            if use_vpl_optimizer:
+                # Update VPL components with separate optimizer
+                ctx.vpl_optimizer.step()
+                ctx.vpl_optimizer.zero_grad()
+            else:
+                # Update all parameters with main optimizer
+                ctx.optimizer.step()
+                ctx.optimizer.zero_grad()
+            if ctx.scheduler is not None:
+                ctx.scheduler.step()
+
+        elif ctx.cfg.llm.deepspeed.use:
+            ctx.model_engine.backward(ctx.loss_task)
+            ctx.model_engine.step()
+            if ctx.scheduler is not None:
+                ctx.scheduler.step()
+
+        else:
+            (ctx.loss_task / self.grad_accum_step).backward()
+
+            if (ctx.cur_batch_i + 1) % self.grad_accum_step == 0:
+                if use_vpl_optimizer:
+                    # Update VPL components with separate optimizer (faster learning)
+                    if ctx.grad_clip > 0:
+                        vpl_params = []
+                        if hasattr(self, 'feature_extractor'):
+                            vpl_params.extend(self.feature_extractor.parameters())
+                        if hasattr(self, 'variational_encoder'):
+                            vpl_params.extend(self.variational_encoder.parameters())
+                        if hasattr(self, 'latent_projection'):
+                            vpl_params.extend(self.latent_projection.parameters())
+                        if len(vpl_params) > 0:
+                            torch.nn.utils.clip_grad_norm_(vpl_params, ctx.grad_clip)
+                    ctx.vpl_optimizer.step()
+                    ctx.vpl_optimizer.zero_grad()
+                    
+                    # LLM parameters are not updated (hidden_states was detached)
+                    # If you want to update LLM as well, you can add:
+                    # ctx.optimizer.step()
+                    # ctx.optimizer.zero_grad()
+                else:
+                    # Update all parameters with main optimizer
+                    if ctx.grad_clip > 0:
+                        torch.nn.utils.clip_grad_norm_(ctx.model.parameters(),
+                                                       ctx.grad_clip)
+                    ctx.optimizer.step()
+                    ctx.optimizer.zero_grad()
+                
+                if ctx.scheduler is not None:
+                    ctx.scheduler.step()
+
+        # move the training data to cpu
+        ctx.data_batch['input_ids'].cpu()
+        ctx.data_batch['labels'].cpu()
+        ctx.data_batch['attention_mask'].cpu()
+    
     def _hook_on_batch_end(self, ctx):
         if ctx.skip_this_batch:
             if ctx.cfg.llm.retry_on_nan_loss:
