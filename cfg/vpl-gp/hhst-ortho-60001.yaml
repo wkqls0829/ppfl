@@ -68,7 +68,7 @@ trainer:
 eval:
   freq: 2
   metrics: ['loss', 'acc', 'vpl_kl_loss', 'vpl_reconstruction_loss']  # Removed reward model metrics for HHST
-  best_res_update_round_wise_key: val_avg_loss
+  best_res_update_round_wise_key: train_avg_loss  # Use train_avg_loss instead of val_avg_loss
   count_flops: False
   max_samples_for_reward: 100
 expname: vplgp_hhst_ortho_t60001
