@@ -162,7 +162,7 @@ class LLMMultiLoRAServer(Server):
             # Due to lazy load, we merge two state dict
             merged_param = merge_param_dict(model.state_dict().copy(), result)
             model.load_state_dict(merged_param, strict=False)
-
+        
         # VPL-GP: Collect z distributions from clients (only if GP prior is enabled)
         if hasattr(self._cfg.llm, 'vpl_use_gp_prior') and self._cfg.llm.vpl_use_gp_prior:
             self._collect_vpl_gp_prior_distributions()
@@ -303,9 +303,9 @@ class LLMMultiLoRAServer(Server):
                     
             except ImportError:
                 logger.warning("wandb not installed, skipping VPL metrics logging")
-            except Exception as e:
+                except Exception as e:
                 logger.warning(f"Failed to log VPL metrics to wandb: {e}")
-        
+
         return formatted_logs_all_set
 
     def trigger_for_start(self):
@@ -314,16 +314,16 @@ class LLMMultiLoRAServer(Server):
             logger.info('Waited all clients join, start now...')
             # Only send adapter_eval message if grouping is enabled
             if self._cfg.llm.adapter.grouping.use:
-                self.trigger_for_feat_engr(self.broadcast_model_para, {
-                    'msg_type': 'adapter_eval',
-                    'filter_unseen_clients': False,
-                })
+            self.trigger_for_feat_engr(self.broadcast_model_para, {
+                'msg_type': 'adapter_eval',
+                'filter_unseen_clients': False,
+            })
                 logger.info('Server: Performing a grouping step...')
             else:
                 # If grouping is not enabled, start training round directly
-                logger.info(
-                    '----------- Starting training (Round #{:d}) -------------'.
-                    format(self.state))
+            logger.info(
+                '----------- Starting training (Round #{:d}) -------------'.
+                format(self.state))
                 self._start_new_training_round()
 
     def callback_funcs_for_grouping(self, message: Message):
@@ -696,7 +696,7 @@ class LLMMultiLoRAServer(Server):
             self.client_z_values_dict[client_id].extend(client_z.tolist())
         
         # Visualize every 10 rounds (or every round if configured)
-        visualize_freq = getattr(self._cfg.llm, 'vpl_tsne_visualize_freq', 5)  # Default: every 5 rounds
+        visualize_freq = getattr(self._cfg.llm, 'vpl_tsne_visualize_freq', 10)  # Default: every 10 rounds
         if self.state % visualize_freq == 0:
             self._visualize_cross_client_z()
         
@@ -790,17 +790,17 @@ class LLMMultiLoRAServer(Server):
             }
             
             # Use same logic as parent class: sample if sample_client_num > 0, else broadcast to all
-            if sample_client_num > 0:
+        if sample_client_num > 0:
                 # Check if sampler is available and has idle clients
                 if self.sampler is not None:
                     idle_clients = np.nonzero(self.sampler.client_state)[0]
                     if len(idle_clients) > 0:
                         selected_clients = self.sampler.sample(size=sample_client_num)
-                    else:
+        else:
                         # All clients are working, use all clients instead
                         selected_clients = list(self.comm_manager.neighbors.keys())
                         logger.warning(f"No idle clients available, broadcasting to all {len(selected_clients)} clients")
-                else:
+            else:
                     selected_clients = list(self.comm_manager.neighbors.keys())
             else:
                 # Broadcast to all clients
@@ -839,12 +839,12 @@ class LLMMultiLoRAServer(Server):
                 selected_clients = list(self.comm_manager.neighbors.keys())
             
             for receiver in selected_clients:
-                self.comm_manager.send(
+        self.comm_manager.send(
                     Message(msg_type='vpl_orthogonal_labels',
-                           sender=self.ID,
+                    sender=self.ID,
                            receiver=[receiver],
                            state=self.state,
-                           timestamp=self.cur_timestamp,
+                    timestamp=self.cur_timestamp,
                            content=self.vpl_orthogonal_client_labels))
             
             logger.info(f"Broadcasting orthogonal labels to {len(selected_clients)} clients at round {self.state}")
