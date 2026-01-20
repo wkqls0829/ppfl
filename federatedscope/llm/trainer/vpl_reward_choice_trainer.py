@@ -205,6 +205,38 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         ctx.vpl_reconstruction_loss_total = CtxVar(0.0, LIFECYCLE.ROUTINE)
         if self.vpl_orthogonal_weight > 0.0:
             ctx.vpl_orthogonal_loss_total = CtxVar(0.0, LIFECYCLE.ROUTINE)
+        
+        # Create separate optimizer for VPL components (feature_extractor + variational_encoder + latent_projection)
+        # This allows VPL components to learn faster while LLM is frozen or learns slowly
+        if ctx.cur_mode in [MODE.TRAIN, MODE.FINETUNE]:
+            vpl_lr_multiplier = getattr(ctx.cfg.llm, 'vpl_lr_multiplier', 10.0)  # Default: 10x faster learning
+            
+            # Collect VPL component parameters
+            vpl_params = []
+            if hasattr(self, 'feature_extractor'):
+                vpl_params.extend(self.feature_extractor.parameters())
+            if hasattr(self, 'variational_encoder'):
+                vpl_params.extend(self.variational_encoder.parameters())
+            if hasattr(self, 'latent_projection'):
+                vpl_params.extend(self.latent_projection.parameters())
+            
+            if len(vpl_params) > 0:
+                # Get base learning rate from config
+                base_lr = ctx.cfg[ctx.cur_mode].optimizer.get('lr', 1e-5)
+                vpl_lr = base_lr * vpl_lr_multiplier
+                
+                # Create separate optimizer for VPL components
+                from torch.optim import AdamW
+                ctx.vpl_optimizer = AdamW(
+                    vpl_params,
+                    lr=vpl_lr,
+                    betas=ctx.cfg[ctx.cur_mode].optimizer.get('betas', (0.9, 0.95)),
+                    weight_decay=ctx.cfg[ctx.cur_mode].optimizer.get('weight_decay', 0.0)
+                )
+                logger.info(f"Created separate VPL optimizer with lr={vpl_lr:.2e} (base_lr={base_lr:.2e} * {vpl_lr_multiplier}x)")
+            else:
+                ctx.vpl_optimizer = None
+                logger.warning("No VPL components found for separate optimizer")
 
     def _extract_preference_features(self, logits, labels, choices, hidden_states=None):
         """
@@ -252,6 +284,10 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             features: (batch, hidden_dim * 3) - [chosen, rejected, difference]
             OR (batch, hidden_dim) if only difference is used
         """
+        # Detach hidden_states to prevent LLM gradient flow
+        # Only feature_extractor and variational_encoder will be trained
+        hidden_states = hidden_states.detach()
+        
         batch_size, seq_len, hidden_dim = hidden_states.shape
         shift_labels = labels[..., 1:].contiguous()  # (batch, seq_len-1)
         shift_hidden = hidden_states[..., :-1, :].contiguous()  # (batch, seq_len-1, hidden_dim)
