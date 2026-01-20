@@ -629,11 +629,17 @@ class Server(BaseServer):
                             del formatted_logs[key]
                 logger.info(formatted_logs)
                 formatted_logs_all_set.update(formatted_logs)
-                self._monitor.update_best_result(
-                    self.best_results,
-                    metrics_all_clients,
-                    results_type="unseen_client_best_individual"
-                    if merge_type == "unseen" else "client_best_individual")
+                
+                # Only update best result if metrics are not empty
+                if metrics_all_clients and isinstance(metrics_all_clients, dict) and len(metrics_all_clients) > 0:
+                    # Check if best_res_update_round_wise_key exists in metrics
+                    if (hasattr(self._cfg.eval, 'best_res_update_round_wise_key') and
+                        self._cfg.eval.best_res_update_round_wise_key in metrics_all_clients):
+                        self._monitor.update_best_result(
+                            self.best_results,
+                            metrics_all_clients,
+                            results_type="unseen_client_best_individual"
+                            if merge_type == "unseen" else "client_best_individual")
 
                 self._monitor.save_formatted_results(formatted_logs)
 
