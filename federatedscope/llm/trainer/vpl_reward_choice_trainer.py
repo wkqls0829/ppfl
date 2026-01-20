@@ -546,6 +546,16 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         if self.vpl_orthogonal_weight > 0.0 and hasattr(ctx, 'vpl_orthogonal_loss'):
             ctx.vpl_orthogonal_loss_total += ctx.vpl_orthogonal_loss * ctx.batch_size
         
+        # Apply orthonormal constraint to prototypes AFTER backward pass
+        # This ensures gradients are preserved during forward pass
+        if (self.vpl_orthogonal_weight > 0.0 and 
+            self.orthogonal_prototypes is not None and 
+            ctx.cur_mode == MODE.TRAIN):
+            # Only apply constraint periodically to avoid too frequent updates
+            # Apply every batch or every N batches (e.g., every 5 batches)
+            if ctx.cur_batch_i % 1 == 0:  # Apply every batch
+                self._apply_orthonormal_constraint_to_prototypes()
+        
         # Cache label for evaluate
         ctx.ys_true.append(ctx.y_true)
         ctx.ys_pred.append(ctx.y_pred)
@@ -714,21 +724,9 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         batch_size, latent_dim = z.shape
         num_prototypes, _ = self.orthogonal_prototypes.shape
         
-        # Apply orthonormal constraint to prototypes (QR decomposition)
-        # Preserve the scale (distance from origin) after orthonormalization
-        with torch.no_grad():
-            # Get current scale (average norm of prototypes)
-            current_scale = torch.norm(self.orthogonal_prototypes, dim=1).mean().item()
-            if current_scale < 0.1:  # If scale is too small, use default
-                prototype_scale = getattr(self, '_prototype_scale', 5.0)
-            else:
-                prototype_scale = current_scale
-            
-            # Orthonormalize
-            Q, R = torch.linalg.qr(self.orthogonal_prototypes.T)
-            # Restore scale after orthonormalization
-            self.orthogonal_prototypes.data = Q.T * prototype_scale
-            self._prototype_scale = prototype_scale  # Store for next iteration
+        # NOTE: QR decomposition을 forward에서 수행하면 gradient가 차단됨
+        # 대신 orthonormal constraint를 loss로만 적용하여 prototype이 학습되도록 함
+        # QR decomposition은 backward 후에만 수행 (gradient 유지)
         
         # Determine orthogonal labels
         if self.vpl_use_manual_orthogonal_labels and self.orthogonal_label is not None:
@@ -740,10 +738,12 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             orthogonal_labels = torch.argmax(similarities, dim=1)  # (batch_size,)
         
         # Pull loss: z를 해당 prototype에 가깝게
+        # IMPORTANT: prototype이 learnable이므로 gradient가 흐름
         selected_prototypes = self.orthogonal_prototypes[orthogonal_labels]  # (batch_size, latent_dim)
         pull_loss = torch.mean((z - selected_prototypes) ** 2)
         
         # Orthonormal constraint: P^T P = I
+        # IMPORTANT: 이 loss를 통해 prototype이 orthonormal하게 학습됨
         PTP = torch.matmul(self.orthogonal_prototypes, self.orthogonal_prototypes.T)  # (num_prototypes, num_prototypes)
         identity = torch.eye(num_prototypes, device=z.device)
         orthonorm_loss = torch.norm(PTP - identity, p='fro') ** 2
@@ -753,6 +753,30 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                          self.vpl_orthogonal_orthonorm_weight * orthonorm_loss
         
         return orthogonal_loss, pull_loss, orthonorm_loss
+    
+    def _apply_orthonormal_constraint_to_prototypes(self):
+        """
+        Apply QR decomposition to enforce orthonormal constraint on prototypes.
+        This should be called AFTER backward pass to maintain gradients during forward.
+        
+        Called in _hook_on_batch_end to ensure gradients are preserved during forward pass.
+        """
+        if self.orthogonal_prototypes is None:
+            return
+        
+        with torch.no_grad():
+            # Get current scale (average norm of prototypes)
+            current_scale = torch.norm(self.orthogonal_prototypes, dim=1).mean().item()
+            if current_scale < 0.1:  # If scale is too small, use default
+                prototype_scale = getattr(self, '_prototype_scale', 5.0)
+            else:
+                prototype_scale = current_scale
+            
+            # Orthonormalize using QR decomposition
+            Q, R = torch.linalg.qr(self.orthogonal_prototypes.T)
+            # Restore scale after orthonormalization
+            self.orthogonal_prototypes.data = Q.T * prototype_scale
+            self._prototype_scale = prototype_scale  # Store for next iteration
 
 
 def call_vpl_reward_choice_trainer(trainer_type):
