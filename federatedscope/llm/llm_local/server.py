@@ -839,7 +839,7 @@ class LLMMultiLoRAServer(Server):
                 selected_clients = list(self.comm_manager.neighbors.keys())
             
             for receiver in selected_clients:
-        self.comm_manager.send(
+                self.comm_manager.send(
                     Message(msg_type='vpl_orthogonal_labels',
                     sender=self.ID,
                            receiver=[receiver],
