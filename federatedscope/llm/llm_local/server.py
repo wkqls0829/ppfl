@@ -187,7 +187,10 @@ class LLMMultiLoRAServer(Server):
         # VPL-GP: Collect z distributions from clients (only if GP prior is enabled)
         if hasattr(self._cfg.llm, 'vpl_use_gp_prior') and self._cfg.llm.vpl_use_gp_prior:
             self._collect_vpl_gp_prior_distributions()
-            self._compute_balanced_orthogonal_labels()
+            # Compute orthogonal labels only if orthogonal loss is enabled
+            if (hasattr(self._cfg.llm, 'vpl_orthogonal_weight') and 
+                self._cfg.llm.vpl_orthogonal_weight > 0):
+                self._compute_balanced_orthogonal_labels()
         
         # Always collect z values for visualization (even if GP prior is disabled)
         # This allows t-SNE visualization for all VPL experiments
@@ -605,12 +608,18 @@ class LLMMultiLoRAServer(Server):
             manual_labels = self._compute_manual_orthogonal_labels(train_msg_buffer)
             if manual_labels is not None:
                 self.vpl_orthogonal_client_labels = manual_labels
-                # Count labels for logging
-                label_counts = defaultdict(int)
+                # Count labels for logging (label -> list of client IDs)
+                label_to_clients = defaultdict(list)
                 for client_id, label in manual_labels.items():
-                    label_counts[label] += 1
+                    label_to_clients[label].append(client_id)
+                
+                # Log detailed assignment information
+                label_counts = {label: len(clients) for label, clients in label_to_clients.items()}
                 logger.info(f"Computed manual orthogonal labels for {len(manual_labels)} clients "
-                          f"at round {self.state}: {dict(label_counts)}")
+                          f"at round {self.state}")
+                for label, count in sorted(label_counts.items()):
+                    client_ids = sorted(label_to_clients[label])
+                    logger.info(f"  Label {label}: {count} clients -> {client_ids}")
                 return
         
         # Otherwise, use k-means on z means
@@ -664,13 +673,18 @@ class LLMMultiLoRAServer(Server):
                 client_id: int(label) for client_id, label in zip(valid_client_ids, labels)
             }
             
-            # Count labels for logging
-            label_counts = defaultdict(int)
-            for label in labels:
-                label_counts[int(label)] += 1
+            # Count labels for logging (label -> list of client IDs)
+            label_to_clients = defaultdict(list)
+            for client_id, label in zip(valid_client_ids, labels):
+                label_to_clients[int(label)].append(client_id)
             
+            # Log detailed assignment information
+            label_counts = {label: len(clients) for label, clients in label_to_clients.items()}
             logger.info(f"Computed k-means orthogonal labels (k={n_clusters}) for {len(valid_client_ids)} clients "
-                      f"at round {self.state}: {dict(label_counts)}")
+                      f"at round {self.state}")
+            for label, count in sorted(label_counts.items()):
+                client_ids = sorted(label_to_clients[label])
+                logger.info(f"  Label {label}: {count} clients -> {client_ids}")
         except Exception as e:
             logger.warning(f"Failed to compute balanced orthogonal labels: {e}")
     
@@ -680,6 +694,10 @@ class LLMMultiLoRAServer(Server):
         """
         train_msg_buffer = self.msg_buffer['train'][self.state]
         
+        # Reset per-round z storage to avoid accumulation across rounds
+        self.client_z_values_dict = defaultdict(list)
+        self.client_orthogonal_prototypes_dict = defaultdict(list)
+
         z_values_list = []
         client_ids_list = []
         
@@ -690,11 +708,11 @@ class LLMMultiLoRAServer(Server):
                 _, model_para_multiple = train_msg_buffer[client_id]
                 model_para = model_para_multiple[0]
             
-            # Extract z values
+            # Extract z values (keep only latest round)
             if 'client_z_values' in model_para:
                 z_values = model_para['client_z_values']
                 if isinstance(z_values, torch.Tensor):
-                    z_values = z_values.cpu().numpy()
+                    z_values = z_values.detach().cpu().numpy()
                 elif isinstance(z_values, list):
                     z_values = np.array(z_values)
                 
@@ -714,7 +732,7 @@ class LLMMultiLoRAServer(Server):
                 elif isinstance(prototypes, list):
                     prototypes = np.array(prototypes)
                 
-                # Store prototypes (they should be the same across clients after QR decomposition)
+                # Store only latest round prototypes per client
                 self.client_orthogonal_prototypes_dict[client_id] = prototypes
         
         if len(z_values_list) == 0:
@@ -723,11 +741,11 @@ class LLMMultiLoRAServer(Server):
         # Concatenate all z values
         all_z_values = np.concatenate(z_values_list, axis=0)
         
-        # Store in dict
+        # Store in dict (latest round only)
         for client_id in set(client_ids_list):
             client_z_mask = np.array(client_ids_list) == client_id
             client_z = all_z_values[client_z_mask]
-            self.client_z_values_dict[client_id].extend(client_z.tolist())
+            self.client_z_values_dict[client_id] = client_z.tolist()
         
         # Visualize every 10 rounds (or every round if configured)
         visualize_freq = getattr(self._cfg.llm, 'vpl_tsne_visualize_freq', 10)  # Default: every 10 rounds
@@ -853,8 +871,10 @@ class LLMMultiLoRAServer(Server):
             
             logger.info(f"Broadcasting VPL-GP prior with {len(self.vpl_gp_prior_mus)} client distributions to {len(selected_clients)} clients at round {self.state}")
         
-        # Broadcast orthogonal labels if available
-        if (self.vpl_orthogonal_client_labels is not None and
+        # Broadcast orthogonal labels if available and orthogonal loss is enabled
+        if (hasattr(self._cfg.llm, 'vpl_orthogonal_weight') and 
+            self._cfg.llm.vpl_orthogonal_weight > 0 and
+            self.vpl_orthogonal_client_labels is not None and
             self.state > 0):  # Don't broadcast at round 0
             
             # Use same logic as parent class: sample if sample_client_num > 0, else broadcast to all
