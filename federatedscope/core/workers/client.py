@@ -571,10 +571,16 @@ class Client(BaseClient):
                 if self.ds_rank == 0:
                     self.trainer.save_model(path, self.state)
 
-            self.history_results = merge_dict_of_results(
-                self.history_results, formatted_eval_res['Results_raw'])
-            self.early_stopper.track_and_check(self.history_results[
-                self._cfg.eval.best_res_update_round_wise_key])
+            # Only merge and check early stopping if results are not empty
+            if formatted_eval_res and 'Results_raw' in formatted_eval_res and formatted_eval_res['Results_raw']:
+                self.history_results = merge_dict_of_results(
+                    self.history_results, formatted_eval_res['Results_raw'])
+                
+                # Only call early stopper if the key exists in history_results
+                if (hasattr(self._cfg.eval, 'best_res_update_round_wise_key') and
+                    self._cfg.eval.best_res_update_round_wise_key in self.history_results):
+                    self.early_stopper.track_and_check(self.history_results[
+                        self._cfg.eval.best_res_update_round_wise_key])
 
         self.comm_manager.send(
             Message(msg_type='metrics',
