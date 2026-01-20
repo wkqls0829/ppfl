@@ -67,15 +67,20 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         # Initialize orthonormal prototypes if orthogonal loss is enabled
         if self.vpl_orthogonal_weight > 0.0:
             num_prototypes = getattr(config.llm, 'vpl_num_prototypes', self.num_clients)
+            # Get prototype scale (distance from origin)
+            prototype_scale = getattr(config.llm, 'vpl_prototype_scale', 5.0)  # Default: 5.0 (further from origin)
+            
+            # Initialize with larger scale, then orthonormalize
             self.orthogonal_prototypes = nn.Parameter(
                 torch.randn(num_prototypes, self.vpl_latent_dim, device=device) * 2.0
             )
-            # Orthonormalize initial prototypes
+            # Orthonormalize initial prototypes (QR decomposition makes norm=1)
             with torch.no_grad():
                 Q, R = torch.linalg.qr(self.orthogonal_prototypes.T)
-                self.orthogonal_prototypes.data = Q.T
+                # Scale orthonormalized prototypes to be further from origin
+                self.orthogonal_prototypes.data = Q.T * prototype_scale
             self.orthogonal_label = None  # Will be set by server
-            logger.info(f"Initialized {num_prototypes} orthonormal prototypes for CLOP loss")
+            logger.info(f"Initialized {num_prototypes} orthonormal prototypes for CLOP loss (scale={prototype_scale}, distance from origin={prototype_scale})")
         else:
             self.orthogonal_prototypes = None
             self.orthogonal_label = None
@@ -689,9 +694,20 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         num_prototypes, _ = self.orthogonal_prototypes.shape
         
         # Apply orthonormal constraint to prototypes (QR decomposition)
+        # Preserve the scale (distance from origin) after orthonormalization
         with torch.no_grad():
+            # Get current scale (average norm of prototypes)
+            current_scale = torch.norm(self.orthogonal_prototypes, dim=1).mean().item()
+            if current_scale < 0.1:  # If scale is too small, use default
+                prototype_scale = getattr(self, '_prototype_scale', 5.0)
+            else:
+                prototype_scale = current_scale
+            
+            # Orthonormalize
             Q, R = torch.linalg.qr(self.orthogonal_prototypes.T)
-            self.orthogonal_prototypes.data = Q.T
+            # Restore scale after orthonormalization
+            self.orthogonal_prototypes.data = Q.T * prototype_scale
+            self._prototype_scale = prototype_scale  # Store for next iteration
         
         # Determine orthogonal labels
         if self.vpl_use_manual_orthogonal_labels and self.orthogonal_label is not None:
