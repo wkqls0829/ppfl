@@ -53,7 +53,6 @@ dataloader:
   batch_size: 4
   num_workers: 4  # DataLoader 병렬화로 데이터 로딩 속도 향상
   pin_memory: True  # GPU 전송 속도 향상
-  persistent_workers: True  # Worker 재사용으로 오버헤드 감소
 model:
   type: 'google/gemma-2b@huggingface_llm'
 train:
