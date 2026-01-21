@@ -209,10 +209,11 @@ class RLHF_finetuning:
                 variational_encoder = None
                 feature_extractor = None
                 latent_projection = None
+                z_to_embedding = None
                 
                 if selector_ckpt_path and os.path.exists(selector_ckpt_path):
                     logger.info(f"Loading VPL components from {selector_ckpt_path}")
-                    variational_encoder, feature_extractor, latent_projection = load_vpl_components_from_checkpoint(
+                    variational_encoder, feature_extractor, latent_projection, z_to_embedding = load_vpl_components_from_checkpoint(
                         selector_ckpt_path, self.config, device=self.device
                     )
                 
@@ -223,6 +224,8 @@ class RLHF_finetuning:
             if use_variational_selection:
                 # Use variational selection
                 choices = [self.selector_tokenizer(f": {c}")["input_ids"][-1] for c in ["A", "B"]]
+                # Check if data already has z values (from previous rounds)
+                use_provided_z = any('z' in sample for sample in list_pairwise_data)
                 list_preference_data = variational_better_response(
                     list_pairwise_data,
                     self.selector_model,
@@ -234,14 +237,16 @@ class RLHF_finetuning:
                     device=self.device,
                     use_feature_difference=getattr(self.config.llm, 'vpl_use_feature_difference', True),
                     num_samples=getattr(self.config.llm, 'rlhf_variational_num_samples', 1),
-                    latent_projection=latent_projection
+                    latent_projection=latent_projection,
+                    z_to_embedding=z_to_embedding,
+                    use_provided_z=use_provided_z  # Use z from data if available
                 )
             else:
                 # Use standard selection
-            list_preference_data = self._choose_better_response(
-                list_pairwise_data,
-                self.selector_model,
-                self.selector_tokenizer,
+                list_preference_data = self._choose_better_response(
+                    list_pairwise_data,
+                    self.selector_model,
+                    self.selector_tokenizer,
                 self.selector_prompt,
             )
             logger.info(list_preference_data[0])
@@ -319,11 +324,35 @@ class RLHF_finetuning:
         generate_kwargs = dict(
             top_p=1.0,
             temperature=0.7,
-            do_sample=True,
+            do_sample=True,  # Must be True for num_return_sequences > 1
             # early_stopping=True,
             max_new_tokens=max_new_tokens,
             num_return_sequences=max(2, num_completions),
         )
+        
+        # Ensure do_sample is True when num_return_sequences > 1
+        if generate_kwargs['num_return_sequences'] > 1 and not generate_kwargs.get('do_sample', False):
+            generate_kwargs['do_sample'] = True
+            logger.warning(f"num_return_sequences={generate_kwargs['num_return_sequences']} > 1, forcing do_sample=True")
+
+        # Check if using z-dependent generation (Step 3)
+        use_variational_generation = getattr(self.config.llm, 'rlhf_use_variational_generation', False)
+        z_to_embedding = None
+        
+        if use_variational_generation:
+            from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint
+            selector_ckpt_path = getattr(self.config.llm, 'rlhf_selector_checkpoint', None)
+            if selector_ckpt_path is None:
+                selector_ckpt_path = getattr(self.config.llm, 'selector_save_to', None)
+            
+            if selector_ckpt_path and os.path.exists(selector_ckpt_path):
+                logger.info(f"Loading z_to_embedding for generation from {selector_ckpt_path}")
+                _, _, _, z_to_embedding = load_vpl_components_from_checkpoint(
+                    selector_ckpt_path, self.config, device=self.device
+                )
+                if z_to_embedding is None:
+                    logger.warning("Failed to load z_to_embedding. Generation will not use z.")
+                    use_variational_generation = False
 
         new_list_data_dict = []
         for input_data in get_input_data(list_data_dict):
@@ -333,9 +362,103 @@ class RLHF_finetuning:
                 padding=True,
                 add_special_tokens=True,
                 return_tensors="pt",
-            ).to("cuda:0")
+            )
+            
+            # Ensure model is on the correct device before tokenizing
+            # Get model device (handle device_map='auto' case)
+            if hasattr(model, 'device'):
+                model_device = model.device
+            elif hasattr(model, 'base_model') and hasattr(model.base_model, 'device'):
+                model_device = model.base_model.device
+            else:
+                try:
+                    model_device = next(model.parameters()).device
+                except:
+                    model_device = self.device
+            
+            # Move tokens to model device
+            input_text_tokens_device = {k: v.to(model_device) if isinstance(v, torch.Tensor) else v 
+                                        for k, v in input_text_tokens.items()}
+            
+            input_ids = input_text_tokens_device['input_ids']
+            attention_mask = input_text_tokens_device['attention_mask']
 
-            output_ids = model.generate(**input_text_tokens, **generate_kwargs)
+            # Step 3: Inject z into embeddings for generation
+            if use_variational_generation and z_to_embedding is not None:
+                # Get z from data or infer (Step 4)
+                z = None
+                # Try to get z from data
+                if 'z' in input_data[0]:
+                    z_list = [data.get('z', None) for data in input_data]
+                    if all(z_val is not None for z_val in z_list):
+                        z = torch.stack([
+                            torch.tensor(z_val) if not isinstance(z_val, torch.Tensor) else z_val
+                            for z_val in z_list
+                        ]).to(self.device)
+                
+                # If z not in data, infer from input (Step 4)
+                if z is None:
+                    # Use feature_extractor and variational_encoder to infer z
+                    from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint
+                    variational_encoder, feature_extractor, _, _ = load_vpl_components_from_checkpoint(
+                        selector_ckpt_path, self.config, device=self.device
+                    )
+                    
+                    if variational_encoder is not None and feature_extractor is not None:
+                        # Ensure input_ids and attention_mask are on model device
+                        input_ids = input_ids.to(model_device)
+                        attention_mask = attention_mask.to(model_device)
+                        # Get embeddings
+                        input_embeddings = model.get_input_embeddings()(input_ids)
+                        # Pool embeddings (mean over sequence length, masked)
+                        mask = attention_mask.unsqueeze(-1).float()
+                        pooled_embeddings = (input_embeddings * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+                        # Extract features
+                        features = feature_extractor(pooled_embeddings)
+                        # Encode to z
+                        z_mu, z_logvar = variational_encoder.encode(features)
+                        z = z_mu  # Use mean during generation
+                        logger.debug(f"Inferred z from input for generation: shape {z.shape}")
+                
+                if z is not None:
+                    # Get model device (handle device_map='auto' case)
+                    if hasattr(model, 'device'):
+                        model_device = model.device
+                    elif hasattr(model, 'base_model') and hasattr(model.base_model, 'device'):
+                        model_device = model.base_model.device
+                    else:
+                        try:
+                            model_device = next(model.parameters()).device
+                        except:
+                            model_device = self.device
+                    
+                    # Ensure z is on model device
+                    z = z.to(model_device)
+                    
+                    # Project z to embedding space and inject into input embeddings
+                    z_embedding = z_to_embedding(z)  # (batch_size, embedding_dim)
+                    z_embedding = z_embedding.unsqueeze(1)  # (batch_size, 1, embedding_dim)
+                    input_embeddings = model.get_input_embeddings()(input_ids)
+                    inputs_embeds = input_embeddings + z_embedding
+                    
+                    # Ensure inputs_embeds and attention_mask are on model device
+                    inputs_embeds = inputs_embeds.to(model_device)
+                    attention_mask = attention_mask.to(model_device)
+                    
+                    # Use inputs_embeds instead of input_ids for generation
+                    output_ids = model.generate(
+                        inputs_embeds=inputs_embeds,
+                        attention_mask=attention_mask,
+                        **generate_kwargs
+                    )
+                else:
+                    # Fallback to standard generation
+                    # input_text_tokens_device already on model_device from above
+                    output_ids = model.generate(**input_text_tokens_device, **generate_kwargs)
+            else:
+                # Standard generation without z
+                # input_text_tokens_device already on model_device from above
+                output_ids = model.generate(**input_text_tokens_device, **generate_kwargs)
             responses = tokenizer.batch_decode(output_ids,
                                                skip_special_tokens=True,
                                                ignore_tokenization_space=True)
@@ -387,13 +510,25 @@ class RLHF_finetuning:
         )
 
         predicted_indices = []
+        # Get model device
+        model_device = self.device
+        if hasattr(model, 'device'):
+            model_device = model.device
+        elif hasattr(model, 'base_model') and hasattr(model.base_model, 'device'):
+            model_device = model.base_model.device
+        else:
+            try:
+                model_device = next(model.parameters()).device
+            except:
+                model_device = self.device
+        
         if hasattr(model, "adapter_names") is False or len(
                 model.adapter_names) == 1:
             # No adapter or only one LoRA adapter
             for idx, data_batch in enumerate(tqdm(dataloader)):
-                input_ids = data_batch["input_ids"].to("cuda:0")
-                labels = data_batch["labels"].to("cuda:0")
-                attention_mask = data_batch["attention_mask"].to("cuda:0")
+                input_ids = data_batch["input_ids"].to(model_device)
+                labels = data_batch["labels"].to(model_device)
+                attention_mask = data_batch["attention_mask"].to(model_device)
                 outputs = model(input_ids=input_ids,
                                 attention_mask=attention_mask)
                 _, _, predicted, _ = cal_acc(outputs.logits, labels, choices)
@@ -401,9 +536,9 @@ class RLHF_finetuning:
         else:
             # More than one adapters (exclude "default" one)
             for idx, data_batch in enumerate(tqdm(dataloader)):
-                input_ids = data_batch["input_ids"].to("cuda:0")
-                labels = data_batch["labels"].to("cuda:0")
-                attention_mask = data_batch["attention_mask"].to("cuda:0")
+                input_ids = data_batch["input_ids"].to(model_device)
+                labels = data_batch["labels"].to(model_device)
+                attention_mask = data_batch["attention_mask"].to(model_device)
                 collective_choices = []
                 for name in model.adapter_names:
                     if name == "default":
@@ -458,11 +593,23 @@ class RLHF_finetuning:
 
         dataloader = DataLoader(dataset)
 
+        # Get model device
+        model_device = self.device
+        if hasattr(model, 'device'):
+            model_device = model.device
+        elif hasattr(model, 'base_model') and hasattr(model.base_model, 'device'):
+            model_device = model.base_model.device
+        else:
+            try:
+                model_device = next(model.parameters()).device
+            except:
+                model_device = self.device
+
         predicted_indices = []
         for idx, data_batch in enumerate(tqdm(dataloader)):
-            win_input_ids = data_batch["win_input_ids"].to("cuda:0")
-            win_labels = data_batch["win_labels"].to("cuda:0")
-            win_attention_mask = data_batch["win_attention_mask"].to("cuda:0")
+            win_input_ids = data_batch["win_input_ids"].to(model_device)
+            win_labels = data_batch["win_labels"].to(model_device)
+            win_attention_mask = data_batch["win_attention_mask"].to(model_device)
             ref_win_outputs = model(
                 disable_adapter=True,
                 input_ids=win_input_ids,
@@ -482,10 +629,9 @@ class RLHF_finetuning:
                                                 win_labels,
                                                 average_log_prob=False)
 
-            lose_input_ids = data_batch["lose_input_ids"].to("cuda:0")
-            lose_labels = data_batch["lose_labels"].to("cuda:0")
-            lose_attention_mask = data_batch["lose_attention_mask"].to(
-                "cuda:0")
+            lose_input_ids = data_batch["lose_input_ids"].to(model_device)
+            lose_labels = data_batch["lose_labels"].to(model_device)
+            lose_attention_mask = data_batch["lose_attention_mask"].to(model_device)
             ref_lose_outputs = model(
                 disable_adapter=True,
                 input_ids=lose_input_ids,

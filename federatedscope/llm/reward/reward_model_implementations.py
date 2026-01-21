@@ -1,12 +1,37 @@
 import logging
 from typing import List, Optional
 import torch
+import warnings
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 from federatedscope.llm.reward.reward_calculators import (
     cal_gpt2_harmless_probabilities, cal_gpt2_helpful_probabilities)
 
 logger = logging.getLogger(__name__)
+
+# Suppress right-padding warnings globally for reward models
+# These warnings come from transformers library when using decoder-only models
+warnings.filterwarnings(
+    "ignore",
+    message=".*decoder-only architecture.*right-padding.*",
+    category=UserWarning
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*right-padding was detected.*",
+    category=UserWarning
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*right-padding.*",
+    category=UserWarning
+)
+# Also suppress FutureWarning from transformers
+warnings.filterwarnings(
+    "ignore",
+    message=".*padding_side.*",
+    category=FutureWarning
+)
 
 # A dedicated, self-contained function to load reward models
 def _load_reward_model_and_tokenizer(model_name, device=None):
@@ -15,9 +40,11 @@ def _load_reward_model_and_tokenizer(model_name, device=None):
     This is a simplified loader that does not depend on the main FS config.
     """
     logger.info(f"Loading reward model: {model_name}")
+    
+    # Load tokenizer and immediately set padding_side to 'left' to avoid warnings
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     # Set padding_side to 'left' for decoder-only architectures (GPT-2)
-    # This must be set before any tokenization to avoid warnings
+    # This must be set immediately after loading to avoid warnings
     tokenizer.padding_side = 'left'
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token

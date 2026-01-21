@@ -1,5 +1,5 @@
 use_gpu: True
-device: 3  # GPU 3 for hhst-ortho experiment (tid: 50103)
+device: 2  # GPU 2 for hhst experiment (tid: 40024) - batch_size 16, lower KL and tighter variance cap, orthogonal DISABLED
 early_stop:
   patience: 0
 federate:
@@ -7,7 +7,7 @@ federate:
   client_num: 10
   sample_client_num: 5
   total_round_num: 50
-  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50103.ckpt"
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_40024.ckpt"
   ignore_weight: True
   save_freq: 20  # Checkpoint 저장 빈도 줄여서 I/O 시간 감소
   share_local_model: True  # Single GPU mode
@@ -38,21 +38,22 @@ llm:
   # Variational Preference Learning with Gumbel-Softmax Prior (VPL-GP) parameters
   vpl_use_gp_prior: True
   vpl_latent_dim: 32
-  vpl_kl_weight: 100.0  # Increased 10x from 10.0 (50102)
+  vpl_kl_weight: 0.1  # Lower KL to let mu move away from origin
   vpl_gp_temperature: 1.0
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
   vpl_use_difference_only: True  # Use only difference embedding (removes general information)
-  # Orthogonal loss parameters (ENABLED for this experiment)
-  vpl_orthogonal_weight: 10.0  # Pull loss weight (CLOP paper) - Decreased from 1000.0 (50102)
-  vpl_orthogonal_orthonorm_weight: 0.1  # Orthonormal constraint weight
-  vpl_use_manual_orthogonal_labels: False  # Use k-means automatic labeling (not manual)
-  vpl_num_prototypes: 2  # Number of orthogonal prototypes (k for k-means). For hh-rlhf, this is fixed to 2
-  vpl_prototype_scale: 5.0  # Distance of prototypes from origin (default: 5.0, larger = further from origin)
+  vpl_max_logvar: -3.0  # Tighter variance cap (sigma <= 0.223)
+  # Orthogonal loss parameters (DISABLED for 40000 series)
+  vpl_orthogonal_weight: 0.0  # 40000번대는 orthogonal loss 사용 안 함
+  vpl_orthogonal_orthonorm_weight: 0.0
+  vpl_use_manual_orthogonal_labels: False
+  vpl_num_prototypes: 0
+  vpl_prototype_scale: 0.0
   vpl_tsne_visualize_freq: 10  # Generate t-SNE visualization every 10 rounds
   grad_accum_step: 2
 dataloader:
-  batch_size: 4
+  batch_size: 16  # Increased from 4 to 16 for Monte Carlo stability
   num_workers: 4  # DataLoader 병렬화로 데이터 로딩 속도 향상
   pin_memory: True  # GPU 전송 속도 향상
 model:
@@ -63,7 +64,7 @@ train:
   optimizer:
     type: AdamW
     betas: (0.9, 0.95)
-    lr: 0.00001
+    lr: 0.0001  # Base LR (no multiplier)
   is_enable_half: True
 criterion:
   type: CrossEntropyLoss
@@ -72,14 +73,14 @@ trainer:
   choices: ['A', 'B']
 eval:
   freq: 5  # Evaluation 빈도 줄여서 전체 트레이닝 시간 단축
-  metrics: ['loss', 'acc', 'vpl_kl_loss', 'vpl_reconstruction_loss', 'vpl_orthogonal_loss']  # Removed reward model metrics for HHST
+  metrics: ['loss', 'acc', 'vpl_kl_loss', 'vpl_reconstruction_loss']  # Orthogonal loss disabled for 40000 series
   best_res_update_round_wise_key: train_avg_loss  # Use train_avg_loss instead of val_avg_loss
   count_flops: False
   max_samples_for_reward: 100
-expname: vplgp_hhst_ortho_t50103
+expname: vplgp_hhst_t40024
 wandb:
   use: True
   name_user: ''
-  name_project: 'vpl-gp-selector'
+  name_project: 'fvpl-selector'
   online_track: True
   client_train_info: True

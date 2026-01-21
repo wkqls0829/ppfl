@@ -425,6 +425,16 @@ def eval_helpfulness_winrate(ctx, **kwargs):
     if 'hh-rlhf' not in dataset_type and 'hrl' not in dataset_type:
         return 0.0
     
+    # Only evaluate helpfulness for helpfulness clients (client_id > client_num // 2)
+    client_id = getattr(ctx, 'client_id', None)
+    if client_id is not None:
+        client_num = getattr(ctx.cfg.federate, 'client_num', 10)
+        harmless_clients_num = client_num // 2
+        # Only evaluate if this is a helpfulness client
+        if client_id <= harmless_clients_num:
+            # This is a harmlessness client, skip helpfulness evaluation
+            return 0.0
+    
     scores = _get_helpfulness_winrate_scores(ctx)
     return scores.get('helpfulness_winrate', 0.0)
 
@@ -443,6 +453,16 @@ def eval_harmlessness_winrate(ctx, **kwargs):
     if 'hh-rlhf' not in dataset_type and 'hrl' not in dataset_type:
         return 0.0
     
+    # Only evaluate harmlessness for harmlessness clients (client_id 1 to client_num // 2)
+    client_id = getattr(ctx, 'client_id', None)
+    if client_id is not None:
+        client_num = getattr(ctx.cfg.federate, 'client_num', 10)
+        harmless_clients_num = client_num // 2
+        # Only evaluate if this is a harmlessness client
+        if client_id > harmless_clients_num:
+            # This is a helpfulness client, skip harmlessness evaluation
+            return 0.0
+    
     scores = _get_harmlessness_winrate_scores(ctx)
     return scores.get('harmlessness_winrate', 0.0)
 
@@ -453,6 +473,31 @@ def register_harmlessness_winrate_metric(types):
     return None
 
 
+# --- Metric 3: Average Win/Lose Rate (helpfulness & harmlessness) ---
+def eval_avg_winlose_rate(ctx, **kwargs):
+    """
+    Average of helpfulness and harmlessness winrates (non-zero entries only).
+    For HRL datasets only.
+    """
+    dataset_type = getattr(ctx.cfg.data, 'type', '').lower()
+    if 'hh-rlhf' not in dataset_type and 'hrl' not in dataset_type:
+        return 0.0
+    
+    help_score = eval_helpfulness_winrate(ctx, **kwargs)
+    harm_score = eval_harmlessness_winrate(ctx, **kwargs)
+    values = [v for v in [help_score, harm_score] if v != 0.0]
+    if len(values) == 0:
+        return 0.0
+    return sum(values) / len(values)
+
+
+def register_avg_winlose_rate_metric(types):
+    if 'avg_winlose_rate' in types:
+        return 'avg_winlose_rate', eval_avg_winlose_rate, True
+    return None
+
+
 # Register metrics
 register.register_metric('helpfulness_winrate', register_helpfulness_winrate_metric)
 register.register_metric('harmlessness_winrate', register_harmlessness_winrate_metric)
+register.register_metric('avg_winlose_rate', register_avg_winlose_rate_metric)

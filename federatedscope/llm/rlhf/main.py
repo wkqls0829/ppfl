@@ -62,29 +62,31 @@ if __name__ == '__main__':
 
     init_cfg.freeze()
 
-    # load selector
+    # start rlhf training - get device first
+    gpu_manager = GPUManager(gpu_available=init_cfg.use_gpu,
+                             specified_device=init_cfg.device)
+    _server_device = gpu_manager.auto_choice()
+    
+    # load selector - use specified device instead of 'auto'
     selector_backbone_name, _ = selector_cfg.model.type.split('@')
     selector_model = get_llm(selector_cfg,
                              load_from_prev_ckpt=True,
-                             device_map='auto')
+                             device_map=None)  # Use None to load on CPU first, then move to device
+    selector_model = selector_model.to(_server_device)
     selector_tokenizer, _ = get_tokenizer(selector_backbone_name,
                                           selector_cfg.data.root,
                                           selector_cfg.llm.tok_len)
 
-    # load llm
+    # load llm - use specified device instead of 'auto'
     model_name, _ = init_cfg.model.type.split('@')
-    model = get_llm(init_cfg, device_map='auto')
+    model = get_llm(init_cfg, device_map=None)  # Use None to load on CPU first, then move to device
+    model = model.to(_server_device)
     tokenizer, _ = get_tokenizer(model_name, init_cfg.data.root,
                                  init_cfg.llm.tok_len)
     generator_tokenizer, _ = get_tokenizer(model_name,
                                            init_cfg.data.root,
                                            init_cfg.llm.tok_len,
                                            padding_side="left")
-
-    # start rlhf training
-    gpu_manager = GPUManager(gpu_available=init_cfg.use_gpu,
-                             specified_device=init_cfg.device)
-    _server_device = gpu_manager.auto_choice()
     RLHF_finetuning(
         model,
         tokenizer,

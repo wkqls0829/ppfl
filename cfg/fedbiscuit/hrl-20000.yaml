@@ -50,6 +50,6 @@ eval:
 wandb:
   use: True
   name_user: ''
-  name_project: 'vpl-gp-rl'
+  name_project: 'fvpl-rl'  # Same project as recent RL experiments
   online_track: True
   client_train_info: True

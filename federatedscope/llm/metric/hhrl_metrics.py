@@ -94,16 +94,26 @@ def _get_or_compute_hhrl_scores(ctx):
     all_harmless_scores = []
     all_helpful_scores = []
 
-    original_padding_side = ctx.tokenizer.padding_side
-    original_pad_token = ctx.tokenizer.pad_token
-    original_pad_token_id = getattr(ctx.tokenizer, 'pad_token_id', None)
-
-    # Set padding_side to 'left' for decoder-only architectures BEFORE any operations
-    ctx.tokenizer.padding_side = 'left'
-    if ctx.tokenizer.pad_token is None:
-        ctx.tokenizer.pad_token = ctx.tokenizer.eos_token
-    if ctx.tokenizer.pad_token_id is None:
-        ctx.tokenizer.pad_token_id = ctx.tokenizer.eos_token_id
+    # Get tokenizer from ctx or trainer
+    tokenizer = getattr(ctx, 'tokenizer', None)
+    if tokenizer is None:
+        # Try to get from trainer if available
+        trainer = getattr(ctx, 'trainer', None)
+        if trainer is not None and hasattr(trainer, 'tokenizer'):
+            tokenizer = trainer.tokenizer
+        else:
+            logger.warning("Tokenizer not found in ctx or trainer, skipping reward model evaluation")
+            return {}
+    
+    # For decoder-only architectures, enforce left padding to avoid warnings and
+    # ensure correct generation behavior.
+    if getattr(tokenizer, 'padding_side', None) != 'left':
+        logger.info("Setting tokenizer.padding_side='left' for decoder-only model generation.")
+    tokenizer.padding_side = 'left'
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    if getattr(tokenizer, 'pad_token_id', None) is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
 
     # Suppress the decoder-only right-padding warning since we've set padding_side='left'
     # This warning comes from transformers library during generation
@@ -163,23 +173,40 @@ def _get_or_compute_hhrl_scores(ctx):
         
         # Decode the entire input_ids to get the formatted prompt string
         # This is what the model sees as input.
-        prompts = ctx.tokenizer.batch_decode(input_ids,
+        prompts = tokenizer.batch_decode(input_ids,
                                              skip_special_tokens=True)
 
         # Generate with or without attention_mask
-        if attention_mask is not None:
-            generated_ids = ctx.model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=ctx.cfg.llm.max_new_token,
-                **generation_kwargs)
-        else:
-            generated_ids = ctx.model.generate(
-                input_ids=input_ids,
-                max_new_tokens=ctx.cfg.llm.max_new_token,
-                **generation_kwargs)
+        # Suppress right-padding warnings during generation
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=".*decoder-only architecture.*right-padding.*",
+                category=UserWarning
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message=".*right-padding was detected.*",
+                category=UserWarning
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message=".*right-padding.*",
+                category=UserWarning
+            )
+            if attention_mask is not None:
+                generated_ids = ctx.model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=ctx.cfg.llm.max_new_token,
+                    **generation_kwargs)
+            else:
+                generated_ids = ctx.model.generate(
+                    input_ids=input_ids,
+                    max_new_tokens=ctx.cfg.llm.max_new_token,
+                    **generation_kwargs)
         
-        completions = ctx.tokenizer.batch_decode(
+        completions = tokenizer.batch_decode(
             generated_ids, skip_special_tokens=True)
 
         # The full text for the reward model is the generated text
@@ -207,12 +234,6 @@ def _get_or_compute_hhrl_scores(ctx):
         if should_limit and total_samples_evaluated >= max_eval_samples:
             break
 
-    # Restore original tokenizer settings
-    ctx.tokenizer.padding_side = original_padding_side
-    ctx.tokenizer.pad_token = original_pad_token
-    if original_pad_token_id is not None:
-        ctx.tokenizer.pad_token_id = original_pad_token_id
-
     results = {}
     if all_harmless_scores:
         results['avg_harmlessness'] = np.mean(all_harmless_scores)
@@ -232,6 +253,16 @@ def _get_or_compute_hhrl_scores(ctx):
 
 # --- Metric 1: Harmlessness ---
 def eval_harmlessness(ctx, **kwargs):
+    # Only evaluate harmlessness for harmlessness clients (client_id 1 to client_num // 2)
+    client_id = getattr(ctx, 'client_id', None)
+    if client_id is not None:
+        client_num = getattr(ctx.cfg.federate, 'client_num', 10)
+        harmless_clients_num = client_num // 2
+        # Only evaluate if this is a harmlessness client
+        if client_id > harmless_clients_num:
+            # This is a helpfulness client, skip harmlessness evaluation
+            return 0.0
+    
     scores = _get_or_compute_hhrl_scores(ctx)
     return scores.get('avg_harmlessness', 0.0)
 
@@ -244,6 +275,16 @@ def register_harmlessness_metric(types):
 
 # --- Metric 2: Helpfulness ---
 def eval_helpfulness(ctx, **kwargs):
+    # Only evaluate helpfulness for helpfulness clients (client_id > client_num // 2)
+    client_id = getattr(ctx, 'client_id', None)
+    if client_id is not None:
+        client_num = getattr(ctx.cfg.federate, 'client_num', 10)
+        harmless_clients_num = client_num // 2
+        # Only evaluate if this is a helpfulness client
+        if client_id <= harmless_clients_num:
+            # This is a harmlessness client, skip helpfulness evaluation
+            return 0.0
+    
     scores = _get_or_compute_hhrl_scores(ctx)
     return scores.get('avg_helpfulness', 0.0)
 

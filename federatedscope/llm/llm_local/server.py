@@ -54,6 +54,7 @@ class LLMMultiLoRAServer(Server):
         self.vpl_gp_prior_weights = None
         self.vpl_orthogonal_client_labels = None
         self.client_z_values_dict = defaultdict(list)  # {client_id: [z_values]}
+        self.client_orthogonal_labels_dict = {}  # {client_id: orthogonal_label} - stores label for each client
         self.client_orthogonal_prototypes_dict = {}  # {client_id: prototypes}
 
     def _register_default_handlers(self):
@@ -447,30 +448,42 @@ class LLMMultiLoRAServer(Server):
     def _compute_manual_orthogonal_labels(self, train_msg_buffer):
         """
         Assign manual orthogonal labels based on client data type.
-        Harmless clients (first half) get label 0, helpful clients (second half) get label 1.
-        Only assigns labels to clients that participated in this round.
+        For hh-rlhf dataset:
+        - Harmlessness train data clients (first half) get label 0
+        - Helpfulness train data clients (second half) get label 1
+        
+        This matches the data distribution in load_hh_rlhf_data:
+        - Clients 1 to (client_num // 2) receive harmlessness data (label 0)
+        - Clients (client_num // 2 + 1) to client_num receive helpfulness data (label 1)
+        
+        IMPORTANT: This function assigns labels to ALL clients (1 to client_num),
+        not just participating clients, so that non-participating clients also
+        have labels stored for visualization.
         """
         if not (hasattr(self._cfg.llm, 'vpl_use_manual_orthogonal_labels') and 
                 self._cfg.llm.vpl_use_manual_orthogonal_labels):
             return None
         
-        # Get participating client IDs
-        participating_clients = sorted(train_msg_buffer.keys())
-        num_participants = len(participating_clients)
+        # For hh-rlhf dataset, determine split point based on total client number
+        # This matches the data distribution logic in load_hh_rlhf_data
+        total_client_num = self._cfg.federate.client_num
+        harmless_clients_num = total_client_num // 2
         
-        if num_participants == 0:
-            return {}
-        
-        # Assign labels: first half = 0 (harmless), second half = 1 (helpful)
+        # Assign labels to ALL clients (1 to client_num), not just participating ones
+        # This ensures non-participating clients also have labels for visualization
         labels = {}
-        split_point = num_participants // 2
-        for idx, client_id in enumerate(participating_clients):
-            if idx < split_point:
-                labels[client_id] = 0
+        for client_id in range(1, total_client_num + 1):
+            if client_id <= harmless_clients_num:
+                labels[client_id] = 0  # Harmlessness train data
             else:
-                labels[client_id] = 1
+                labels[client_id] = 1  # Helpfulness train data
         
-        logger.info(f"Assigned manual orthogonal labels: {labels}")
+        # Log label distribution
+        harmless_count = sum(1 for v in labels.values() if v == 0)
+        helpful_count = sum(1 for v in labels.values() if v == 1)
+        logger.info(f"Assigned manual orthogonal labels for ALL {total_client_num} clients based on train data type:")
+        logger.info(f"  Harmlessness (label 0): {harmless_count} clients - {[k for k, v in labels.items() if v == 0]}")
+        logger.info(f"  Helpfulness (label 1): {helpful_count} clients - {[k for k, v in labels.items() if v == 1]}")
         return labels
     
     def _collect_vpl_gp_prior_distributions(self):
@@ -691,17 +704,22 @@ class LLMMultiLoRAServer(Server):
     def _collect_z_values_for_visualization(self):
         """
         Collect z values and orthogonal prototypes from clients for t-SNE visualization.
+        Keeps the latest available z per client so that non-participating clients
+        still appear in plots.
+        Also stores orthogonal labels for each client (including non-participating ones).
         """
         train_msg_buffer = self.msg_buffer['train'][self.state]
         
-        # Reset per-round z storage to avoid accumulation across rounds
-        self.client_z_values_dict = defaultdict(list)
-        self.client_orthogonal_prototypes_dict = defaultdict(list)
-
+        # Do NOT reset; keep last known z/prototypes for non-participating clients
+        has_new_z = False
         z_values_list = []
         client_ids_list = []
+        participating_clients = set()
         
+        # Collect z values from participating clients
         for client_id in train_msg_buffer.keys():
+            participating_clients.add(client_id)
+            
             if self.model_num == 1:
                 _, model_para = train_msg_buffer[client_id]
             else:
@@ -721,6 +739,13 @@ class LLMMultiLoRAServer(Server):
                 
                 z_values_list.append(z_values)
                 client_ids_list.extend([client_id] * len(z_values))
+                has_new_z = True
+                
+                # Log if this is new or reused z
+                if client_id in self.client_z_values_dict and len(self.client_z_values_dict[client_id]) > 0:
+                    logger.debug(f"Client {client_id}: Updating z values (new round {self.state})")
+                else:
+                    logger.debug(f"Client {client_id}: First time storing z values")
             
             # Collect orthogonal prototypes (if orthogonal loss is enabled)
             if (hasattr(self._cfg.llm, 'vpl_orthogonal_weight') and 
@@ -735,17 +760,32 @@ class LLMMultiLoRAServer(Server):
                 # Store only latest round prototypes per client
                 self.client_orthogonal_prototypes_dict[client_id] = prototypes
         
+        # Store/update orthogonal labels for all clients (including non-participating)
+        # This ensures all clients have labels even if they didn't participate this round
+        if self.vpl_orthogonal_client_labels is not None:
+            for client_id in range(1, self.client_num + 1):
+                if client_id in self.vpl_orthogonal_client_labels:
+                    self.client_orthogonal_labels_dict[client_id] = self.vpl_orthogonal_client_labels[client_id]
+                    if client_id not in participating_clients:
+                        logger.debug(f"Client {client_id}: Storing orthogonal label {self.vpl_orthogonal_client_labels[client_id]} (non-participating)")
+        
+        # If no new z this round but we have previously stored z, keep using them
         if len(z_values_list) == 0:
-            return
+            if len(self.client_z_values_dict) == 0:
+                return
+        else:
+            # Concatenate all new z values and update per-client latest
+            all_z_values = np.concatenate(z_values_list, axis=0)
+            for client_id in set(client_ids_list):
+                client_z_mask = np.array(client_ids_list) == client_id
+                client_z = all_z_values[client_z_mask]
+                self.client_z_values_dict[client_id] = client_z.tolist()
         
-        # Concatenate all z values
-        all_z_values = np.concatenate(z_values_list, axis=0)
-        
-        # Store in dict (latest round only)
-        for client_id in set(client_ids_list):
-            client_z_mask = np.array(client_ids_list) == client_id
-            client_z = all_z_values[client_z_mask]
-            self.client_z_values_dict[client_id] = client_z.tolist()
+        # Check all clients (1 to client_num) to ensure we have z for all
+        all_client_ids = set(range(1, self.client_num + 1))
+        missing_clients = all_client_ids - set(self.client_z_values_dict.keys())
+        if missing_clients:
+            logger.debug(f"Round {self.state}: Clients without z values: {sorted(missing_clients)} (will not appear in t-SNE)")
         
         # Visualize every 10 rounds (or every round if configured)
         visualize_freq = getattr(self._cfg.llm, 'vpl_tsne_visualize_freq', 10)  # Default: every 10 rounds
@@ -754,8 +794,9 @@ class LLMMultiLoRAServer(Server):
         
         total_points = sum(len(v) for v in self.client_z_values_dict.values())
         unique_clients = len(self.client_z_values_dict)
-        logger.info(f"Round {self.state}: Collected z values from {len(set(client_ids_list))} clients. "
-                   f"Total accumulated: {total_points} points across {unique_clients} clients")
+        logger.info(f"Round {self.state}: Collected z values from {len(participating_clients)} participating clients "
+                   f"(new_z={has_new_z}). Total stored: {total_points} points across {unique_clients} clients. "
+                   f"Orthogonal labels stored for {len(self.client_orthogonal_labels_dict)} clients.")
     
     def _visualize_cross_client_z(self):
         """
@@ -777,8 +818,11 @@ class LLMMultiLoRAServer(Server):
                 z_values_list.append(client_z)
                 client_labels_list.extend([client_id] * len(client_z))
                 
-                # Get orthogonal label if available
-                if self.vpl_orthogonal_client_labels and client_id in self.vpl_orthogonal_client_labels:
+                # Get orthogonal label from stored dict (includes non-participating clients)
+                if client_id in self.client_orthogonal_labels_dict:
+                    orthogonal_labels_list.extend([self.client_orthogonal_labels_dict[client_id]] * len(client_z))
+                elif self.vpl_orthogonal_client_labels and client_id in self.vpl_orthogonal_client_labels:
+                    # Fallback to current round labels if not in stored dict
                     orthogonal_labels_list.extend([self.vpl_orthogonal_client_labels[client_id]] * len(client_z))
                 else:
                     orthogonal_labels_list.extend([-1] * len(client_z))

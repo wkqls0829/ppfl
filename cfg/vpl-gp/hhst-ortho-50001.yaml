@@ -42,10 +42,10 @@ llm:
   vpl_gp_temperature: 1.0
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
-  # Orthogonal loss parameters (ENABLED for this experiment)
-  vpl_orthogonal_weight: 100.0  # Pull loss weight (CLOP paper) - Increased 10x from 10.0
+  # Orthogonal loss parameters (ENABLED for 50000 series, reduced for better minimization)
+  vpl_orthogonal_weight: 1.0  # Pull loss weight (reduced from 100.0)
   vpl_orthogonal_orthonorm_weight: 0.1  # Orthonormal constraint weight
-  vpl_use_manual_orthogonal_labels: False  # Use k-means automatic labeling (not manual)
+  vpl_use_manual_orthogonal_labels: True  # Use manual labeling: harmlessness (0) and helpfulness (1)
   vpl_num_prototypes: 2  # Number of orthogonal prototypes (k for k-means). For hh-rlhf, this is fixed to 2
   vpl_prototype_scale: 5.0  # Distance of prototypes from origin (default: 5.0, larger = further from origin)
   vpl_tsne_visualize_freq: 10  # Generate t-SNE visualization every 10 rounds
@@ -79,6 +79,6 @@ expname: vplgp_hhst_ortho_t50001
 wandb:
   use: True
   name_user: ''
-  name_project: 'vpl-gp-selector'
+  name_project: 'fvpl-selector'
   online_track: True
   client_train_info: True

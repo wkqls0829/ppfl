@@ -23,9 +23,19 @@ class VariationalEncoder(nn.Module):
         latent_dim: Dimension of the latent space z
         hidden_dims: List of hidden layer dimensions (default: [256, 128])
     """
-    def __init__(self, input_dim, latent_dim=32, hidden_dims=[256, 128]):
+    def __init__(self, input_dim, latent_dim=32, hidden_dims=[256, 128], max_logvar=0.0):
+        """
+        Args:
+            input_dim: Dimension of input features
+            latent_dim: Dimension of latent space
+            hidden_dims: List of hidden layer dimensions
+            max_logvar: Maximum log variance (clamps logvar to prevent large sigma)
+                       Default 0.0 means sigma <= exp(0.5 * 0.0) = 1.0
+                       Set to -2.0 for sigma <= exp(0.5 * -2.0) ≈ 0.368
+        """
         super(VariationalEncoder, self).__init__()
         self.latent_dim = latent_dim
+        self.max_logvar = max_logvar  # Maximum log variance (clamps logvar to prevent large sigma)
         
         # Build encoder network
         layers = []
@@ -42,6 +52,11 @@ class VariationalEncoder(nn.Module):
         self.fc_mu = nn.Linear(prev_dim, latent_dim)
         self.fc_logvar = nn.Linear(prev_dim, latent_dim)
         
+        # Initialize logvar bias to negative value to start with smaller variance
+        # This helps prevent variance from becoming too large
+        if hasattr(self.fc_logvar, 'bias') and self.fc_logvar.bias is not None:
+            nn.init.constant_(self.fc_logvar.bias, -2.0)  # exp(-2.0) ≈ 0.135, smaller initial variance
+        
     def encode(self, x):
         """
         Encode input preferences to latent parameters.
@@ -56,6 +71,13 @@ class VariationalEncoder(nn.Module):
         h = self.encoder(x)
         mu = self.fc_mu(h)
         logvar = self.fc_logvar(h)
+        
+        # Clamp logvar to prevent variance from becoming too large
+        # This limits sigma = exp(0.5 * logvar) to be at most exp(0.5 * max_logvar)
+        max_logvar = getattr(self, 'max_logvar', 0.0)  # Default: exp(0.0) = 1.0, so sigma <= 1.0
+        if max_logvar is not None:
+            logvar = torch.clamp(logvar, max=max_logvar)
+        
         return mu, logvar
     
     def reparameterize(self, mu, logvar):

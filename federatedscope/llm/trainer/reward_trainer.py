@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import logging
 import copy
 import numpy as np
+import os
 
 from federatedscope.register import register_trainer
 from federatedscope.llm.trainer.trainer import LLMTrainer
@@ -121,11 +122,46 @@ class DPORewardTrainer(LLMTrainer):
                  monitor=None):
         super().__init__(model, data, device, config, only_for_eval, monitor)
         self.reward_coeff = config.llm.reward_coeff
+        
+        # VPL components for z-dependent generation
+        self.variational_encoder = None
+        self.feature_extractor = None
+        self.z_to_embedding = None
+        self.use_variational_generation = getattr(config.llm, 'rlhf_use_variational_generation', False)
+        
+        if self.use_variational_generation:
+            logger.info("DPORewardTrainer: Variational generation enabled. Will load VPL components.")
 
     def _hook_on_fit_start_init(self, ctx):
         super()._hook_on_fit_start_init(ctx)
 
         ctx.ys_pred = CtxVar([], LIFECYCLE.ROUTINE)
+        
+        # Load VPL components for z-dependent generation
+        if self.use_variational_generation:
+            from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint
+            
+            selector_ckpt_path = getattr(ctx.cfg.llm, 'rlhf_selector_checkpoint', None)
+            if selector_ckpt_path is None:
+                selector_ckpt_path = getattr(ctx.cfg.llm, 'selector_save_to', None)
+            
+            if selector_ckpt_path and os.path.exists(selector_ckpt_path):
+                logger.info(f"Loading VPL components from {selector_ckpt_path} for z-dependent generation")
+                variational_encoder, feature_extractor, _, z_to_embedding = load_vpl_components_from_checkpoint(
+                    selector_ckpt_path, ctx.cfg, device=ctx.device
+                )
+                
+                if variational_encoder is not None and z_to_embedding is not None:
+                    self.variational_encoder = variational_encoder
+                    self.feature_extractor = feature_extractor
+                    self.z_to_embedding = z_to_embedding
+                    logger.info("VPL components loaded successfully for z-dependent generation")
+                else:
+                    logger.warning("Failed to load VPL components. Falling back to standard generation.")
+                    self.use_variational_generation = False
+            else:
+                logger.warning(f"Selector checkpoint not found: {selector_ckpt_path}. Disabling variational generation.")
+                self.use_variational_generation = False
 
     def _hook_on_batch_forward(self, ctx):
         if ctx.cfg.llm.accelerator.use:
@@ -222,6 +258,100 @@ class DPORewardTrainer(LLMTrainer):
         ctx.loss_batch = CtxVar(loss, LIFECYCLE.BATCH)
         ctx.batch_size = CtxVar(len(win_input_ids), LIFECYCLE.BATCH)
 
+    def _infer_z_from_input(self, ctx, input_ids, attention_mask=None):
+        """Infer z from input using feature_extractor and variational_encoder (Step 4)."""
+        if self.variational_encoder is None or self.feature_extractor is None:
+            return None
+        
+        try:
+            # Get embeddings from model
+            input_embeddings = ctx.model.get_input_embeddings()(input_ids)
+            
+            # Extract features (use mean pooling over sequence length)
+            if attention_mask is not None:
+                # Mask out padding tokens
+                mask = attention_mask.unsqueeze(-1).float()
+                pooled_embeddings = (input_embeddings * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+            else:
+                pooled_embeddings = input_embeddings.mean(dim=1)
+            
+            # Extract features using feature_extractor
+            features = self.feature_extractor(pooled_embeddings)
+            
+            # Encode to z using variational_encoder
+            z_mu, z_logvar = self.variational_encoder.encode(features)
+            
+            # Sample z using reparameterization trick
+            if self.training:
+                std = torch.exp(0.5 * z_logvar)
+                eps = torch.randn_like(std)
+                z = z_mu + eps * std
+            else:
+                z = z_mu  # Use mean during inference
+            
+            return z
+        except Exception as e:
+            logger.warning(f"Failed to infer z from input: {e}. Using zero z.")
+            vpl_latent_dim = getattr(ctx.cfg.llm, 'vpl_latent_dim', 32)
+            batch_size = input_ids.shape[0]
+            return torch.zeros(batch_size, vpl_latent_dim, device=ctx.device)
+    
+    def _get_z_from_batch(self, ctx, batch_size, input_ids=None, attention_mask=None):
+        """Get z values from batch data or infer via variational encoder (Step 4: improved inference)."""
+        z = None
+        
+        # Try to get z from batch data
+        if 'z' in ctx.data_batch:
+            z = ctx.data_batch['z']
+            if isinstance(z, list):
+                z = torch.stack([torch.tensor(zi) if not isinstance(zi, torch.Tensor) else zi for zi in z])
+            if not isinstance(z, torch.Tensor):
+                z = torch.tensor(z)
+            z = z.to(ctx.device)
+            # Ensure correct shape: (batch_size, latent_dim)
+            if z.dim() == 1:
+                z = z.unsqueeze(0).expand(batch_size, -1)
+            elif z.shape[0] != batch_size:
+                # If single z for batch, expand it
+                if z.shape[0] == 1:
+                    z = z.expand(batch_size, -1)
+                else:
+                    logger.warning(f"z shape mismatch: {z.shape} vs batch_size {batch_size}. Using first z.")
+                    z = z[0:1].expand(batch_size, -1)
+        
+        # If z not in batch and variational encoder available, infer it from input (Step 4)
+        if z is None and self.use_variational_generation and self.variational_encoder is not None:
+            if input_ids is not None:
+                # Infer z from input using feature_extractor + variational_encoder
+                z = self._infer_z_from_input(ctx, input_ids, attention_mask)
+                logger.debug(f"Inferred z from input: shape {z.shape}")
+            else:
+                # Fallback: use zero z if input_ids not available
+                vpl_latent_dim = getattr(ctx.cfg.llm, 'vpl_latent_dim', 32)
+                z = torch.zeros(batch_size, vpl_latent_dim, device=ctx.device)
+                logger.debug("z not found in batch and input_ids not available, using zero z")
+        
+        return z
+    
+    def _inject_z_to_embeddings(self, ctx, input_ids, z):
+        """Inject z-dependent bias into input embeddings."""
+        if z is None or self.z_to_embedding is None:
+            return None  # Return None to use input_ids directly
+        
+        # Get input embeddings
+        input_embeddings = ctx.model.get_input_embeddings()(input_ids)
+        
+        # Project z to embedding space
+        z_embedding = self.z_to_embedding(z)  # (batch_size, embedding_dim)
+        
+        # Add z_embedding to all token embeddings
+        # z_embedding: (batch_size, embedding_dim) -> (batch_size, 1, embedding_dim)
+        z_embedding = z_embedding.unsqueeze(1)
+        # input_embeddings: (batch_size, seq_len, embedding_dim)
+        inputs_embeds = input_embeddings + z_embedding
+        
+        return inputs_embeds
+    
     def _batch_forward(self,
                        ctx,
                        win_input_ids,
@@ -231,18 +361,47 @@ class DPORewardTrainer(LLMTrainer):
                        lose_labels,
                        lose_attention_mask,
                        disable_adapter=False):
-        win_outputs = ctx.model(disable_adapter=disable_adapter,
-                                input_ids=win_input_ids,
-                                labels=win_labels,
-                                attention_mask=win_attention_mask)
+        # Get z from batch or infer (Step 4: improved inference with input_ids)
+        batch_size = win_input_ids.shape[0]
+        # Use win_input_ids for z inference (both win and lose should use same z for a given prompt)
+        z = self._get_z_from_batch(ctx, batch_size, input_ids=win_input_ids, attention_mask=win_attention_mask)
+        
+        # Inject z into embeddings for win (chosen) responses
+        win_inputs_embeds = None
+        if self.use_variational_generation and z is not None:
+            win_inputs_embeds = self._inject_z_to_embeddings(ctx, win_input_ids, z)
+        
+        # Inject z into embeddings for lose (rejected) responses
+        lose_inputs_embeds = None
+        if self.use_variational_generation and z is not None:
+            lose_inputs_embeds = self._inject_z_to_embeddings(ctx, lose_input_ids, z)
+        
+        # Forward pass for win (chosen) responses
+        if win_inputs_embeds is not None:
+            win_outputs = ctx.model(disable_adapter=disable_adapter,
+                                    inputs_embeds=win_inputs_embeds,
+                                    labels=win_labels,
+                                    attention_mask=win_attention_mask)
+        else:
+            win_outputs = ctx.model(disable_adapter=disable_adapter,
+                                    input_ids=win_input_ids,
+                                    labels=win_labels,
+                                    attention_mask=win_attention_mask)
         win_logps = _get_batch_logps(win_outputs.logits,
                                      win_labels,
                                      average_log_prob=False)
 
-        lose_outputs = ctx.model(disable_adapter=disable_adapter,
-                                 input_ids=lose_input_ids,
-                                 labels=lose_labels,
-                                 attention_mask=lose_attention_mask)
+        # Forward pass for lose (rejected) responses
+        if lose_inputs_embeds is not None:
+            lose_outputs = ctx.model(disable_adapter=disable_adapter,
+                                     inputs_embeds=lose_inputs_embeds,
+                                     labels=lose_labels,
+                                     attention_mask=lose_attention_mask)
+        else:
+            lose_outputs = ctx.model(disable_adapter=disable_adapter,
+                                     input_ids=lose_input_ids,
+                                     labels=lose_labels,
+                                     attention_mask=lose_attention_mask)
         lose_logps = _get_batch_logps(lose_outputs.logits,
                                       lose_labels,
                                       average_log_prob=False)
@@ -258,18 +417,47 @@ class DPORewardTrainer(LLMTrainer):
                                  lose_labels,
                                  lose_attention_mask,
                                  disable_adapter=False):
-        win_outputs = ctx.model_engine(disable_adapter=disable_adapter,
-                                       input_ids=win_input_ids,
-                                       labels=win_labels,
-                                       attention_mask=win_attention_mask)
+        # Get z from batch or infer (Step 4: improved inference with input_ids)
+        batch_size = win_input_ids.shape[0]
+        # Use win_input_ids for z inference (both win and lose should use same z for a given prompt)
+        z = self._get_z_from_batch(ctx, batch_size, input_ids=win_input_ids, attention_mask=win_attention_mask)
+        
+        # Inject z into embeddings for win (chosen) responses
+        win_inputs_embeds = None
+        if self.use_variational_generation and z is not None:
+            win_inputs_embeds = self._inject_z_to_embeddings(ctx, win_input_ids, z)
+        
+        # Inject z into embeddings for lose (rejected) responses
+        lose_inputs_embeds = None
+        if self.use_variational_generation and z is not None:
+            lose_inputs_embeds = self._inject_z_to_embeddings(ctx, lose_input_ids, z)
+        
+        # Forward pass for win (chosen) responses
+        if win_inputs_embeds is not None:
+            win_outputs = ctx.model_engine(disable_adapter=disable_adapter,
+                                          inputs_embeds=win_inputs_embeds,
+                                          labels=win_labels,
+                                          attention_mask=win_attention_mask)
+        else:
+            win_outputs = ctx.model_engine(disable_adapter=disable_adapter,
+                                           input_ids=win_input_ids,
+                                           labels=win_labels,
+                                           attention_mask=win_attention_mask)
         win_logps = _get_batch_logps(win_outputs.logits,
                                      win_labels,
                                      average_log_prob=False)
 
-        lose_outputs = ctx.model_engine(disable_adapter=disable_adapter,
-                                        input_ids=lose_input_ids,
-                                        labels=lose_labels,
-                                        attention_mask=lose_attention_mask)
+        # Forward pass for lose (rejected) responses
+        if lose_inputs_embeds is not None:
+            lose_outputs = ctx.model_engine(disable_adapter=disable_adapter,
+                                             inputs_embeds=lose_inputs_embeds,
+                                             labels=lose_labels,
+                                             attention_mask=lose_attention_mask)
+        else:
+            lose_outputs = ctx.model_engine(disable_adapter=disable_adapter,
+                                             input_ids=lose_input_ids,
+                                             labels=lose_labels,
+                                             attention_mask=lose_attention_mask)
         lose_logps = _get_batch_logps(lose_outputs.logits,
                                       lose_labels,
                                       average_log_prob=False)

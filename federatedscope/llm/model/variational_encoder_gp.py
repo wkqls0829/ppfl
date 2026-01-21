@@ -24,8 +24,8 @@ class VariationalEncoderGP(VariationalEncoder):
     where μ_i, σ_i² are learned from other clients' z distributions.
     """
     def __init__(self, input_dim, latent_dim=32, hidden_dims=[256, 128], 
-                 temperature=1.0, num_clients=10):
-        super(VariationalEncoderGP, self).__init__(input_dim, latent_dim, hidden_dims)
+                 temperature=1.0, num_clients=10, max_logvar=0.0):
+        super(VariationalEncoderGP, self).__init__(input_dim, latent_dim, hidden_dims, max_logvar=max_logvar)
         self.temperature = temperature
         self.num_clients = num_clients
         

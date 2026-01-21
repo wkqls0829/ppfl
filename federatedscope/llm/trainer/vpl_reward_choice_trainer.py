@@ -68,20 +68,27 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         # Initialize orthonormal prototypes if orthogonal loss is enabled
         # NOTE: Prototypes are FIXED (CLOP standard), not learnable
         if self.vpl_orthogonal_weight > 0.0:
-            num_prototypes = getattr(config.llm, 'vpl_num_prototypes', self.num_clients)
+            num_prototypes = getattr(config.llm, 'vpl_num_prototypes', 2)
             # Get prototype scale (distance from origin)
             prototype_scale = getattr(config.llm, 'vpl_prototype_scale', 5.0)  # Default: 5.0 (further from origin)
             
-            # Fixed prototypes: Initialize as buffer (not updated by gradients)
-            # Create orthonormal basis using identity matrix scaled by prototype_scale
-            prototypes = torch.eye(num_prototypes, self.vpl_latent_dim, device=device) * prototype_scale
-            # If latent_dim > num_prototypes, pad with zeros
-            if self.vpl_latent_dim > num_prototypes:
-                padding = torch.zeros(num_prototypes, self.vpl_latent_dim - num_prototypes, device=device)
-                prototypes = torch.cat([prototypes, padding], dim=1)
-            self.register_buffer('orthogonal_prototypes', prototypes)
+            # Fixed prototypes: Initialize as tensor (not updated by gradients)
+            # Create orthonormal basis: start with identity matrix, pad if needed
+            # torch.eye(n) creates n x n identity matrix, we need num_prototypes x latent_dim
+            if num_prototypes <= self.vpl_latent_dim:
+                # Start with identity matrix (num_prototypes x num_prototypes), then pad zeros
+                prototypes = torch.eye(num_prototypes, device=device) * prototype_scale
+                if self.vpl_latent_dim > num_prototypes:
+                    padding = torch.zeros(num_prototypes, self.vpl_latent_dim - num_prototypes, device=device)
+                    prototypes = torch.cat([prototypes, padding], dim=1)
+            else:
+                # If num_prototypes > latent_dim, take only first latent_dim dimensions
+                prototypes = torch.eye(num_prototypes, device=device)[:num_prototypes, :self.vpl_latent_dim] * prototype_scale
+            
+            # Store as tensor with requires_grad=False (fixed prototypes)
+            self.orthogonal_prototypes = prototypes.detach().requires_grad_(False)
             self.orthogonal_label = None  # Will be set by server
-            logger.info(f"Initialized {num_prototypes} FIXED orthonormal prototypes for CLOP loss (scale={prototype_scale})")
+            logger.info(f"Initialized {num_prototypes} FIXED orthonormal prototypes for CLOP loss (scale={prototype_scale}, shape={self.orthogonal_prototypes.shape})")
         else:
             self.orthogonal_prototypes = None
             self.orthogonal_label = None
@@ -157,6 +164,9 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         
         # Initialize variational encoder with deeper layers
         # Use VariationalEncoderGP if GP prior is enabled, otherwise use standard VariationalEncoder
+        # Get max_logvar to limit variance (sigma) - smaller values = tighter distribution
+        # max_logvar=0.0 means sigma <= 1.0, max_logvar=-2.0 means sigma <= 0.368
+        vpl_max_logvar = getattr(config.llm, 'vpl_max_logvar', -2.0)  # Default: -2.0 for tighter distribution
         if self.vpl_use_gp_prior:
             from federatedscope.llm.model.variational_encoder_gp import VariationalEncoderGP
             self.variational_encoder = VariationalEncoderGP(
@@ -164,13 +174,15 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                 latent_dim=self.vpl_latent_dim,
                 hidden_dims=[512, 256, 128],
                 temperature=self.vpl_gp_temperature,
-                num_clients=self.num_clients
+                num_clients=self.num_clients,
+                max_logvar=vpl_max_logvar
             ).to(device)
         else:
             self.variational_encoder = VariationalEncoder(
                 input_dim=self.feature_extractor_output_dim,
                 latent_dim=self.vpl_latent_dim,
-                hidden_dims=[512, 256, 128]
+                hidden_dims=[512, 256, 128],
+                max_logvar=vpl_max_logvar
             ).to(device)
         
         # Latent conditioning: project latent z to modify model behavior
@@ -205,6 +217,22 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         ctx.vpl_reconstruction_loss_total = CtxVar(0.0, LIFECYCLE.ROUTINE)
         if self.vpl_orthogonal_weight > 0.0:
             ctx.vpl_orthogonal_loss_total = CtxVar(0.0, LIFECYCLE.ROUTINE)
+        
+        # Freeze base model (LLM) for binary selector training
+        # This prevents base model from being updated during VPL training
+        # Only VPL components (feature_extractor, variational_encoder, latent_projection) will be trained
+        freeze_base_model = getattr(ctx.cfg.llm, 'vpl_freeze_base_model', True)  # Default: True
+        if freeze_base_model and ctx.cur_mode in [MODE.TRAIN, MODE.FINETUNE]:
+            # Use ctx.model instead of self.model since model may not be set yet
+            model = getattr(ctx, 'model', None) or getattr(self, 'model', None)
+            if model is not None:
+                # Freeze all parameters of the base model
+                for param in model.parameters():
+                    param.requires_grad = False
+                logger.info("Frozen base model (LLM) parameters for binary selector training. "
+                           "Only VPL components will be trained.")
+            else:
+                logger.warning("Model not available yet for freezing. Will freeze later if needed.")
         
         # Create separate optimizer for VPL components (feature_extractor + variational_encoder + latent_projection)
         # This allows VPL components to learn faster while LLM is frozen or learns slowly
@@ -671,6 +699,9 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
     def _hook_on_fit_end(self, ctx):
         ctx.ys_true = CtxVar(torch.concatenate(ctx.ys_true), LIFECYCLE.ROUTINE)
         ctx.ys_pred = CtxVar(torch.concatenate(ctx.ys_pred), LIFECYCLE.ROUTINE)
+        # Set tokenizer in ctx for evaluation metrics that need it (e.g., reward model evaluation)
+        if not hasattr(ctx, 'tokenizer') and hasattr(self, 'tokenizer'):
+            ctx.tokenizer = self.tokenizer
         results = ctx.monitor.eval(ctx)
         
         # Add VPL-specific metrics

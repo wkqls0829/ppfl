@@ -24,7 +24,8 @@ def load_vpl_components_from_checkpoint(checkpoint_path, config, device='cuda:0'
         device: Device to load models on
         
     Returns:
-        tuple: (variational_encoder, feature_extractor, latent_projection) or None if not found
+        tuple: (variational_encoder, feature_extractor, latent_projection, z_to_embedding)
+        or (None, None, None, None) if not found
     """
     if not os.path.exists(checkpoint_path):
         logger.warning(f"Checkpoint not found: {checkpoint_path}")
@@ -44,7 +45,7 @@ def load_vpl_components_from_checkpoint(checkpoint_path, config, device='cuda:0'
         if vpl_use_feature_difference:
             try:
                 embedding_dim = config.model.get('hidden_size', 2048)
-            except:
+            except Exception:
                 embedding_dim = 2048  # Default for gemma-2b
             if vpl_use_llm_feature_extractor:
                 raw_feature_dim = embedding_dim * 3  # [chosen, rejected, difference]
@@ -90,11 +91,22 @@ def load_vpl_components_from_checkpoint(checkpoint_path, config, device='cuda:0'
         # Initialize latent projection
         choices = getattr(config.trainer, 'choices', ['A', 'B'])
         latent_projection = nn.Linear(vpl_latent_dim, len(choices)).to(device)
+
+        # Initialize z_to_embedding for conditional generation
+        try:
+            embedding_dim = getattr(config.model, 'hidden_size', None) or getattr(config.model, 'embed_size', None) \
+                or config.model.get('hidden_size', None) or config.model.get('embed_size', None)
+        except Exception:
+            embedding_dim = None
+        if embedding_dim is None:
+            embedding_dim = 2048  # Fallback for gemma-2b
+        z_to_embedding = nn.Linear(vpl_latent_dim, embedding_dim).to(device)
         
         # Try to load from checkpoint
         variational_encoder_loaded = False
         feature_extractor_loaded = False
         latent_projection_loaded = False
+        z_to_embedding_loaded = False
         
         for key in model_state_dict.keys():
             if 'variational_encoder' in key:
@@ -132,15 +144,26 @@ def load_vpl_components_from_checkpoint(checkpoint_path, config, device='cuda:0'
                     logger.info(f"Loaded latent projection from checkpoint")
                 except Exception as e:
                     logger.warning(f"Failed to load latent projection: {e}")
+
+            if 'z_to_embedding' in key:
+                try:
+                    z_to_embedding.load_state_dict(
+                        {k.replace('z_to_embedding.', ''): v
+                         for k, v in model_state_dict.items()
+                         if 'z_to_embedding' in k}, strict=False)
+                    z_to_embedding_loaded = True
+                    logger.info(f"Loaded z_to_embedding from checkpoint")
+                except Exception as e:
+                    logger.warning(f"Failed to load z_to_embedding: {e}")
         
-        if not (variational_encoder_loaded or feature_extractor_loaded or latent_projection_loaded):
+        if not (variational_encoder_loaded or feature_extractor_loaded or latent_projection_loaded or z_to_embedding_loaded):
             logger.warning("No VPL components found in checkpoint. Using randomly initialized components.")
         
-        return variational_encoder, feature_extractor, latent_projection
+        return variational_encoder, feature_extractor, latent_projection, z_to_embedding
         
     except Exception as e:
         logger.error(f"Failed to load VPL components from checkpoint: {e}")
-        return None, None, None
+        return None, None, None, None
 
 
 def load_vpl_components_from_trainer(trainer):

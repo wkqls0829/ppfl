@@ -177,6 +177,16 @@ class LLMComparisonDataset(Dataset):
         ]
         df = pd.DataFrame(categories, columns=["category"])
         self.categories = list(pd.Categorical(df["category"]).codes)
+        
+        # Store z values from data (if available)
+        self.z_values = []
+        self.z_mu_values = []
+        self.z_logvar_values = []
+        for example in list_data_dict:
+            # Store z, z_mu, z_logvar if available
+            self.z_values.append(example.get('z', None))
+            self.z_mu_values.append(example.get('z_mu', None))
+            self.z_logvar_values.append(example.get('z_logvar', None))
 
         # super(LLMComparisonDataset, self).__init__(
         #     list_data_dict, tokenizer, prompt_input,
@@ -195,6 +205,16 @@ class LLMComparisonDataset(Dataset):
         return len(self.win_dataset)
 
     def __getitem__(self, i):
-        return dict(win_data=self.win_dataset[i],
-                    lose_data=self.lose_dataset[i],
-                    categories=self.categories[i])
+        result = dict(win_data=self.win_dataset[i],
+                     lose_data=self.lose_dataset[i],
+                     categories=self.categories[i])
+        
+        # Include z values if available
+        if i < len(self.z_values) and self.z_values[i] is not None:
+            result['z'] = self.z_values[i]
+        if i < len(self.z_mu_values) and self.z_mu_values[i] is not None:
+            result['z_mu'] = self.z_mu_values[i]
+        if i < len(self.z_logvar_values) and self.z_logvar_values[i] is not None:
+            result['z_logvar'] = self.z_logvar_values[i]
+        
+        return result

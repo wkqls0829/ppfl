@@ -63,6 +63,49 @@ class RewardChoiceTrainer(LLMTrainer):
         super()._hook_on_fit_start_init(ctx)
 
         ctx.ys_pred = CtxVar([], LIFECYCLE.ROUTINE)
+        
+        # Freeze base model for adapter-only training (similar to VPL trainer)
+        # FedBiscuit uses LoRA adapters, so base model should be frozen
+        freeze_base_model = getattr(ctx.cfg.llm, 'freeze_base_model', True)  # Default: True for adapter-only training
+        if freeze_base_model and ctx.cur_mode in [MODE.TRAIN, MODE.FINETUNE]:
+            model = getattr(ctx, 'model', None) or getattr(self, 'model', None)
+            if model is not None:
+                # Check if using PEFT/LoRA - PEFT automatically freezes base model
+                # Only freeze if NOT using PEFT
+                try:
+                    from peft import PeftModel
+                    is_peft = isinstance(model, PeftModel) or (hasattr(model, 'model') and isinstance(model.model, PeftModel))
+                    
+                    if is_peft:
+                        # PEFT automatically handles freezing - don't freeze manually
+                        logger.info("Using PEFT/LoRA - base model is automatically frozen by PEFT.")
+                    else:
+                        # Not using PEFT - manually freeze base model
+                        if hasattr(model, 'model'):  # Wrapped model
+                            base_model = model.model
+                            for param in base_model.parameters():
+                                param.requires_grad = False
+                            logger.info("Frozen base model parameters for adapter-only training (non-PEFT).")
+                        else:
+                            # Direct model - freeze all parameters
+                            for param in model.parameters():
+                                param.requires_grad = False
+                            logger.info("Frozen base model parameters for adapter-only training.")
+                except ImportError:
+                    # PEFT not available - manually freeze
+                    if hasattr(model, 'model'):
+                        base_model = model.model
+                        for param in base_model.parameters():
+                            param.requires_grad = False
+                        logger.info("Frozen base model parameters (PEFT not available).")
+                    else:
+                        for param in model.parameters():
+                            param.requires_grad = False
+                        logger.info("Frozen base model parameters.")
+                except Exception as e:
+                    logger.warning(f"Could not freeze base model: {e}")
+            else:
+                logger.warning("Model not available yet for freezing. Will freeze later if needed.")
 
     def _hook_on_batch_forward(self, ctx):
         if ctx.cfg.llm.accelerator.use:

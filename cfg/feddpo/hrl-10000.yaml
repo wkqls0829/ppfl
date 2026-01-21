@@ -7,7 +7,7 @@ federate:
   client_num: 1
   total_round_num: 30
   save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_feddpo_10000.ckpt"
-  save_freq: 50
+  save_freq: 20  # Same as recent experiments
   share_local_model: True
   online_aggr: False
 data:
@@ -23,21 +23,35 @@ llm:
   tok_len: 1024
   max_new_token: 512
   num_completions: 2
-  metrics: ['loss', 'acc']
-  best_res_update: False
-  grad_accum_step: 32  # Gradient accumulation for effective batch size
-  max_prompts_for_generation: 50  # Randomly sample 50 prompts per round
-  generation_batch_size: 3  # Batch size for text generation
+  accelerator:
+    use: False
+  chat:
+    max_len: 512
+  adapter:
+    use: True
+    count: 3
+    warmup:
+      use: True
+      round: 2
+    grouping:
+      use: False
+      round: 2
+    args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
   # Federated Direct Preference Optimization (FedDPO) parameters for RLHF
   # FedDPO is pure DPO for federated learning (baseline)
   # WITHOUT VPL, GP prior, or orthogonal loss
   # Direct Preference Optimization: https://arxiv.org/abs/2305.18290
   reward_coeff: 0.1  # DPO beta parameter (temperature)
-expname: hhrl/rlhf_gemma/hhrl_choice_gemma_fedbiscuit_u3_feddpo
+  grad_accum_step: 4  # Same as recent experiments (effective batch size = 1 * 4 = 4)
+  max_prompts_for_generation: 50
+  generation_batch_size: 3
+expname: feddpo_hrl_t10000
 trainer:
   type: llmdporewardtrainer  # Pure DPO trainer (no VPL)
 dataloader:
-  batch_size: 1  # Reduced to prevent OOM (effective batch size maintained via grad_accum_step=32)
+  batch_size: 1  # Small batch size for RL training (same as recent experiments)
+  num_workers: 4
+  pin_memory: True
 train:
   local_update_steps: 10
   batch_or_epoch: batch
@@ -46,14 +60,18 @@ train:
     betas: (0.9, 0.95)
     lr: 0.0001
   is_enable_half: True
+criterion:
+  type: CrossEntropyLoss
 eval:
-  freq: 1  # Evaluate every round
-  metrics: ['loss', 'acc', 'avg_harmlessness', 'avg_helpfulness']
+  freq: 5  # Same as recent experiments
+  metrics: ['loss', 'acc', 'avg_helpfulness', 'avg_harmlessness',
+            'helpfulness_winrate', 'harmlessness_winrate', 'avg_winlose_rate']
+  best_res_update_round_wise_key: train_avg_loss
   count_flops: False
-  max_samples_for_reward: 20
+  max_samples_for_reward: 100
 wandb:
   use: True
   name_user: ''
-  name_project: 'vpl-gp-rl'  # RL project for comparison
+  name_project: 'fvpl-rl'  # Same project as recent RL experiments
   online_track: True
   client_train_info: True

@@ -51,6 +51,18 @@ def extract_preference_features_for_variational(model, tokenizer, list_data_dict
         features: Extracted preference features (batch, feature_dim)
         hidden_states_list: List of hidden states for each sample
     """
+    # Ensure model is on the correct device
+    model_device = device
+    if hasattr(model, 'device'):
+        model_device = model.device
+    elif hasattr(model, 'base_model') and hasattr(model.base_model, 'device'):
+        model_device = model.base_model.device
+    else:
+        try:
+            model_device = next(model.parameters()).device
+        except:
+            model_device = device
+    
     # Create dataset
     dataset = LLMComparisonDataset(
         list_data_dict,
@@ -70,11 +82,11 @@ def extract_preference_features_for_variational(model, tokenizer, list_data_dict
     model.eval()
     with torch.no_grad():
         for data_batch in tqdm(dataloader, desc="Extracting preference features"):
-            # Get both win and lose inputs
-            win_input_ids = data_batch["win_input_ids"].to(device)
-            win_attention_mask = data_batch["win_attention_mask"].to(device)
-            lose_input_ids = data_batch["lose_input_ids"].to(device)
-            lose_attention_mask = data_batch["lose_attention_mask"].to(device)
+            # Get both win and lose inputs - move to model device
+            win_input_ids = data_batch["win_input_ids"].to(model_device)
+            win_attention_mask = data_batch["win_attention_mask"].to(model_device)
+            lose_input_ids = data_batch["lose_input_ids"].to(model_device)
+            lose_attention_mask = data_batch["lose_attention_mask"].to(model_device)
             
             # Get hidden states
             win_outputs = model(input_ids=win_input_ids, attention_mask=win_attention_mask, output_hidden_states=True)
@@ -136,12 +148,14 @@ def extract_preference_features_for_variational(model, tokenizer, list_data_dict
 def variational_better_response(list_data_dict, selector_model, selector_tokenizer, 
                                 variational_encoder, feature_extractor, prompt_template,
                                 choices, device='cuda:0', use_feature_difference=True,
-                                num_samples=1):
+                                num_samples=1, latent_projection=None, use_provided_z=False,
+                                z_to_embedding=None):
     """
     Use variational encoder to sample z and make conditional choices.
     
     Args:
         list_data_dict: List of data samples with output_A and output_B
+            If use_provided_z=True, samples may contain "z" field to use directly
         selector_model: Trained selector model (binary choice model)
         selector_tokenizer: Tokenizer
         variational_encoder: Trained VariationalEncoder or VariationalEncoderGP
@@ -152,23 +166,56 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
         use_feature_difference: Whether to use embedding difference
         num_samples: Number of z samples to draw per sample (for averaging)
         latent_projection: Projection layer from z to choice logits (from VPLRewardChoiceTrainer)
+        use_provided_z: If True, use z from data samples if available; otherwise infer from data
         
     Returns:
-        list_data_dict: Updated with "choice" field (0 for A, 1 for B)
+        list_data_dict: Updated with "choice" field (0 for A, 1 for B) and z values
     """
-    logger.info("Extracting preference features for variational selection...")
+    # Check if z values are provided in data
+    provided_z_list = []
+    if use_provided_z:
+        provided_z_list = [sample.get("z", None) for sample in list_data_dict]
+        num_provided = sum(1 for z in provided_z_list if z is not None)
+        if num_provided > 0:
+            logger.info(f"Using provided z values for {num_provided}/{len(list_data_dict)} samples")
+            # Convert provided z to tensors
+            provided_z_tensors = []
+            for z in provided_z_list:
+                if z is not None:
+                    if isinstance(z, list):
+                        z = torch.tensor(z, dtype=torch.float32).to(device)
+                    else:
+                        z = torch.tensor(z, dtype=torch.float32).to(device)
+                    provided_z_tensors.append(z)
+                else:
+                    provided_z_tensors.append(None)
+        else:
+            logger.info("No provided z values found, will infer from data")
+            use_provided_z = False
     
-    # Extract preference features
-    features, hidden_states_list = extract_preference_features_for_variational(
-        selector_model, selector_tokenizer, list_data_dict, prompt_template,
-        choices, device, use_feature_difference
-    )
-    
-    # Process features through feature extractor if provided
-    if feature_extractor is not None:
-        features = feature_extractor(features.to(device))
-    
-    logger.info(f"Extracted features shape: {features.shape}")
+    if not use_provided_z or num_provided < len(list_data_dict):
+        # Need to extract features and infer z for samples without provided z
+        logger.info("Extracting preference features for variational selection...")
+        
+        # Extract preference features
+        features, hidden_states_list = extract_preference_features_for_variational(
+            selector_model, selector_tokenizer, list_data_dict, prompt_template,
+            choices, device, use_feature_difference
+        )
+        
+        # Process features through feature extractor if provided
+        if feature_extractor is not None:
+            # Ensure feature_extractor is on the same device as features
+            feature_extractor_device = device
+            if hasattr(feature_extractor, 'parameters'):
+                try:
+                    feature_extractor_device = next(feature_extractor.parameters()).device
+                except:
+                    feature_extractor_device = device
+            features = features.to(feature_extractor_device)
+            features = feature_extractor(features)
+        
+        logger.info(f"Extracted features shape: {features.shape}")
     
     # Sample z from posterior q(z|x) using variational encoder
     variational_encoder.eval()
@@ -177,46 +224,94 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
     predicted_indices = []
     
     with torch.no_grad():
-        # Encode to get posterior parameters
-        mu, logvar = variational_encoder.encode(features.to(device))
+        if use_provided_z and num_provided == len(list_data_dict):
+            # Use provided z values directly
+            logger.info("Using all provided z values, skipping inference")
+            mu_cpu = None
+            logvar_cpu = None
+            all_z_samples = []
+            for z_tensor in provided_z_tensors:
+                if z_tensor is not None:
+                    all_z_samples.append([z_tensor.cpu().numpy()])
+                else:
+                    # Fallback: need to infer
+                    logger.warning("Some z values are None, falling back to inference")
+                    use_provided_z = False
+                    break
+            
+            if use_provided_z:
+                # All z provided, use them directly
+                z_mean = np.array([z[0] for z in all_z_samples])  # (batch, latent_dim)
+        else:
+            # Encode to get posterior parameters
+            # Ensure variational_encoder is on the same device as features
+            variational_encoder_device = device
+            if hasattr(variational_encoder, 'parameters'):
+                try:
+                    variational_encoder_device = next(variational_encoder.parameters()).device
+                except:
+                    variational_encoder_device = device
+            features = features.to(variational_encoder_device)
+            mu, logvar = variational_encoder.encode(features)
+            
+            # Store z distribution parameters (mu, logvar) for each sample
+            # Convert to CPU and numpy for JSON serialization
+            mu_cpu = mu.cpu().numpy()  # (batch, latent_dim)
+            logvar_cpu = logvar.cpu().numpy()  # (batch, latent_dim)
         
-        # Sample z multiple times and average predictions
-        all_predictions = []
-        
-        for sample_idx in range(num_samples):
-            # Sample z from posterior
-            z = variational_encoder.reparameterize(mu, logvar)  # (batch, latent_dim)
+            # Sample z multiple times and average predictions
+            all_predictions = []
+            all_z_samples = []  # Store z samples for each data point
             
-            # Create dataset for binary choice
-            dataset = LLMComparisonDataset(
-                list_data_dict,
-                selector_tokenizer,
-                prompt_input=prompt_template,
-                prompt_no_input=prompt_template,
-                output_A="output_A",
-                output_B="output_B",
-                choice="fake_choice",
-            )
-            dataloader = DataLoader(dataset, batch_size=4)
+            # Ensure selector_model is on the correct device (check once before loop)
+            selector_model_device = device
+            if hasattr(selector_model, 'device'):
+                selector_model_device = selector_model.device
+            elif hasattr(selector_model, 'base_model') and hasattr(selector_model.base_model, 'device'):
+                selector_model_device = selector_model.base_model.device
+            else:
+                try:
+                    selector_model_device = next(selector_model.parameters()).device
+                except:
+                    selector_model_device = device
             
-            batch_predictions = []
-            z_idx = 0  # Track z index across batches
+            for sample_idx in range(num_samples):
+                # Sample z from posterior
+                z = variational_encoder.reparameterize(mu, logvar)  # (batch, latent_dim)
+                # Ensure z is on selector_model_device
+                z = z.to(selector_model_device)
+                all_z_samples.append(z.cpu().numpy())  # Store z sample
             
-            for batch_idx, data_batch in enumerate(tqdm(dataloader, desc=f"Variational selection (sample {sample_idx+1}/{num_samples})")):
-                win_input_ids = data_batch["win_input_ids"].to(device)
-                win_labels = data_batch["win_labels"].to(device)
-                win_attention_mask = data_batch["win_attention_mask"].to(device)
-                lose_input_ids = data_batch["lose_input_ids"].to(device)
-                lose_labels = data_batch["lose_labels"].to(device)
-                lose_attention_mask = data_batch["lose_attention_mask"].to(device)
+                # Create dataset for binary choice
+                dataset = LLMComparisonDataset(
+                    list_data_dict,
+                    selector_tokenizer,
+                    prompt_input=prompt_template,
+                    prompt_no_input=prompt_template,
+                    output_A="output_A",
+                    output_B="output_B",
+                    choice="fake_choice",
+                )
+                dataloader = DataLoader(dataset, batch_size=4)
                 
-                batch_size = win_input_ids.shape[0]
-                z_batch = z[z_idx:z_idx + batch_size]  # Get z for this batch
-                z_idx += batch_size
+                batch_predictions = []
+                z_idx = 0  # Track z index across batches
                 
-                # Get logits for both responses
-                win_outputs = selector_model(input_ids=win_input_ids, attention_mask=win_attention_mask)
-                lose_outputs = selector_model(input_ids=lose_input_ids, attention_mask=lose_attention_mask)
+                for batch_idx, data_batch in enumerate(tqdm(dataloader, desc=f"Variational selection (sample {sample_idx+1}/{num_samples})")):
+                    win_input_ids = data_batch["win_input_ids"].to(selector_model_device)
+                    win_labels = data_batch["win_labels"].to(selector_model_device)
+                    win_attention_mask = data_batch["win_attention_mask"].to(selector_model_device)
+                    lose_input_ids = data_batch["lose_input_ids"].to(selector_model_device)
+                    lose_labels = data_batch["lose_labels"].to(selector_model_device)
+                    lose_attention_mask = data_batch["lose_attention_mask"].to(selector_model_device)
+                    
+                    batch_size = win_input_ids.shape[0]
+                    z_batch = z[z_idx:z_idx + batch_size]  # Get z for this batch (already on selector_model_device)
+                    z_idx += batch_size
+                
+                    # Get logits for both responses
+                    win_outputs = selector_model(input_ids=win_input_ids, attention_mask=win_attention_mask)
+                    lose_outputs = selector_model(input_ids=lose_input_ids, attention_mask=lose_attention_mask)
                 
                 win_logits = win_outputs.logits
                 lose_logits = lose_outputs.logits
@@ -231,15 +326,18 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
                 latent_dim = z_batch.shape[-1]
                 num_choices = len(choices)
                 
-                # Use provided latent_projection if available, otherwise create temporary one
-                if latent_projection is not None:
-                    z_projection = latent_projection(z_batch)  # (batch, num_choices)
-                else:
-                    # Create temporary projection (should be loaded from trainer)
-                    temp_projection = torch.nn.Linear(latent_dim, num_choices).to(device)
-                    torch.nn.init.normal_(temp_projection.weight, mean=0.0, std=0.01)
-                    torch.nn.init.zeros_(temp_projection.bias)
-                    z_projection = temp_projection(z_batch)
+                    # Use provided latent_projection if available, otherwise create temporary one
+                    if latent_projection is not None:
+                        # Ensure latent_projection is on the same device as z_batch
+                        if next(latent_projection.parameters()).device != z_batch.device:
+                            latent_projection = latent_projection.to(z_batch.device)
+                        z_projection = latent_projection(z_batch)  # (batch, num_choices)
+                    else:
+                        # Create temporary projection (should be loaded from trainer)
+                        temp_projection = torch.nn.Linear(latent_dim, num_choices).to(z_batch.device)
+                        torch.nn.init.normal_(temp_projection.weight, mean=0.0, std=0.01)
+                        torch.nn.init.zeros_(temp_projection.bias)
+                        z_projection = temp_projection(z_batch)
                 
                 # Get logits at choice positions
                 shift_win_logits = win_logits[..., :-1, :].contiguous()
@@ -291,22 +389,36 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
                     
                     batch_choices.append(choice)
                 
-                batch_predictions.extend(batch_choices)
+                    batch_predictions.extend(batch_choices)
+                
+                all_predictions.append(batch_predictions)
             
-            all_predictions.append(batch_predictions)
-        
-        # Average predictions across multiple z samples
-        if num_samples > 1:
-            all_predictions = torch.tensor(all_predictions)  # (num_samples, batch)
-            predicted_indices = all_predictions.mode(dim=0)[0].tolist()  # Majority vote
-        else:
-            predicted_indices = all_predictions[0]
+            # Average predictions across multiple z samples
+            if num_samples > 1:
+                all_predictions = torch.tensor(all_predictions)  # (num_samples, batch)
+                predicted_indices = all_predictions.mode(dim=0)[0].tolist()  # Majority vote
+                # Average z samples across multiple samples
+                all_z_samples = np.array(all_z_samples)  # (num_samples, batch, latent_dim)
+                z_mean = all_z_samples.mean(axis=0)  # (batch, latent_dim) - average z across samples
+            else:
+                predicted_indices = all_predictions[0]
+                z_mean = all_z_samples[0]  # (batch, latent_dim)
     
-    # Update data with choices
-    for choice, sample in zip(predicted_indices, list_data_dict):
+    # Update data with choices and z values
+    for idx, (choice, sample) in enumerate(zip(predicted_indices, list_data_dict)):
         sample["choice"] = choice
         sample.pop("fake_choice", None)
+        
+        # Store z distribution parameters and sampled z (if inferred)
+        if mu_cpu is not None and logvar_cpu is not None:
+            sample["z_mu"] = mu_cpu[idx].tolist()  # Posterior mean
+            sample["z_logvar"] = logvar_cpu[idx].tolist()  # Posterior log variance
+            sample["z"] = z_mean[idx].tolist()  # Sampled z (or averaged if num_samples > 1)
+        elif "z" not in sample:
+            # If z was provided and not inferred, keep the original z
+            logger.warning(f"Sample {idx} has no z value (neither provided nor inferred)")
     
     logger.info(f"Variational selection completed. Choices: {sum(predicted_indices)}/{len(predicted_indices)} chose B")
+    logger.info(f"Stored z values (mu, logvar, z) for {len(list_data_dict)} samples")
     
     return list_data_dict

@@ -61,15 +61,53 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
     
     # Plot z values colored by client
     unique_clients = sorted(set(client_labels))
-    colors = plt.cm.tab20(np.linspace(0, 1, len(unique_clients)))
-    client_color_map = {cid: colors[i % len(colors)] for i, cid in enumerate(unique_clients)}
+    
+    # Color mapping based on orthogonal labels (harmlessness=red, helpfulness=blue)
+    # If orthogonal_labels are available, use them; otherwise use default colors
+    client_color_map = {}
+    if orthogonal_labels is not None and len(orthogonal_labels) == len(client_labels):
+        # Map orthogonal labels to colors
+        for client_id in unique_clients:
+            client_mask = np.array(client_labels) == client_id
+            if client_mask.sum() > 0:
+                # Get the first orthogonal label for this client (all should be the same)
+                orth_label = orthogonal_labels[np.where(client_mask)[0][0]]
+                if orth_label == 0:  # Harmlessness -> red
+                    client_color_map[client_id] = '#d62728'  # Red
+                elif orth_label == 1:  # Helpfulness -> blue
+                    client_color_map[client_id] = '#1f77b4'  # Blue
+                else:
+                    # Default color for unlabeled
+                    client_color_map[client_id] = '#808080'  # Gray
+        # Fallback: use default colors if mapping failed
+        if len(client_color_map) < len(unique_clients):
+            colors = plt.cm.tab20(np.linspace(0, 1, len(unique_clients)))
+            for i, cid in enumerate(unique_clients):
+                if cid not in client_color_map:
+                    client_color_map[cid] = colors[i % len(colors)]
+    else:
+        # Default: use tab20 colormap
+        colors = plt.cm.tab20(np.linspace(0, 1, len(unique_clients)))
+        client_color_map = {cid: colors[i % len(colors)] for i, cid in enumerate(unique_clients)}
     
     for client_id in unique_clients:
         mask = np.array(client_labels) == client_id
         if mask.sum() > 0:
+            # Get orthogonal label for legend
+            if orthogonal_labels is not None and len(orthogonal_labels) == len(client_labels):
+                orth_label = orthogonal_labels[np.where(mask)[0][0]]
+                if orth_label == 0:
+                    label = f'Client {client_id} (Harmlessness)'
+                elif orth_label == 1:
+                    label = f'Client {client_id} (Helpfulness)'
+                else:
+                    label = f'Client {client_id}'
+            else:
+                label = f'Client {client_id}'
+            
             ax.scatter(z_2d[mask, 0], z_2d[mask, 1], 
                       c=[client_color_map[client_id]], 
-                      label=f'Client {client_id}',
+                      label=label,
                       alpha=0.6, s=50)
     
     # Plot orthogonal prototypes if available
