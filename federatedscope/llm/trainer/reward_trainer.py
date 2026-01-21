@@ -129,6 +129,9 @@ class DPORewardTrainer(LLMTrainer):
         self.z_to_embedding = None
         self.use_variational_generation = getattr(config.llm, 'rlhf_use_variational_generation', False)
         
+        # Storage for z values collection (for visualization)
+        self.collected_z_values = []
+        
         if self.use_variational_generation:
             logger.info("DPORewardTrainer: Variational generation enabled. Will load VPL components.")
 
@@ -331,6 +334,26 @@ class DPORewardTrainer(LLMTrainer):
                 z = torch.zeros(batch_size, vpl_latent_dim, device=ctx.device)
                 logger.debug("z not found in batch and input_ids not available, using zero z")
         
+        # Collect z values for visualization (store mean z per batch)
+        if z is not None and self.training:
+            # Store z values (detach to avoid gradient tracking)
+            z_detached = z.detach().cpu()
+            # Store mean z per batch (or all z values if batch is small)
+            if batch_size <= 4:
+                if isinstance(z_detached, torch.Tensor):
+                    self.collected_z_values.extend(z_detached.numpy())
+                else:
+                    self.collected_z_values.extend(z_detached)
+            else:
+                # For larger batches, store mean z
+                if isinstance(z_detached, torch.Tensor):
+                    mean_z = z_detached.mean(dim=0, keepdim=True)
+                    self.collected_z_values.extend(mean_z.numpy())
+                else:
+                    import numpy as np
+                    mean_z = np.mean(z_detached, axis=0, keepdims=True)
+                    self.collected_z_values.extend(mean_z)
+        
         return z
     
     def _inject_z_to_embeddings(self, ctx, input_ids, z):
@@ -510,9 +533,33 @@ class DPORewardTrainer(LLMTrainer):
         ctx.ys_true.append(ctx.y_true.detach().cpu().numpy())
         ctx.ys_pred.append(ctx.y_pred.detach().cpu().numpy())
 
+    def get_collected_z_values(self):
+        """Get collected z values for visualization."""
+        if len(self.collected_z_values) > 0:
+            import numpy as np
+            return np.array(self.collected_z_values)
+        return None
+    
+    def clear_collected_z_values(self):
+        """Clear collected z values."""
+        self.collected_z_values = []
+    
     def _hook_on_fit_end(self, ctx):
-        ctx.ys_true = CtxVar(np.concatenate(ctx.ys_true), LIFECYCLE.ROUTINE)
-        ctx.ys_pred = CtxVar(np.concatenate(ctx.ys_pred), LIFECYCLE.ROUTINE)
+        # Only concatenate if there are values (for evaluation, ys_true/ys_pred might be empty)
+        if len(ctx.ys_true) > 0:
+            ctx.ys_true = CtxVar(np.concatenate(ctx.ys_true), LIFECYCLE.ROUTINE)
+        else:
+            ctx.ys_true = CtxVar(np.array([]), LIFECYCLE.ROUTINE)
+        
+        if len(ctx.ys_pred) > 0:
+            ctx.ys_pred = CtxVar(np.concatenate(ctx.ys_pred), LIFECYCLE.ROUTINE)
+        else:
+            ctx.ys_pred = CtxVar(np.array([]), LIFECYCLE.ROUTINE)
+        
+        # Ensure tokenizer is available in ctx for evaluation metrics
+        if not hasattr(ctx, 'tokenizer') and hasattr(self, 'tokenizer'):
+            ctx.tokenizer = self.tokenizer
+        
         results = ctx.monitor.eval(ctx)
         setattr(ctx, 'eval_metrics', results)
 

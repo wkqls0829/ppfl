@@ -145,6 +145,11 @@ class RLHF_finetuning:
         self.generator_tokenizer = generator_tokenizer
         self.device = device
         self._monitor = Monitor(config, monitored_object=self)
+        
+        # Client-specific average z values (computed once and reused)
+        # {client_id: z_mu_tensor}
+        self.client_average_z_dict = None
+        self.num_clients = getattr(config.federate, 'client_num', 10)  # Default to 10 for hh-rlhf
 
     def load_pairwise_data(self):
         # Name of a file saving the generated texts of original model
@@ -155,17 +160,68 @@ class RLHF_finetuning:
             self.data_root,
             f"rlhf_pair_data_{model_name}_{dataset_name}_{num_comp}.json")
 
+        # Check if VPL model is being used (for conditional generation)
+        use_variational_generation = getattr(self.config.llm, 'rlhf_use_variational_generation', False)
+        is_vpl_model = False
+        
+        if use_variational_generation:
+            # Check if selector checkpoint has VPL components
+            selector_ckpt_path = getattr(self.config.llm, 'rlhf_selector_checkpoint', None)
+            if selector_ckpt_path is None:
+                selector_ckpt_path = getattr(self.config.llm, 'selector_save_to', None)
+            
+            if selector_ckpt_path and os.path.exists(selector_ckpt_path):
+                try:
+                    from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint
+                    variational_encoder, feature_extractor, _, _ = load_vpl_components_from_checkpoint(
+                        selector_ckpt_path, self.config, device=self.device
+                    )
+                    if variational_encoder is not None and feature_extractor is not None:
+                        is_vpl_model = True
+                        logger.info("VPL model detected. Will use conditional generation with client-specific z.")
+                except Exception as e:
+                    logger.debug(f"Could not load VPL components: {e}. Using standard generation.")
+        
+        # Assign client_id to prompts only for VPL models
+        if is_vpl_model:
+            # Divide prompts evenly among clients
+            num_clients = self.num_clients
+            prompts_with_client_id = []
+            for idx, prompt_data in enumerate(self.list_train_prompts):
+                # Assign client_id (1-indexed, matching federated setup)
+                client_id = (idx % num_clients) + 1
+                prompt_data_with_id = copy.deepcopy(prompt_data)
+                prompt_data_with_id['client_id'] = client_id
+                prompts_with_client_id.append(prompt_data_with_id)
+            
+            logger.info(f"Assigned {len(prompts_with_client_id)} prompts to {num_clients} clients "
+                       f"for conditional generation")
+        else:
+            # For non-VPL models, use prompts as-is (no client_id)
+            prompts_with_client_id = self.list_train_prompts
+            logger.info("Non-VPL model detected. Using standard generation (no client_id assignment).")
+
         if os.path.exists(gen_fp):
             # load the file with generated responses
             list_pairwise_data = json.load(open(gen_fp, "r"))
             logger.info("Successfully loaded the generated text "
                         f"from {gen_fp}")
-        else:
+            # For VPL models, ensure client_id is present in loaded data
+            if is_vpl_model and len(list_pairwise_data) > 0 and 'client_id' not in list_pairwise_data[0]:
+                logger.warning("Loaded pairwise data does not have client_id. "
+                              "Regenerating with client_id assignment.")
+                list_pairwise_data = None
+        
+        if not os.path.exists(gen_fp) or list_pairwise_data is None:
             # generate the output
-            logger.info("The generated text file does not exist. "
-                        "Create a new one.")
+            if is_vpl_model:
+                logger.info("The generated text file does not exist or needs regeneration. "
+                           "Create a new one with client_id assignment (VPL model).")
+            else:
+                logger.info("The generated text file does not exist. "
+                           "Create a new one (standard generation).")
             list_pairwise_data = self._generate_pairwise_data(
-                self.list_train_prompts,
+                prompts_with_client_id,  # Use prompts with/without client_id based on is_vpl_model
                 self.model,
                 self.generator_tokenizer,
                 self.generation_prompt,
@@ -176,6 +232,69 @@ class RLHF_finetuning:
             json.dump(list_pairwise_data, open(gen_fp, "w"))
             logger.info("The generation process is done, and save "
                         f"to {gen_fp}.")
+            
+            # Visualize client-specific average z values after generation (for VPL models)
+            if is_vpl_model and self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0:
+                try:
+                    from federatedscope.llm.llm_local.z_visualization import visualize_cross_client_z
+                    import numpy as np
+                    import torch
+                    
+                    logger.info("Visualizing client-specific average z values used for generation...")
+                    
+                    # Prepare z values and client labels
+                    z_values_list = []
+                    client_labels_list = []
+                    orthogonal_labels_list = []
+                    
+                    for client_id, z_mu in self.client_average_z_dict.items():
+                        if isinstance(z_mu, torch.Tensor):
+                            z_np = z_mu.cpu().numpy()
+                        else:
+                            z_np = np.array(z_mu)
+                        z_values_list.append(z_np)
+                        client_labels_list.append(client_id)
+                        
+                        # Assign orthogonal label based on client_id (first half = harmlessness, second half = helpfulness)
+                        num_clients = self.num_clients
+                        split_point = num_clients // 2
+                        if client_id <= split_point:
+                            orthogonal_labels_list.append(0)  # Harmlessness
+                        else:
+                            orthogonal_labels_list.append(1)  # Helpfulness
+                    
+                    if len(z_values_list) > 0:
+                        z_array = np.array(z_values_list)
+                        
+                        # Visualize
+                        output_dir = self.config.outdir
+                        wandb_project = getattr(self.config.wandb, 'name_project', None)
+                        
+                        visualize_cross_client_z(
+                            z_values=z_array,
+                            client_labels=client_labels_list,
+                            orthogonal_labels=orthogonal_labels_list,
+                            orthogonal_prototypes=None,
+                            round_num=-1,  # Use -1 to indicate "before training" / "generation"
+                            output_dir=output_dir,
+                            wandb_project=wandb_project
+                        )
+                        logger.info(f"Visualized {len(z_values_list)} client-specific average z values used for generation")
+                        
+                        # Log to WandB
+                        if self.config.wandb.use and self.config.wandb.online_track:
+                            try:
+                                import wandb
+                                generation_tsne_path = os.path.join(output_dir, 'cross_client_z_tsne_generation.png')
+                                if output_dir and os.path.exists(generation_tsne_path):
+                                    wandb.log({
+                                        'visualization/client_average_z_tsne_generation': wandb.Image(generation_tsne_path)
+                                    }, step=0)
+                                logger.info("Logged client average z t-SNE visualization to WandB (generation phase)")
+                            except Exception as e:
+                                logger.warning(f"Failed to log client average z visualization to WandB: {e}")
+                except Exception as e:
+                    logger.warning(f"Failed to visualize client average z values: {e}")
 
         return list_pairwise_data
 
@@ -260,6 +379,96 @@ class RLHF_finetuning:
 
         return list_preference_data
 
+    def _compute_client_average_z_from_training_data(self, selector_ckpt_path):
+        """
+        Compute client-specific average z from training data using selector model.
+        This is used when client average z is not available in checkpoint.
+        
+        Args:
+            selector_ckpt_path: Path to selector checkpoint
+        """
+        try:
+            from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint
+            import torch
+            
+            logger.info("Computing client-specific average z from training data...")
+            
+            # Load VPL components
+            variational_encoder, feature_extractor, _, _ = load_vpl_components_from_checkpoint(
+                selector_ckpt_path, self.config, device=self.device
+            )
+            
+            if variational_encoder is None or feature_extractor is None:
+                logger.warning("Cannot compute client average z: VPL components not available")
+                return
+            
+            # Group prompts by client_id
+            client_prompts = {i: [] for i in range(1, self.num_clients + 1)}
+            for prompt_data in self.list_train_prompts:
+                client_id = prompt_data.get('client_id', None)
+                if client_id is None:
+                    # Assign client_id if not present
+                    idx = self.list_train_prompts.index(prompt_data)
+                    client_id = (idx % self.num_clients) + 1
+                if 1 <= client_id <= self.num_clients:
+                    client_prompts[client_id].append(prompt_data)
+            
+            # Compute average z for each client
+            self.client_average_z_dict = {}
+            variational_encoder.eval()
+            feature_extractor.eval()
+            
+            with torch.no_grad():
+                for client_id, prompts in client_prompts.items():
+                    if len(prompts) == 0:
+                        continue
+                    
+                    # Sample a subset of prompts for efficiency (max 100 per client)
+                    max_samples = min(100, len(prompts))
+                    sampled_prompts = prompts[:max_samples]
+                    
+                    # Extract features and compute z for each prompt
+                    z_list = []
+                    for prompt_data in sampled_prompts:
+                        prompt_text = self.generation_prompt.format_map(prompt_data)
+                        input_tokens = self.generator_tokenizer(
+                            prompt_text,
+                            padding=True,
+                            add_special_tokens=True,
+                            return_tensors="pt",
+                        )
+                        input_ids = input_tokens['input_ids'].to(self.device)
+                        attention_mask = input_tokens['attention_mask'].to(self.device)
+                        
+                        # Get embeddings
+                        if hasattr(self.model, 'get_input_embeddings'):
+                            input_embeddings = self.model.get_input_embeddings()(input_ids)
+                        else:
+                            # Fallback: use selector model
+                            input_embeddings = self.selector_model.get_input_embeddings()(input_ids)
+                        
+                        # Pool embeddings
+                        mask = attention_mask.unsqueeze(-1).float()
+                        pooled_embeddings = (input_embeddings * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+                        
+                        # Extract features and encode to z
+                        features = feature_extractor(pooled_embeddings)
+                        z_mu, z_logvar = variational_encoder.encode(features)
+                        z_list.append(z_mu)
+                    
+                    if len(z_list) > 0:
+                        # Average z for this client
+                        z_stack = torch.stack(z_list)
+                        avg_z = z_stack.mean(dim=0)  # (latent_dim,)
+                        self.client_average_z_dict[client_id] = avg_z
+                        logger.debug(f"Computed average z for client {client_id}: shape {avg_z.shape}")
+            
+            logger.info(f"Computed average z for {len(self.client_average_z_dict)} clients from training data")
+            
+        except Exception as e:
+            logger.error(f"Failed to compute client average z from training data: {e}")
+            self.client_average_z_dict = None
+
     def train(self, saveto=None, early_exiting=False):
         if saveto is None:
             _, saveto = os.path.split(self.config.federate.save_to)
@@ -282,7 +491,28 @@ class RLHF_finetuning:
             output_B="output_B",
             choice="choice",
         )
-        data = ClientData(self.config, train_dataset, None, None)
+        
+        # Create DataLoader directly instead of using ClientData
+        # to avoid initialization issues with ClientData's __init__
+        from torch.utils.data import DataLoader
+        from federatedscope.llm.dataloader import LLMRewardCollator
+        
+        data_collator = LLMRewardCollator(tokenizer=self.tokenizer)
+        train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=self.config.dataloader.batch_size,
+            shuffle=self.config.dataloader.shuffle,
+            num_workers=self.config.dataloader.num_workers,
+            collate_fn=data_collator,
+            pin_memory=self.config.dataloader.pin_memory,
+        )
+        
+        # Create data dict compatible with trainer expectations
+        data = {
+            'train': train_dataloader,
+            'val': None,
+            'test': None,
+        }
 
         # create DPO trainer
         self.trainer = DPORewardTrainer(
@@ -294,6 +524,107 @@ class RLHF_finetuning:
             monitor=self._monitor,
         )
 
+        # Load test data for evaluation
+        # Use original hh-rlhf test data for evaluation
+        # Directly load test data from datasets (don't rely on load_hh_rlhf_for_rlhf which returns None for test when raw_no_prompt=True)
+        test_dataset = None
+        try:
+            # Load original test data with chosen/rejected pairs
+            import datasets
+            from federatedscope.llm.dataloader.hh_rlhf import parse_dialogue
+            
+            logger.info("Loading test data from hh-rlhf dataset for evaluation...")
+            harmless_test = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="harmless-base", split='test')
+            helpful_test = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base", split='test')
+            combined_test = datasets.concatenate_datasets([harmless_test, helpful_test])
+            
+            # Limit to max_samples_for_reward
+            max_test_samples = getattr(self.config.eval, 'max_samples_for_reward', 30)
+            if max_test_samples > 0 and len(combined_test) > max_test_samples:
+                combined_test = combined_test.select(range(max_test_samples))
+            
+            # Convert to comparison format
+            # Assign client_id only for VPL models (for conditional generation)
+            list_test_dict = []
+            use_variational_generation = getattr(self.config.llm, 'rlhf_use_variational_generation', False)
+            is_vpl_model = False
+            
+            if use_variational_generation:
+                # Check if selector checkpoint has VPL components
+                selector_ckpt_path = getattr(self.config.llm, 'rlhf_selector_checkpoint', None)
+                if selector_ckpt_path is None:
+                    selector_ckpt_path = getattr(self.config.llm, 'selector_save_to', None)
+                
+                if selector_ckpt_path and os.path.exists(selector_ckpt_path):
+                    try:
+                        from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint
+                        variational_encoder, feature_extractor, _, _ = load_vpl_components_from_checkpoint(
+                            selector_ckpt_path, self.config, device=self.device
+                        )
+                        if variational_encoder is not None and feature_extractor is not None:
+                            is_vpl_model = True
+                    except Exception:
+                        pass
+            
+            num_clients = self.num_clients if is_vpl_model else 1
+            for idx, example in enumerate(combined_test):
+                prompt, chosen = parse_dialogue(example['chosen'])
+                _, rejected = parse_dialogue(example['rejected'])
+                if prompt and chosen and rejected:
+                    test_sample = {
+                        'prompt': prompt,
+                        'output_A': chosen,
+                        'output_B': rejected,
+                        'choice': 0,  # chosen (A) is better
+                    }
+                    # Assign client_id only for VPL models
+                    if is_vpl_model:
+                        client_id = (idx % num_clients) + 1
+                        test_sample['client_id'] = client_id
+                    list_test_dict.append(test_sample)
+            
+            if is_vpl_model:
+                logger.info(f"Assigned {len(list_test_dict)} test samples to {num_clients} clients "
+                           f"for conditional generation (VPL model)")
+            else:
+                logger.info(f"Loaded {len(list_test_dict)} test samples (standard generation, no client_id)")
+            
+            if len(list_test_dict) > 0:
+                test_dataset = LLMComparisonDataset(
+                    list_test_dict,
+                    self.tokenizer,
+                    prompt_input=self.generation_prompt,
+                    prompt_no_input=self.generation_prompt,
+                    output_A="output_A",
+                    output_B="output_B",
+                    choice="choice",
+                )
+                
+                test_dataloader = DataLoader(
+                    test_dataset,
+                    batch_size=self.config.dataloader.batch_size,
+                    shuffle=False,  # Don't shuffle test data
+                    num_workers=self.config.dataloader.num_workers,
+                    collate_fn=data_collator,
+                    pin_memory=self.config.dataloader.pin_memory,
+                )
+                
+                # Update data dict with test loader
+                data['test'] = test_dataloader
+                # Update trainer's data
+                self.trainer.data = data
+                self.trainer.ctx.test_loader = test_dataloader
+                logger.info(f"Loaded {len(list_test_dict)} test samples for evaluation")
+            else:
+                logger.warning("Test dataset is empty or could not be created. Test evaluation will be skipped.")
+        except Exception as e:
+            logger.error(f"Failed to load test data: {e}. Test evaluation will be skipped.")
+        
+        # Initialize z values storage for visualization
+        z_values_list = []
+        z_mu_list = []
+        z_logvar_list = []
+        
         # start training
         for r in range(self.config.federate.total_round_num):
             logger.info("----------- Starting a new RLHF training round "
@@ -304,6 +635,146 @@ class RLHF_finetuning:
                                                           role="Server",
                                                           return_raw=True)
             logger.info(train_log_res)
+            
+            # Filter train results: only keep loss, remove winrate and reward model scores
+            train_log_res_filtered = train_log_res.copy()
+            if 'Results_raw' in train_log_res_filtered:
+                train_results = train_log_res_filtered['Results_raw']
+                # Keep only loss-related metrics
+                keys_to_remove = [
+                    'train_helpfulness_winrate', 'train_harmlessness_winrate', 
+                    'train_avg_winlose_rate', 'train_avg_helpfulness', 
+                    'train_avg_harmlessness'
+                ]
+                for key in keys_to_remove:
+                    train_results.pop(key, None)
+                train_log_res_filtered['Results_raw'] = train_results
+            
+            # Save filtered train results to WandB (only loss)
+            if self.config.wandb.use and self.config.wandb.online_track:
+                self._monitor.save_formatted_results(train_log_res_filtered, save_file_name="")
+            
+            # Collect z values for visualization (if variational generation is enabled)
+            if (hasattr(self.trainer, 'use_variational_generation') and 
+                self.trainer.use_variational_generation and
+                hasattr(self.trainer, 'variational_encoder') and
+                self.trainer.variational_encoder is not None):
+                # Collect z values from trainer
+                try:
+                    if hasattr(self.trainer, 'get_collected_z_values'):
+                        z_vals = self.trainer.get_collected_z_values()
+                        if z_vals is not None and len(z_vals) > 0:
+                            if isinstance(z_vals, torch.Tensor):
+                                z_vals = z_vals.cpu().numpy()
+                            z_values_list.extend(z_vals)
+                            logger.info(f"Round {r}: Collected {len(z_vals)} z values for visualization (total: {len(z_values_list)})")
+                            # Clear collected z values after collecting
+                            if hasattr(self.trainer, 'clear_collected_z_values'):
+                                self.trainer.clear_collected_z_values()
+                except Exception as e:
+                    logger.debug(f"Could not collect z values in round {r}: {e}")
+            
+            # Evaluate on test split if available
+            # Check both data dict and trainer's data dict
+            test_available = (data.get('test') is not None) or (hasattr(self.trainer, 'data') and self.trainer.data.get('test') is not None)
+            if test_available and (r + 1) % self.config.eval.freq == 0:
+                logger.info("----------- Evaluating on test split -------------")
+                # Ensure test_loader is set in ctx
+                if hasattr(self.trainer, 'data') and 'test' in self.trainer.data:
+                    self.trainer.ctx.test_loader = self.trainer.data['test']
+                elif 'test' in data:
+                    self.trainer.ctx.test_loader = data['test']
+                
+                test_results = self.trainer.evaluate(target_data_split_name="test")
+                if test_results is None:
+                    # If evaluate returns None, try to get eval_metrics from ctx
+                    test_results = getattr(self.trainer.ctx, 'eval_metrics', {})
+                
+                if test_results:
+                    test_log_res = self._monitor.format_eval_res(test_results,
+                                                                 rnd=r,
+                                                                 role="Server",
+                                                                 return_raw=True)
+                    logger.info(test_log_res)
+                else:
+                    logger.warning(f"Round {r+1}: Test evaluation returned no results.")
+                    test_log_res = None
+                
+                # Save test results to WandB
+                if test_log_res and self.config.wandb.use and self.config.wandb.online_track:
+                    self._monitor.save_formatted_results(test_log_res, save_file_name="")
+            elif (r + 1) % self.config.eval.freq == 0:
+                logger.warning(f"Round {r+1}: Test data not available for evaluation. Skipping test evaluation.")
+            
+            # Visualize z values periodically (every 5 rounds or at the end)
+            if (len(z_values_list) > 0 and 
+                ((r + 1) % 5 == 0 or r == self.config.federate.total_round_num - 1)):
+                try:
+                    from federatedscope.llm.llm_local.z_visualization import visualize_cross_client_z
+                    import numpy as np
+                    import matplotlib.pyplot as plt
+                    
+                    # For standalone RL, we only have one "client" (the server)
+                    # Create client labels (all 1 for standalone)
+                    client_labels = [1] * len(z_values_list)
+                    
+                    # Convert to numpy array
+                    z_array = np.array(z_values_list)
+                    
+                    # Visualize t-SNE
+                    output_dir = self.config.outdir
+                    wandb_project = getattr(self.config.wandb, 'name_project', None)
+                    
+                    visualize_cross_client_z(
+                        z_values=z_array,
+                        client_labels=client_labels,
+                        orthogonal_labels=None,  # No orthogonal labels in standalone RL
+                        orthogonal_prototypes=None,
+                        round_num=r,
+                        output_dir=output_dir,
+                        wandb_project=wandb_project
+                    )
+                    logger.info(f"Round {r}: Generated t-SNE visualization with {len(z_values_list)} z values")
+                    
+                    # Log z statistics to WandB
+                    if self.config.wandb.use and self.config.wandb.online_track:
+                        try:
+                            import wandb
+                            
+                            # Calculate statistics
+                            z_mean = np.mean(z_array, axis=0)
+                            z_std = np.std(z_array, axis=0)
+                            z_norm = np.linalg.norm(z_array, axis=1)
+                            
+                            # Log statistics
+                            wandb_metrics = {
+                                f'z_stats/mean_norm': np.mean(z_norm),
+                                f'z_stats/std_norm': np.std(z_norm),
+                                f'z_stats/mean_dim_0': float(z_mean[0]) if len(z_mean) > 0 else 0.0,
+                                f'z_stats/std_dim_0': float(z_std[0]) if len(z_std) > 0 else 0.0,
+                                f'z_stats/num_values': len(z_values_list),
+                            }
+                            
+                            # Log histogram of z norms
+                            fig_hist, ax_hist = plt.subplots(figsize=(8, 6))
+                            ax_hist.hist(z_norm, bins=30, alpha=0.7, edgecolor='black')
+                            ax_hist.set_xlabel('||z|| (L2 norm)', fontsize=12)
+                            ax_hist.set_ylabel('Frequency', fontsize=12)
+                            ax_hist.set_title(f'Distribution of z Norms (Round {r})', fontsize=14)
+                            ax_hist.grid(True, alpha=0.3)
+                            plt.tight_layout()
+                            
+                            wandb_metrics[f'z_stats/z_norm_histogram'] = wandb.Image(fig_hist)
+                            
+                            wandb.log(wandb_metrics, step=r)
+                            plt.close(fig_hist)
+                            
+                            logger.info(f"Round {r}: Logged z statistics to WandB")
+                        except Exception as e:
+                            logger.warning(f"Failed to log z statistics to WandB: {e}")
+                            
+                except Exception as e:
+                    logger.warning(f"Failed to visualize z values in round {r}: {e}")
             # Save the checkpoint
             if (r + 1) % self.config.federate.save_freq == 0:
                 if saveto in self.config.federate.save_to:
@@ -339,20 +810,39 @@ class RLHF_finetuning:
         use_variational_generation = getattr(self.config.llm, 'rlhf_use_variational_generation', False)
         z_to_embedding = None
         
-        if use_variational_generation:
-            from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint
+        # Load client average z once and reuse (if not already loaded)
+        if use_variational_generation and self.client_average_z_dict is None:
+            from federatedscope.llm.rlhf.load_vpl_components import (
+                load_vpl_components_from_checkpoint,
+                load_client_average_z_from_checkpoint
+            )
             selector_ckpt_path = getattr(self.config.llm, 'rlhf_selector_checkpoint', None)
             if selector_ckpt_path is None:
                 selector_ckpt_path = getattr(self.config.llm, 'selector_save_to', None)
             
             if selector_ckpt_path and os.path.exists(selector_ckpt_path):
-                logger.info(f"Loading z_to_embedding for generation from {selector_ckpt_path}")
+                logger.info(f"Loading z_to_embedding and client average z for generation from {selector_ckpt_path}")
                 _, _, _, z_to_embedding = load_vpl_components_from_checkpoint(
                     selector_ckpt_path, self.config, device=self.device
                 )
                 if z_to_embedding is None:
                     logger.warning("Failed to load z_to_embedding. Generation will not use z.")
                     use_variational_generation = False
+                else:
+                    # Load client-specific average z values from training data (compute once, reuse)
+                    self.client_average_z_dict = load_client_average_z_from_checkpoint(
+                        selector_ckpt_path, device=self.device
+                    )
+                    if self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0:
+                        logger.info(f"Loaded average z for {len(self.client_average_z_dict)} clients. "
+                                   f"Will use client-specific z for conditional generation.")
+                    else:
+                        logger.warning("No client average z found in checkpoint. Will compute from training data.")
+                        # If not in checkpoint, compute from training data
+                        self._compute_client_average_z_from_training_data(selector_ckpt_path)
+        
+        # Use stored client_average_z_dict
+        client_average_z_dict = self.client_average_z_dict
 
         new_list_data_dict = []
         for input_data in get_input_data(list_data_dict):
@@ -385,19 +875,53 @@ class RLHF_finetuning:
 
             # Step 3: Inject z into embeddings for generation
             if use_variational_generation and z_to_embedding is not None:
-                # Get z from data or infer (Step 4)
+                # Priority 1: Use client-specific average z from training data (if available)
+                # Priority 2: Use z from data (if already generated in previous rounds)
+                # Priority 3: Use overall average z (for standalone mode)
+                # Priority 4: Infer z from input (fallback)
+                
                 z = None
-                # Try to get z from data
-                if 'z' in input_data[0]:
+                batch_size = len(input_data)
+                
+                # Priority 1: Try to use client-specific average z
+                if client_average_z_dict is not None and len(client_average_z_dict) > 0:
+                    z_list = []
+                    for data in input_data:
+                        # Check if data has client_id
+                        client_id = data.get('client_id', None)
+                        if client_id is not None and client_id in client_average_z_dict:
+                            # Use client-specific average z
+                            z_list.append(client_average_z_dict[client_id])
+                        else:
+                            # Use overall average z (average of all clients)
+                            all_z_mus = torch.stack(list(client_average_z_dict.values()))
+                            overall_avg_z = all_z_mus.mean(dim=0)
+                            z_list.append(overall_avg_z)
+                    
+                    if len(z_list) == batch_size:
+                        z = torch.stack(z_list).to(self.device)
+                        logger.debug(f"Using client-specific average z for generation: shape {z.shape}")
+                
+                # Priority 2: Try to get z from data (if already generated)
+                if z is None and 'z' in input_data[0]:
                     z_list = [data.get('z', None) for data in input_data]
                     if all(z_val is not None for z_val in z_list):
                         z = torch.stack([
                             torch.tensor(z_val) if not isinstance(z_val, torch.Tensor) else z_val
                             for z_val in z_list
                         ]).to(self.device)
+                        logger.debug(f"Using z from data: shape {z.shape}")
                 
-                # If z not in data, infer from input (Step 4)
+                # Priority 3: Use overall average z (if client_average_z_dict available but no client_id)
+                if z is None and client_average_z_dict is not None and len(client_average_z_dict) > 0:
+                    all_z_mus = torch.stack(list(client_average_z_dict.values()))
+                    overall_avg_z = all_z_mus.mean(dim=0)  # (latent_dim,)
+                    z = overall_avg_z.unsqueeze(0).repeat(batch_size, 1).to(self.device)  # (batch_size, latent_dim)
+                    logger.debug(f"Using overall average z for generation: shape {z.shape}")
+                
+                # Priority 4: Infer z from input (fallback - not recommended)
                 if z is None:
+                    logger.warning("No client average z available. Inferring z from input (this is less accurate).")
                     # Use feature_extractor and variational_encoder to infer z
                     from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint
                     variational_encoder, feature_extractor, _, _ = load_vpl_components_from_checkpoint(

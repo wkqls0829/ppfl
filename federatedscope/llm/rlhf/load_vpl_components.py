@@ -185,3 +185,72 @@ def load_vpl_components_from_trainer(trainer):
     latent_projection = trainer.latent_projection if hasattr(trainer, 'latent_projection') else None
     
     return variational_encoder, feature_extractor, latent_projection
+
+
+def load_client_average_z_from_checkpoint(checkpoint_path, device='cuda:0'):
+    """
+    Load client-specific average z values (z_mu) from a selector checkpoint.
+    These are the average z values computed from training data for each client.
+    
+    Args:
+        checkpoint_path: Path to the checkpoint file
+        device: Device to load tensors on
+        
+    Returns:
+        dict: {client_id: z_mu_tensor} or None if not found
+    """
+    if not os.path.exists(checkpoint_path):
+        logger.warning(f"Checkpoint not found: {checkpoint_path}")
+        return None
+    
+    try:
+        ckpt = torch.load(checkpoint_path, map_location=device)
+        
+        # Check if checkpoint has client z distributions
+        if 'client_z_mus' in ckpt:
+            # New format: dictionary of client_id -> z_mu
+            client_z_mus = ckpt['client_z_mus']
+            if isinstance(client_z_mus, dict):
+                # Convert to tensors if needed
+                result = {}
+                for client_id, z_mu in client_z_mus.items():
+                    if isinstance(z_mu, torch.Tensor):
+                        result[client_id] = z_mu.to(device)
+                    elif isinstance(z_mu, list):
+                        result[client_id] = torch.tensor(z_mu, dtype=torch.float32, device=device)
+                    else:
+                        result[client_id] = torch.tensor(z_mu, dtype=torch.float32, device=device)
+                logger.info(f"Loaded average z for {len(result)} clients from checkpoint")
+                return result
+        
+        # Fallback: try to extract from model state dict (if stored there)
+        model_state_dict = ckpt.get('model', ckpt)
+        client_z_mus = {}
+        
+        # Look for keys like 'client_1_z_mu', 'client_2_z_mu', etc.
+        for key, value in model_state_dict.items():
+            if 'client_' in key and '_z_mu' in key:
+                # Extract client ID from key (e.g., 'client_1_z_mu' -> 1)
+                try:
+                    parts = key.split('_')
+                    if len(parts) >= 3 and parts[0] == 'client':
+                        client_id = int(parts[1])
+                        if isinstance(value, torch.Tensor):
+                            client_z_mus[client_id] = value.to(device)
+                        elif isinstance(value, list):
+                            client_z_mus[client_id] = torch.tensor(value, dtype=torch.float32, device=device)
+                        else:
+                            client_z_mus[client_id] = torch.tensor(value, dtype=torch.float32, device=device)
+                except (ValueError, IndexError):
+                    continue
+        
+        if len(client_z_mus) > 0:
+            logger.info(f"Loaded average z for {len(client_z_mus)} clients from checkpoint (fallback method)")
+            return client_z_mus
+        
+        logger.warning("No client average z found in checkpoint. Will infer z from input during generation.")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Failed to load client average z from checkpoint: {e}")
+        return None

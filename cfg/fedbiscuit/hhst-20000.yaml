@@ -65,6 +65,6 @@ expname: fedbiscuit_hhst_t20000
 wandb:
   use: True
   name_user: ''
-  name_project: 'vpl-gp-selector'
+  name_project: 'fvpl-selector'
   online_track: True
   client_train_info: True

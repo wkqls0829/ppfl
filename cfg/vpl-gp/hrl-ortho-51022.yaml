@@ -73,7 +73,7 @@ eval:
             'helpfulness_winrate', 'harmlessness_winrate', 'avg_winlose_rate']  # RL: drop VPL losses, add avg win/lose
   best_res_update_round_wise_key: train_avg_loss  # Use train_avg_loss instead of val_avg_loss
   count_flops: False
-  max_samples_for_reward: 100
+  max_samples_for_reward: 30  # Reduced from 100 to speed up evaluation
 expname: vplgp_hrl_ortho_t51022
 wandb:
   use: True

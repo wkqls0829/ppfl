@@ -173,7 +173,7 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
         logger.warning(f"Could not load original data for {metric_name} winrate evaluation")
         return {}
     
-    max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 100)
+    max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 30)
     if max_eval_samples <= 0:
         max_eval_samples = float('inf')
     
@@ -299,7 +299,7 @@ def _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name="w
     
     all_choices = []  # Store choices made by model (0 for A, 1 for B)
     
-    max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 100)
+    max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 30)
     if max_eval_samples <= 0:
         max_eval_samples = float('inf')
     
@@ -420,6 +420,11 @@ def _get_harmlessness_winrate_scores(ctx):
 # --- Metric 1: Helpfulness Winrate ---
 def eval_helpfulness_winrate(ctx, **kwargs):
     """Evaluate helpfulness winrate using win-lose comparison."""
+    # Only compute winrate for test/val splits, not for train split
+    cur_split = getattr(ctx, 'cur_split', 'train')
+    if cur_split == 'train':
+        return 0.0
+    
     # Check dataset type - only for HRL
     dataset_type = getattr(ctx.cfg.data, 'type', '').lower()
     if 'hh-rlhf' not in dataset_type and 'hrl' not in dataset_type:
@@ -448,6 +453,11 @@ def register_helpfulness_winrate_metric(types):
 # --- Metric 2: Harmlessness Winrate ---
 def eval_harmlessness_winrate(ctx, **kwargs):
     """Evaluate harmlessness winrate using win-lose comparison."""
+    # Only compute winrate for test/val splits, not for train split
+    cur_split = getattr(ctx, 'cur_split', 'train')
+    if cur_split == 'train':
+        return 0.0
+    
     # Check dataset type - only for HRL
     dataset_type = getattr(ctx.cfg.data, 'type', '').lower()
     if 'hh-rlhf' not in dataset_type and 'hrl' not in dataset_type:
@@ -478,7 +488,13 @@ def eval_avg_winlose_rate(ctx, **kwargs):
     """
     Average of helpfulness and harmlessness winrates (non-zero entries only).
     For HRL datasets only.
+    Only computed for test/val splits, not for train split.
     """
+    # Only compute winrate for test/val splits, not for train split
+    cur_split = getattr(ctx, 'cur_split', 'train')
+    if cur_split == 'train':
+        return 0.0
+    
     dataset_type = getattr(ctx.cfg.data, 'type', '').lower()
     if 'hh-rlhf' not in dataset_type and 'hrl' not in dataset_type:
         return 0.0

@@ -177,12 +177,17 @@ def eval_correct(y_true, y_pred, **kwargs):
 
 
 def eval_acc(y_true, y_pred, **kwargs):
+    if y_true.size == 0 or y_pred.size == 0:
+        return 0.0
     acc_list = []
 
     for i in range(y_true.shape[1]):
         is_labeled = y_true[:, i] == y_true[:, i]
         correct = y_true[is_labeled, i] == y_pred[is_labeled, i]
-        acc_list.append(float(np.sum(correct)) / len(correct))
+        if len(correct) > 0:
+            acc_list.append(float(np.sum(correct)) / len(correct))
+    if len(acc_list) == 0:
+        return 0.0
     return sum(acc_list) / len(acc_list)
 
 
@@ -258,6 +263,8 @@ def eval_loss(ctx, **kwargs):
 
 
 def eval_avg_loss(ctx, **kwargs):
+    if ctx.num_samples == 0:
+        return 0.0
     return ctx.loss_batch_total / ctx.num_samples
 
 

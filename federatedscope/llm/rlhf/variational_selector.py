@@ -297,6 +297,11 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
                 batch_predictions = []
                 z_idx = 0  # Track z index across batches
                 
+                # Project z to choice logits (similar to VPLRewardChoiceTrainer)
+                # latent_projection should be provided as a separate parameter
+                latent_dim = z.shape[-1]
+                num_choices = len(choices)
+                
                 for batch_idx, data_batch in enumerate(tqdm(dataloader, desc=f"Variational selection (sample {sample_idx+1}/{num_samples})")):
                     win_input_ids = data_batch["win_input_ids"].to(selector_model_device)
                     win_labels = data_batch["win_labels"].to(selector_model_device)
@@ -313,18 +318,13 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
                     win_outputs = selector_model(input_ids=win_input_ids, attention_mask=win_attention_mask)
                     lose_outputs = selector_model(input_ids=lose_input_ids, attention_mask=lose_attention_mask)
                 
-                win_logits = win_outputs.logits
-                lose_logits = lose_outputs.logits
+                    win_logits = win_outputs.logits
+                    lose_logits = lose_outputs.logits
                 
-                # Condition on z: project z to choice logits and add to model logits
-                # Option 1: Add z-conditioned bias to choice token logits
-                # Option 2: Scale logits based on z
-                # We'll use Option 1: project z to choice space and add as bias
-                
-                # Project z to choice logits (similar to VPLRewardChoiceTrainer)
-                # latent_projection should be provided as a separate parameter
-                latent_dim = z_batch.shape[-1]
-                num_choices = len(choices)
+                    # Condition on z: project z to choice logits and add to model logits
+                    # Option 1: Add z-conditioned bias to choice token logits
+                    # Option 2: Scale logits based on z
+                    # We'll use Option 1: project z to choice space and add as bias
                 
                     # Use provided latent_projection if available, otherwise create temporary one
                     if latent_projection is not None:
@@ -339,55 +339,55 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
                         torch.nn.init.zeros_(temp_projection.bias)
                         z_projection = temp_projection(z_batch)
                 
-                # Get logits at choice positions
-                shift_win_logits = win_logits[..., :-1, :].contiguous()
-                shift_lose_logits = lose_logits[..., :-1, :].contiguous()
-                shift_win_labels = win_labels[..., 1:].contiguous()
-                shift_lose_labels = lose_labels[..., 1:].contiguous()
-                
-                # Extract choice logits
-                win_choice_logits = shift_win_logits[..., choices]  # (batch, seq_len-1, num_choices)
-                lose_choice_logits = shift_lose_logits[..., choices]
-                
-                # Find choice token positions
-                A_token, B_token = choices[0], choices[1]
-                
-                batch_choices = []
-                for b in range(batch_size):
-                    # Find A and B positions in win (output_A)
-                    win_A_pos = (shift_win_labels[b] == A_token)
-                    win_B_pos = (shift_win_labels[b] == B_token)
-                    
-                    # Find A and B positions in lose (output_B)
-                    lose_A_pos = (shift_lose_labels[b] == A_token)
-                    lose_B_pos = (shift_lose_labels[b] == B_token)
-                    
                     # Get logits at choice positions
-                    if win_A_pos.any():
-                        win_A_logit = win_choice_logits[b, win_A_pos, 0].mean()  # Choice 0 = A
-                    else:
-                        win_A_logit = win_choice_logits[b, :, 0].mean()
+                    shift_win_logits = win_logits[..., :-1, :].contiguous()
+                    shift_lose_logits = lose_logits[..., :-1, :].contiguous()
+                    shift_win_labels = win_labels[..., 1:].contiguous()
+                    shift_lose_labels = lose_labels[..., 1:].contiguous()
+                
+                    # Extract choice logits
+                    win_choice_logits = shift_win_logits[..., choices]  # (batch, seq_len-1, num_choices)
+                    lose_choice_logits = shift_lose_logits[..., choices]
+                
+                    # Find choice token positions
+                    A_token, B_token = choices[0], choices[1]
+                
+                    batch_choices = []
+                    for b in range(batch_size):
+                        # Find A and B positions in win (output_A)
+                        win_A_pos = (shift_win_labels[b] == A_token)
+                        win_B_pos = (shift_win_labels[b] == B_token)
                     
-                    if lose_B_pos.any():
-                        lose_B_logit = lose_choice_logits[b, lose_B_pos, 1].mean()  # Choice 1 = B
-                    else:
-                        lose_B_logit = lose_choice_logits[b, :, 1].mean()
+                        # Find A and B positions in lose (output_B)
+                        lose_A_pos = (shift_lose_labels[b] == A_token)
+                        lose_B_pos = (shift_lose_labels[b] == B_token)
                     
-                    # Add z-conditioned bias
-                    z_bias_A = z_projection[b, 0]  # Bias for choice A
-                    z_bias_B = z_projection[b, 1]  # Bias for choice B
+                        # Get logits at choice positions
+                        if win_A_pos.any():
+                            win_A_logit = win_choice_logits[b, win_A_pos, 0].mean()  # Choice 0 = A
+                        else:
+                            win_A_logit = win_choice_logits[b, :, 0].mean()
                     
-                    # Compare: A (win) vs B (lose) with z conditioning
-                    score_A = win_A_logit + z_bias_A
-                    score_B = lose_B_logit + z_bias_B
+                        if lose_B_pos.any():
+                            lose_B_logit = lose_choice_logits[b, lose_B_pos, 1].mean()  # Choice 1 = B
+                        else:
+                            lose_B_logit = lose_choice_logits[b, :, 1].mean()
                     
-                    # Choose based on scores
-                    if score_A > score_B:
-                        choice = 0  # A is better
-                    else:
-                        choice = 1  # B is better
+                        # Add z-conditioned bias
+                        z_bias_A = z_projection[b, 0]  # Bias for choice A
+                        z_bias_B = z_projection[b, 1]  # Bias for choice B
                     
-                    batch_choices.append(choice)
+                        # Compare: A (win) vs B (lose) with z conditioning
+                        score_A = win_A_logit + z_bias_A
+                        score_B = lose_B_logit + z_bias_B
+                    
+                        # Choose based on scores
+                        if score_A > score_B:
+                            choice = 0  # A is better
+                        else:
+                            choice = 1  # B is better
+                    
+                        batch_choices.append(choice)
                 
                     batch_predictions.extend(batch_choices)
                 

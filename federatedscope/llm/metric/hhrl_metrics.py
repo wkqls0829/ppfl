@@ -140,8 +140,8 @@ def _get_or_compute_hhrl_scores(ctx):
     }
 
     # Limit the number of samples for evaluation to speed up
-    # Default: evaluate on max 100 samples, or all if less than 100
-    max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 100)
+    # Default: evaluate on max 30 samples, or all if less than 30
+    max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 30)
     if max_eval_samples <= 0:
         max_eval_samples = float('inf')  # Evaluate on all samples
     
@@ -253,6 +253,11 @@ def _get_or_compute_hhrl_scores(ctx):
 
 # --- Metric 1: Harmlessness ---
 def eval_harmlessness(ctx, **kwargs):
+    # Only compute reward model scores for test/val splits, not for train split
+    cur_split = getattr(ctx, 'cur_split', 'train')
+    if cur_split == 'train':
+        return 0.0
+    
     # Only evaluate harmlessness for harmlessness clients (client_id 1 to client_num // 2)
     client_id = getattr(ctx, 'client_id', None)
     if client_id is not None:
@@ -275,6 +280,11 @@ def register_harmlessness_metric(types):
 
 # --- Metric 2: Helpfulness ---
 def eval_helpfulness(ctx, **kwargs):
+    # Only compute reward model scores for test/val splits, not for train split
+    cur_split = getattr(ctx, 'cur_split', 'train')
+    if cur_split == 'train':
+        return 0.0
+    
     # Only evaluate helpfulness for helpfulness clients (client_id > client_num // 2)
     client_id = getattr(ctx, 'client_id', None)
     if client_id is not None:

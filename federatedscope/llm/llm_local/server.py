@@ -459,11 +459,10 @@ class LLMMultiLoRAServer(Server):
         IMPORTANT: This function assigns labels to ALL clients (1 to client_num),
         not just participating clients, so that non-participating clients also
         have labels stored for visualization.
-        """
-        if not (hasattr(self._cfg.llm, 'vpl_use_manual_orthogonal_labels') and 
-                self._cfg.llm.vpl_use_manual_orthogonal_labels):
-            return None
         
+        NOTE: This function is now called regardless of vpl_use_manual_orthogonal_labels
+        setting, as it's needed for visualization even when orthogonal loss is disabled.
+        """
         # For hh-rlhf dataset, determine split point based on total client number
         # This matches the data distribution logic in load_hh_rlhf_data
         total_client_num = self._cfg.federate.client_num
@@ -762,7 +761,20 @@ class LLMMultiLoRAServer(Server):
         
         # Store/update orthogonal labels for all clients (including non-participating)
         # This ensures all clients have labels even if they didn't participate this round
-        if self.vpl_orthogonal_client_labels is not None:
+        # Always compute labels based on client data type (harmlessness/helpfulness)
+        # regardless of whether orthogonal loss is enabled
+        manual_labels = self._compute_manual_orthogonal_labels(train_msg_buffer)
+        if manual_labels is not None:
+            for client_id in range(1, self.client_num + 1):
+                if client_id in manual_labels:
+                    self.client_orthogonal_labels_dict[client_id] = manual_labels[client_id]
+                # Also use vpl_orthogonal_client_labels if available (from k-means)
+                elif self.vpl_orthogonal_client_labels is not None and client_id in self.vpl_orthogonal_client_labels:
+                    self.client_orthogonal_labels_dict[client_id] = self.vpl_orthogonal_client_labels[client_id]
+                if client_id not in participating_clients:
+                    logger.debug(f"Client {client_id}: Storing orthogonal label {self.client_orthogonal_labels_dict.get(client_id, 'N/A')} (non-participating)")
+        elif self.vpl_orthogonal_client_labels is not None:
+            # Fallback to vpl_orthogonal_client_labels if manual_labels not available
             for client_id in range(1, self.client_num + 1):
                 if client_id in self.vpl_orthogonal_client_labels:
                     self.client_orthogonal_labels_dict[client_id] = self.vpl_orthogonal_client_labels[client_id]
