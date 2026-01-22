@@ -149,7 +149,7 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
                                 variational_encoder, feature_extractor, prompt_template,
                                 choices, device='cuda:0', use_feature_difference=True,
                                 num_samples=1, latent_projection=None, use_provided_z=False,
-                                z_to_embedding=None):
+                                z_to_embedding=None, client_average_z_dict=None):
     """
     Use variational encoder to sample z and make conditional choices.
     
@@ -171,9 +171,38 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
     Returns:
         list_data_dict: Updated with "choice" field (0 for A, 1 for B) and z values
     """
-    # Check if z values are provided in data
+    # Check if z values are provided in data or if we should use client-specific z
     provided_z_list = []
-    if use_provided_z:
+    provided_z_tensors = []
+    use_client_z = False
+    num_provided = 0
+    if client_average_z_dict is not None and len(client_average_z_dict) > 0:
+        # Check if samples have client_id and we can use client-specific z
+        samples_with_client_id = [sample.get('client_id', None) for sample in list_data_dict]
+        num_with_client_id = sum(1 for cid in samples_with_client_id if cid is not None and cid in client_average_z_dict)
+        if num_with_client_id > 0:
+            use_client_z = True
+            logger.info(f"Using client-specific z from client_average_z_dict for {num_with_client_id}/{len(list_data_dict)} samples")
+            # Get client-specific z for each sample
+            provided_z_tensors = []
+            for sample in list_data_dict:
+                client_id = sample.get('client_id', None)
+                if client_id is not None and client_id in client_average_z_dict:
+                    z_val = client_average_z_dict[client_id]
+                    if isinstance(z_val, torch.Tensor):
+                        z_tensor = z_val.to(device)
+                    else:
+                        z_tensor = torch.tensor(z_val, dtype=torch.float32).to(device)
+                    provided_z_tensors.append(z_tensor)
+                else:
+                    provided_z_tensors.append(None)
+            provided_z_list = [z.cpu().numpy() if z is not None else None for z in provided_z_tensors]
+            num_provided = len([z for z in provided_z_tensors if z is not None])
+            use_provided_z = True  # Treat client z as provided z
+        else:
+            logger.info("client_average_z_dict available but samples don't have matching client_id, will infer from data")
+    
+    if not use_client_z and use_provided_z:
         provided_z_list = [sample.get("z", None) for sample in list_data_dict]
         num_provided = sum(1 for z in provided_z_list if z is not None)
         if num_provided > 0:
@@ -408,6 +437,16 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
     for idx, (choice, sample) in enumerate(zip(predicted_indices, list_data_dict)):
         sample["choice"] = choice
         sample.pop("fake_choice", None)
+        
+        # Add chosen and rejected based on choice
+        if choice == 0:
+            # Chose A
+            sample["chosen"] = sample.get("output_A", "")
+            sample["rejected"] = sample.get("output_B", "")
+        else:
+            # Chose B
+            sample["chosen"] = sample.get("output_B", "")
+            sample["rejected"] = sample.get("output_A", "")
         
         # Store z distribution parameters and sampled z (if inferred)
         if mu_cpu is not None and logvar_cpu is not None:

@@ -67,11 +67,14 @@ class VPLGPRewardChoiceTrainer(VPLRewardChoiceTrainer):
         # Call parent method
         super()._hook_on_batch_forward(ctx)
         
-        # Collect z values for visualization
+        # Collect z values for visualization (move to CPU immediately to save GPU memory)
         if hasattr(ctx, 'vpl_z') and ctx.vpl_z is not None:
             z = ctx.vpl_z
             if isinstance(z, torch.Tensor):
-                z = z.detach().cpu()
+                z = z.detach().cpu()  # Move to CPU immediately
+            # Limit history size to prevent memory buildup (keep only last 100 batches)
+            if len(self.z_history) > 100:
+                self.z_history = self.z_history[-100:]
             self.z_history.append(z)
     
     def _hook_on_fit_end(self, ctx):
@@ -91,16 +94,18 @@ class VPLGPRewardChoiceTrainer(VPLRewardChoiceTrainer):
             z_var = z_values.var(dim=0)  # (latent_dim,)
             self.client_z_logvar = torch.log(z_var + 1e-8)  # (latent_dim,)
             
-            # Store z values for visualization (sample a few)
-            num_samples = min(1, len(z_values))
+            # Store z values for visualization (sample a few, keep on CPU)
+            num_samples = min(10, len(z_values))  # Sample up to 10 for visualization
             sampled_indices = torch.randperm(len(z_values))[:num_samples]
-            self.client_z_values = z_values[sampled_indices]  # (num_samples, latent_dim)
+            self.client_z_values = z_values[sampled_indices].cpu()  # Keep on CPU to save GPU memory
             
             logger.info(f"Collected z for round {ctx.cur_round if hasattr(ctx, 'cur_round') else 'unknown'} "
                        f"(shape: {self.client_z_values.shape}, from {len(self.z_history)} batches)")
         
-        # Clear history for next round
+        # Clear history for next round (force garbage collection)
         self.z_history = []
+        import gc
+        gc.collect()  # Force garbage collection after clearing history
     
     def get_client_z_distribution(self):
         """

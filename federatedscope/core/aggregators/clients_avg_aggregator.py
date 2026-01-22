@@ -41,7 +41,7 @@ class ClientsAvgAggregator(Aggregator):
         """
         self.model.load_state_dict(model_parameters, strict=False)
 
-    def save_model(self, path, cur_round=-1):
+    def save_model(self, path, cur_round=-1, client_average_z_dict=None):
         assert self.model is not None
 
         if self.cfg.llm.offsite_tuning.use and \
@@ -52,6 +52,21 @@ class ClientsAvgAggregator(Aggregator):
             }
         else:
             ckpt = {'cur_round': cur_round, 'model': self.model.state_dict()}
+        
+        # Add client average z information if provided (for RL training)
+        if client_average_z_dict is not None and len(client_average_z_dict) > 0:
+            # Convert tensors to CPU and numpy for serialization
+            client_average_z_serialized = {}
+            for client_id, z_tensor in client_average_z_dict.items():
+                if isinstance(z_tensor, torch.Tensor):
+                    client_average_z_serialized[int(client_id)] = z_tensor.cpu().numpy().tolist()
+                else:
+                    client_average_z_serialized[int(client_id)] = z_tensor.tolist() if hasattr(z_tensor, 'tolist') else z_tensor
+            ckpt['client_average_z_dict'] = client_average_z_serialized
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Saving checkpoint with client average z for {len(client_average_z_serialized)} clients")
+        
         torch.save(ckpt, path)
 
     def load_model(self, path):

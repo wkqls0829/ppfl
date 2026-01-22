@@ -1,0 +1,522 @@
+[38;5;39m2026-01-22 06:13:21,839 (logging:132) INFO: the current machine is at 127.0.1.1[0m
+[38;5;39m2026-01-22 06:13:21,840 (logging:134) INFO: the current dir is /home/kjb/ppfl[0m
+[38;5;39m2026-01-22 06:13:21,840 (logging:135) INFO: the output dir is exp/vplgp_hrl_ortho_t51022/sub_exp_20260122061321[0m
+wandb: WARNING `start_method` is deprecated and will be removed in a future version of wandb. This setting is currently non-functional and safely ignored.
+wandb: Currently logged in as: jabin (jabinteam) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: Tracking run with wandb version 0.21.1
+wandb: Run data is saved locally in /home/kjb/ppfl/wandb/run-20260122_061322-0wgokjb8
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run vplgp_hrl_ortho_t51022
+wandb: ⭐️ View project at https://wandb.ai/jabinteam/fvpl-rl
+wandb: 🚀 View run at https://wandb.ai/jabinteam/fvpl-rl/runs/0wgokjb8
+[38;5;39m2026-01-22 06:13:24,212 (config:243) INFO: the used configs are: 
+adapter:
+  use: False
+aggregator:
+  BFT_args:
+    
+  byzantine_node_num: 0
+  inside_weight: 1.0
+  num_agg_groups: 1
+  num_agg_topk: []
+  outside_weight: 0.0
+  robust_rule: fedavg
+asyn:
+  use: False
+attack:
+  alpha_TV: 0.001
+  alpha_prop_loss: 0
+  attack_method: 
+  attacker_id: -1
+  classifier_PIA: randomforest
+  edge_num: 100
+  edge_path: edge_data/
+  freq: 10
+  info_diff_type: l2
+  inject_round: 0
+  insert_round: 100000
+  label_type: dirty
+  max_ite: 400
+  mean: [0.9637]
+  mia_is_simulate_in: False
+  mia_simulate_in_round: 20
+  pgd_eps: 2
+  pgd_lr: 0.1
+  pgd_poisoning: False
+  poison_ratio: 0.5
+  reconstruct_lr: 0.01
+  reconstruct_optim: Adam
+  scale_para: 1.0
+  scale_poisoning: False
+  self_epoch: 6
+  self_lr: 0.05
+  self_opt: False
+  setting: fix
+  std: [0.1592]
+  target_label_ind: -1
+  trigger_path: trigger/
+  trigger_type: edge
+backend: torch
+cfg_file: 
+check_completeness: False
+criterion:
+  type: CrossEntropyLoss
+data:
+  args: []
+  batch_size: 64
+  cSBM_phi: [0.5, 0.5, 0.5]
+  cache_dir: 
+  consistent_label_distribution: True
+  drop_last: False
+  file_path: 
+  hetero_data_name: []
+  hetero_synth_batch_size: 32
+  hetero_synth_feat_dim: 128
+  hetero_synth_prim_weight: 0.5
+  is_debug: False
+  loader: 
+  max_query_len: 128
+  max_seq_len: 384
+  max_tgt_len: 128
+  num_contrast: 0
+  num_of_client_for_data: []
+  num_steps: 30
+  num_workers: 0
+  pre_transform: []
+  quadratic:
+    dim: 1
+    max_curv: 12.5
+    min_curv: 0.02
+  root: /hdd/hdd3/kjb/
+  save_data: False
+  server_holds_all: False
+  shuffle: True
+  sizes: [10, 5]
+  splits: [0.9, 0.09, 0.01]
+  splitter: iid
+  splitter_args: []
+  subsample: 1.0
+  target_transform: []
+  test_pre_transform: []
+  test_target_transform: []
+  test_transform: []
+  transform: []
+  trunc_stride: 128
+  type: hh-rlhf@llm
+  val_pre_transform: []
+  val_target_transform: []
+  val_transform: []
+  walk_length: 2
+dataloader:
+  batch_size: 1
+  drop_last: False
+  num_steps: 30
+  num_workers: 4
+  pin_memory: True
+  shuffle: True
+  sizes: [10, 5]
+  theta: -1
+  type: base
+  walk_length: 2
+device: 1
+distribute:
+  use: False
+early_stop:
+  delta: 0.0
+  improve_indicator_mode: best
+  patience: 0
+eval:
+  best_res_update_round_wise_key: train_avg_loss
+  count_flops: False
+  freq: 5
+  max_samples_for_reward: 30
+  metrics: ['loss', 'acc', 'avg_helpfulness', 'avg_harmlessness', 'helpfulness_winrate', 'harmlessness_winrate', 'avg_winlose_rate']
+  monitoring: []
+  report: ['weighted_avg', 'avg', 'fairness', 'raw']
+  split: ['test', 'val']
+expname: vplgp_hrl_ortho_t51022
+expname_tag: 
+feat_engr:
+  num_bins: 5
+  scenario: hfl
+  secure:
+    dp:
+      
+    encrypt:
+      type: dummy
+    key_size: 3072
+    type: encrypt
+  selec_threshold: 0.05
+  selec_woe_binning: quantile
+  type: 
+federate:
+  atc_load_from: 
+  atc_vanilla: False
+  client_idx_for_local_train: 0
+  client_num: 1
+  data_weighted_aggr: False
+  ignore_weight: True
+  join_in_info: []
+  make_global_eval: False
+  master_addr: 127.0.0.1
+  master_port: 29500
+  merge_test_data: False
+  merge_val_data: False
+  method: FedAvg
+  mode: standalone
+  online_aggr: False
+  process_num: 1
+  resource_info_file: 
+  restore_from: 
+  sample_client_num: 1
+  sample_client_rate: -1.0
+  sampler: uniform
+  save_client_model: False
+  save_freq: 20
+  save_to: /hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_51022.ckpt
+  share_local_model: True
+  total_round_num: 30
+  unseen_clients_rate: 0.0
+  use_diff: False
+  use_ss: False
+fedopt:
+  use: False
+fedprox:
+  use: False
+fedsageplus:
+  a: 1.0
+  b: 1.0
+  c: 1.0
+  fedgen_epoch: 200
+  gen_hidden: 128
+  hide_portion: 0.5
+  loc_epoch: 1
+  num_pred: 5
+fedswa:
+  use: False
+finetune:
+  batch_or_epoch: epoch
+  before_eval: False
+  epoch_linear: 10
+  freeze_param: 
+  local_param: []
+  local_update_steps: 1
+  lr_linear: 0.005
+  optimizer:
+    lr: 0.1
+    type: SGD
+  scheduler:
+    type: 
+    warmup_ratio: 0.0
+  simple_tuning: False
+  weight_decay: 0.0
+flitplus:
+  factor_ema: 0.8
+  lambdavat: 0.5
+  tmpFed: 0.5
+  weightReg: 1.0
+gcflplus:
+  EPS_1: 0.05
+  EPS_2: 0.1
+  seq_length: 5
+  standardize: False
+grad:
+  grad_accum_count: 1
+  grad_clip: -1.0
+hpo:
+  fedex:
+    cutoff: 0.0
+    diff: False
+    eta0: -1.0
+    flatten_ss: True
+    gamma: 0.0
+    pi_lr: 0.01
+    psn: False
+    sched: auto
+    ss: 
+    use: False
+  fts:
+    M: 100
+    M_target: 200
+    allow_load_existing_info: True
+    diff: False
+    fed_bo_max_iter: 50
+    g_var: 1e-06
+    gp_opt_schedule: 1
+    local_bo_epochs: 50
+    local_bo_max_iter: 50
+    ls: 1.0
+    obs_noise: 1e-06
+    ss: 
+    target_clients: []
+    use: False
+    v_kernel: 1.0
+    var: 0.1
+  init_cand_num: 16
+  larger_better: False
+  metric: client_summarized_weighted_avg.val_loss
+  num_workers: 0
+  pbt:
+    max_stage: 5
+    perf_threshold: 0.1
+  pfedhpo:
+    discrete: False
+    ss: 
+    target_fl_total_round: 1000
+    train_anchor: False
+    train_fl: False
+    use: False
+  scheduler: rs
+  sha:
+    budgets: []
+    elim_rate: 3
+    iter: 0
+  ss: 
+  table:
+    eps: 0.1
+    idx: 0
+    num: 27
+  trial_index: 0
+  working_folder: hpo
+llm:
+  accelerator:
+    config: 
+    use: False
+  adapter:
+    args: [{'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05}]
+    count: 3
+    grouping:
+      round: 2
+      use: False
+    local_only: False
+    mv_to_cpu: False
+    use: True
+    warmup:
+      round: 2
+      use: True
+  cache:
+    model: 
+  chat:
+    max_history_len: 10
+    max_len: 512
+  deepspeed:
+    ds_config: 
+    use: False
+  fedrlhf:
+    config_file: 
+    frequency: 100
+    pretrained: False
+    train:
+      batch_or_epoch: batch
+      local_update_steps: 10
+    use: False
+  generation_batch_size: 3
+  grad_accum_step: 4
+  max_new_token: 512
+  max_prompts_for_generation: 50
+  num_completions: 2
+  offsite_tuning:
+    emu_align:
+      data:
+        root: data
+        splits: [0.8, 0.1, 0.1]
+        type: alpaca@llm
+      exit_after_align: False
+      init_enable_ground_truth: False
+      initial_only: True
+      kl_divergence: raw
+      layerwise_distill: False
+      restore_from: 
+      save_to: 
+      sim_loss: l2
+      train:
+        batch_or_epoch: batch
+        enable_ground_truth: False
+        initial_update_rounds: 50
+        kd_loss_weight: 0.9
+        lm_loss_weight: 0.1
+        local_update_steps: 10
+        optimizer:
+          lr: 0.01
+          type: SGD
+      use: False
+    emu_l: 1
+    emu_r: 10
+    eval_type: emu
+    kwargs: [{}]
+    llm_generated:
+      ratio: 0.1
+      use: False
+    save_full_model: False
+    strategy: drop_layer
+    use: False
+  retry_on_nan_loss: False
+  reward_coeff: 0.1
+  rlhf: True
+  rlhf_selector_checkpoint: /hdd/hdd3/kjb/checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50022.ckpt
+  rlhf_use_variational_generation: True
+  rlhf_use_variational_selection: True
+  tok_len: 1024
+  use: True
+  vpl_feature_method: choice_logits
+  vpl_gp_temperature: 1.0
+  vpl_latent_dim: 32
+  vpl_use_feature_difference: True
+model:
+  contrast_temp: 1.0
+  contrast_topk: 100
+  downstream_tasks: []
+  dropout: 0.5
+  embed_size: 8
+  gamma: 0
+  graph_pooling: mean
+  hidden: 256
+  in_channels: 0
+  input_shape: ()
+  label_smoothing: 0.1
+  lambda_: 0.1
+  layer: 2
+  length_penalty: 2.0
+  llm_kwargs: [{}]
+  llm_type: CausalLM
+  load_from_local_pretrained_fs_config: 
+  load_from_local_pretrained_model_path: 
+  max_answer_len: 30
+  max_length: 200
+  max_tree_depth: 3
+  min_length: 1
+  model_num_per_trainer: 1
+  model_type: google/bert_uncased_L-2_H-128_A-2
+  n_best_size: 20
+  no_repeat_ngram_size: 3
+  null_score_diff_threshold: 0.0
+  num_beams: 5
+  num_item: 0
+  num_labels: 1
+  num_of_trees: 10
+  num_user: 0
+  out_channels: 1
+  pretrain_tasks: []
+  stage: 
+  task: node
+  type: google/gemma-2b@huggingface_llm
+  use_bias: True
+  use_contrastive_loss: False
+nbafl:
+  use: False
+outdir: exp/vplgp_hrl_ortho_t51022/sub_exp_20260122061321
+personalization:
+  K: 5
+  beta: 1.0
+  epoch_feature: 1
+  epoch_linear: 2
+  local_param: []
+  local_update_steps: 10
+  lr: 0.0001
+  lr_feature: 0.1
+  lr_linear: 0.1
+  regular_weight: 0.1
+  share_non_trainable_para: False
+  weight_decay: 0.0
+print_decimal_digits: 6
+quantization:
+  method: none
+  nbits: 8
+regularizer:
+  mu: 0.0
+  type: 
+seed: 0
+sgdmf:
+  use: False
+train:
+  batch_or_epoch: batch
+  data_para_dids: []
+  is_enable_half: True
+  local_update_steps: 10
+  optimizer:
+    betas: (0.9, 0.95)
+    lr: 0.0001
+    type: AdamW
+  scheduler:
+    type: 
+    warmup_ratio: 0.0
+trainer:
+  disp_freq: 50
+  local_entropy:
+    alpha: 0.75
+    eps: 0.0001
+    gamma: 0.03
+    inc_factor: 1.0
+  sam:
+    adaptive: False
+    eta: 0.0
+    rho: 1.0
+  type: llmdporewardtrainer
+  val_freq: 100000000
+use_gpu: True
+verbose: 1
+vertical:
+  use: False
+wandb:
+  client_train_info: True
+  name_project: fvpl-rl
+  name_user: 
+  online_track: True
+  use: True[0m
+`torch_dtype` is deprecated! Use `dtype` instead!
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00, 77.64it/s]
+trainable params: 921,600 || all params: 2,507,094,016 || trainable%: 0.0368
+[38;5;39m2026-01-22 06:13:26,742 (model_builder:114) INFO: Attempt to load from /hdd/hdd3/kjb/checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50022.ckpt[0m
+/home/kjb/ppfl/federatedscope/llm/model/model_builder.py:116: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  ckpt = torch.load(ckpt_path, map_location='cpu')
+[38;5;39m2026-01-22 06:13:26,767 (model_builder:118) INFO: Model of Round 50 loads from the checkpoint /hdd/hdd3/kjb/checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50022.ckpt[0m
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:00<00:00, 78.09it/s]
+trainable params: 921,600 || all params: 2,507,094,016 || trainable%: 0.0368
+[38;5;39m2026-01-22 06:13:34,533 (hh_rlhf:104) INFO: Loading hh-rlhf prompts from Hugging Face for RLHF...[0m
+/home/kjb/ppfl/federatedscope/llm/rlhf/load_vpl_components.py:35: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  ckpt = torch.load(checkpoint_path, map_location=device)
+[33;20m2026-01-22 06:13:39,447 (load_vpl_components:168) WARNING: No VPL components found in checkpoint. Using randomly initialized components.[0m
+[38;5;39m2026-01-22 06:13:39,448 (standalone_training:195) INFO: VPL model detected. Will use conditional generation with client-specific z.[0m
+[38;5;39m2026-01-22 06:13:39,451 (standalone_training:211) INFO: Assigned 1000 prompts to 1 clients for conditional generation[0m
+[38;5;39m2026-01-22 06:13:39,451 (standalone_training:232) INFO: The generated text file does not exist or needs regeneration. Create a new one with client_id assignment (VPL model).[0m
+[38;5;39m2026-01-22 06:13:39,451 (standalone_training:904) INFO: Loading z_to_embedding and client average z for generation from /hdd/hdd3/kjb/checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50022.ckpt[0m
+[33;20m2026-01-22 06:13:39,495 (load_vpl_components:168) WARNING: No VPL components found in checkpoint. Using randomly initialized components.[0m
+/home/kjb/ppfl/federatedscope/llm/rlhf/load_vpl_components.py:215: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
+  ckpt = torch.load(checkpoint_path, map_location=device)
+[33;20m2026-01-22 06:13:39,528 (load_vpl_components:259) WARNING: No client average z found in checkpoint. Will infer z from input during generation.[0m
+[33;20m2026-01-22 06:13:39,528 (standalone_training:920) WARNING: No client average z found in checkpoint. Will compute from training data.[0m
+[38;5;39m2026-01-22 06:13:39,529 (standalone_training:408) INFO: Computing client-specific average z from training data...[0m
+[33;20m2026-01-22 06:13:39,571 (load_vpl_components:168) WARNING: No VPL components found in checkpoint. Using randomly initialized components.[0m
+[38;5;39m2026-01-22 06:13:39,892 (standalone_training:520) INFO: Computed average z for client 1: shape torch.Size([32]), latent_dim=32[0m
+[38;5;39m2026-01-22 06:13:39,892 (standalone_training:522) INFO: Computed average z for 1 clients from training data[0m
+  0%|          | 0/100 [00:00<?, ?it/s][38;5;39m2026-01-22 06:13:39,900 (standalone_training:1018) INFO: Using client-specific average z for generation: z.shape=torch.Size([10, 32]), expected (batch_size=10, latent_dim=32)[0m
+[38;5;39m2026-01-22 06:13:39,900 (standalone_training:1127) INFO: z shape before z_to_embedding: torch.Size([10, 32]), dim=2[0m
+[38;5;39m2026-01-22 06:13:39,904 (standalone_training:1150) INFO: z_embedding shape after z_to_embedding: torch.Size([10, 8]), z shape: torch.Size([10, 32])[0m
+  0%|          | 0/100 [00:00<?, ?it/s]
+Traceback (most recent call last):
+  File "/home/kjb/ppfl/federatedscope/llm/rlhf/main.py", line 90, in <module>
+    RLHF_finetuning(
+  File "/home/kjb/ppfl/federatedscope/llm/rlhf/standalone_training.py", line 532, in train
+    list_train_dict = self.load_selector_preference_data(
+  File "/home/kjb/ppfl/federatedscope/llm/rlhf/standalone_training.py", line 323, in load_selector_preference_data
+    list_pairwise_data = self.load_pairwise_data()
+  File "/home/kjb/ppfl/federatedscope/llm/rlhf/standalone_training.py", line 237, in load_pairwise_data
+    list_pairwise_data = self._generate_pairwise_data(
+  File "/home/kjb/ppfl/federatedscope/llm/rlhf/standalone_training.py", line 1163, in _generate_pairwise_data
+    inputs_embeds = input_embeddings + z_embedding
+RuntimeError: The size of tensor a (2048) must match the size of tensor b (8) at non-singleton dimension 2
+Traceback (most recent call last):
+  File "/home/kjb/ppfl/federatedscope/llm/rlhf/main.py", line 90, in <module>
+    RLHF_finetuning(
+  File "/home/kjb/ppfl/federatedscope/llm/rlhf/standalone_training.py", line 532, in train
+    list_train_dict = self.load_selector_preference_data(
+  File "/home/kjb/ppfl/federatedscope/llm/rlhf/standalone_training.py", line 323, in load_selector_preference_data
+    list_pairwise_data = self.load_pairwise_data()
+  File "/home/kjb/ppfl/federatedscope/llm/rlhf/standalone_training.py", line 237, in load_pairwise_data
+    list_pairwise_data = self._generate_pairwise_data(
+  File "/home/kjb/ppfl/federatedscope/llm/rlhf/standalone_training.py", line 1163, in _generate_pairwise_data
+    inputs_embeds = input_embeddings + z_embedding
+RuntimeError: The size of tensor a (2048) must match the size of tensor b (8) at non-singleton dimension 2
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33mvplgp_hrl_ortho_t51022[0m at: [34mhttps://wandb.ai/jabinteam/fvpl-rl/runs/0wgokjb8[0m
+[1;34mwandb[0m: Find logs at: [1;35mwandb/run-20260122_061322-0wgokjb8/logs[0m

@@ -87,11 +87,14 @@ if __name__ == '__main__':
                                            init_cfg.data.root,
                                            init_cfg.llm.tok_len,
                                            padding_side="left")
-    RLHF_finetuning(
+    rlhf_trainer = RLHF_finetuning(
         model,
         tokenizer,
         init_cfg,
         selector_model,
         selector_tokenizer,
         generator_tokenizer,
-        device=_server_device).train(early_exiting=selector_args.early_exiting)
+        device=_server_device,
+        selector_cfg=selector_cfg,  # Pass selector config to use its client_num
+    )
+    rlhf_trainer.train(early_exiting=selector_args.early_exiting)

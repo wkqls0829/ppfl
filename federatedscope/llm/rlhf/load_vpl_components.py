@@ -40,19 +40,27 @@ def load_vpl_components_from_checkpoint(checkpoint_path, config, device='cuda:0'
         vpl_use_gp_prior = getattr(config.llm, 'vpl_use_gp_prior', False)
         vpl_use_feature_difference = getattr(config.llm, 'vpl_use_feature_difference', True)
         vpl_use_llm_feature_extractor = getattr(config.llm, 'vpl_use_llm_feature_extractor', True)
+        vpl_feature_method = getattr(config.llm, 'vpl_feature_method', 'choice_logits')
+        vpl_use_difference_only = getattr(config.llm, 'vpl_use_difference_only', False)
         
-        # Determine input dimensions
-        if vpl_use_feature_difference:
-            try:
-                embedding_dim = config.model.get('hidden_size', 2048)
-            except Exception:
-                embedding_dim = 2048  # Default for gemma-2b
-            if vpl_use_llm_feature_extractor:
-                raw_feature_dim = embedding_dim * 3  # [chosen, rejected, difference]
-            else:
+        # Determine input dimensions (must match VPLRewardChoiceTrainer logic)
+        try:
+            embedding_dim = getattr(config.model, 'hidden_size', None) or config.model.get('hidden_size', 2048)
+        except Exception:
+            embedding_dim = 2048  # Default for gemma-2b
+        
+        if vpl_use_llm_feature_extractor and vpl_use_feature_difference:
+            if vpl_use_difference_only:
                 raw_feature_dim = embedding_dim  # Only difference
+            else:
+                raw_feature_dim = embedding_dim * 3  # [chosen, rejected, difference]
+        elif vpl_use_feature_difference:
+            raw_feature_dim = embedding_dim  # Only difference
+        elif vpl_feature_method == 'choice_logits':
+            choices = getattr(config.trainer, 'choices', ['A', 'B'])
+            raw_feature_dim = len(choices) * 2  # choice_logits for chosen and rejected
         else:
-            raw_feature_dim = len(config.trainer.choices) * 2  # choice_logits
+            raw_feature_dim = 2  # Fallback
         
         feature_extractor_output_dim = 128  # From VPLRewardChoiceTrainer
         
@@ -93,14 +101,50 @@ def load_vpl_components_from_checkpoint(checkpoint_path, config, device='cuda:0'
         latent_projection = nn.Linear(vpl_latent_dim, len(choices)).to(device)
 
         # Initialize z_to_embedding for conditional generation
+        # Get embedding dimension from model type
+        embedding_dim = None
         try:
-            embedding_dim = getattr(config.model, 'hidden_size', None) or getattr(config.model, 'embed_size', None) \
-                or config.model.get('hidden_size', None) or config.model.get('embed_size', None)
+            if hasattr(config, 'model') and hasattr(config.model, 'type'):
+                model_type = str(config.model.type).lower()
+                if 'gemma-2b' in model_type:
+                    embedding_dim = 2048
+                elif 'gemma-7b' in model_type:
+                    embedding_dim = 4096
+                elif 'llama' in model_type or 'mistral' in model_type:
+                    # Try to get from transformers config
+                    try:
+                        from transformers import AutoConfig
+                        model_name = config.model.type.split('@')[0]
+                        model_config = AutoConfig.from_pretrained(model_name)
+                        embedding_dim = getattr(model_config, 'hidden_size', None) or getattr(model_config, 'embed_size', None)
+                    except Exception:
+                        pass
         except Exception:
-            embedding_dim = None
+            pass
+        
         if embedding_dim is None:
-            embedding_dim = 2048  # Fallback for gemma-2b
+            # Fallback: try config attributes
+            try:
+                embedding_dim = getattr(config.model, 'hidden_size', None) or getattr(config.model, 'embed_size', None)
+            except Exception:
+                pass
+        
+        if embedding_dim is None:
+            embedding_dim = 2048  # Default fallback for gemma-2b
+        
         z_to_embedding = nn.Linear(vpl_latent_dim, embedding_dim).to(device)
+        # Ensure z_to_embedding uses the same dtype as the model
+        # Try to get model dtype from config
+        model_dtype = getattr(config.model, 'torch_dtype', None) or getattr(config.model, 'dtype', None)
+        if model_dtype is not None:
+            if isinstance(model_dtype, str):
+                if 'bfloat16' in model_dtype.lower() or 'bf16' in model_dtype.lower():
+                    z_to_embedding = z_to_embedding.to(torch.bfloat16)
+                elif 'float16' in model_dtype.lower() or 'fp16' in model_dtype.lower():
+                    z_to_embedding = z_to_embedding.to(torch.float16)
+            elif hasattr(torch, model_dtype):
+                z_to_embedding = z_to_embedding.to(getattr(torch, model_dtype))
+        logger.info(f"Initialized z_to_embedding: {vpl_latent_dim} -> {embedding_dim} (model type: {getattr(config.model, 'type', 'unknown')}, dtype: {z_to_embedding.weight.dtype})")
         
         # Try to load from checkpoint
         variational_encoder_loaded = False
@@ -147,14 +191,29 @@ def load_vpl_components_from_checkpoint(checkpoint_path, config, device='cuda:0'
 
             if 'z_to_embedding' in key:
                 try:
-                    z_to_embedding.load_state_dict(
-                        {k.replace('z_to_embedding.', ''): v
-                         for k, v in model_state_dict.items()
-                         if 'z_to_embedding' in k}, strict=False)
-                    z_to_embedding_loaded = True
-                    logger.info(f"Loaded z_to_embedding from checkpoint")
+                    z_to_embedding_state = {k.replace('z_to_embedding.', ''): v
+                                           for k, v in model_state_dict.items()
+                                           if 'z_to_embedding' in k}
+                    # Check if loaded weight has correct shape
+                    if 'weight' in z_to_embedding_state:
+                        loaded_weight = z_to_embedding_state['weight']
+                        expected_shape = (embedding_dim, vpl_latent_dim)  # (out_features, in_features)
+                        if loaded_weight.shape != expected_shape:
+                            logger.warning(f"z_to_embedding weight shape mismatch: loaded {loaded_weight.shape}, expected {expected_shape}. "
+                                         f"Will reinitialize with correct shape.")
+                            # Don't load if shape doesn't match - use newly initialized one
+                            z_to_embedding_loaded = False
+                        else:
+                            z_to_embedding.load_state_dict(z_to_embedding_state, strict=False)
+                            z_to_embedding_loaded = True
+                            logger.info(f"Loaded z_to_embedding from checkpoint: {loaded_weight.shape}")
+                    else:
+                        z_to_embedding.load_state_dict(z_to_embedding_state, strict=False)
+                        z_to_embedding_loaded = True
+                        logger.info(f"Loaded z_to_embedding from checkpoint")
                 except Exception as e:
-                    logger.warning(f"Failed to load z_to_embedding: {e}")
+                    logger.warning(f"Failed to load z_to_embedding: {e}. Will use newly initialized one.")
+                    z_to_embedding_loaded = False
         
         if not (variational_encoder_loaded or feature_extractor_loaded or latent_projection_loaded or z_to_embedding_loaded):
             logger.warning("No VPL components found in checkpoint. Using randomly initialized components.")
@@ -206,7 +265,24 @@ def load_client_average_z_from_checkpoint(checkpoint_path, device='cuda:0'):
     try:
         ckpt = torch.load(checkpoint_path, map_location=device)
         
-        # Check if checkpoint has client z distributions
+        # Priority 1: Check for client_average_z_dict (saved from server during training)
+        if 'client_average_z_dict' in ckpt:
+            client_average_z_dict = ckpt['client_average_z_dict']
+            if isinstance(client_average_z_dict, dict):
+                # Convert to tensors if needed
+                result = {}
+                for client_id, z_mu in client_average_z_dict.items():
+                    client_id_int = int(client_id) if not isinstance(client_id, int) else client_id
+                    if isinstance(z_mu, torch.Tensor):
+                        result[client_id_int] = z_mu.to(device)
+                    elif isinstance(z_mu, list):
+                        result[client_id_int] = torch.tensor(z_mu, dtype=torch.float32, device=device)
+                    else:
+                        result[client_id_int] = torch.tensor(z_mu, dtype=torch.float32, device=device)
+                logger.info(f"Loaded client average z for {len(result)} clients from checkpoint (client_average_z_dict)")
+                return result
+        
+        # Priority 2: Check if checkpoint has client z distributions (old format)
         if 'client_z_mus' in ckpt:
             # New format: dictionary of client_id -> z_mu
             client_z_mus = ckpt['client_z_mus']
@@ -220,7 +296,7 @@ def load_client_average_z_from_checkpoint(checkpoint_path, device='cuda:0'):
                         result[client_id] = torch.tensor(z_mu, dtype=torch.float32, device=device)
                     else:
                         result[client_id] = torch.tensor(z_mu, dtype=torch.float32, device=device)
-                logger.info(f"Loaded average z for {len(result)} clients from checkpoint")
+                logger.info(f"Loaded average z for {len(result)} clients from checkpoint (client_z_mus)")
                 return result
         
         # Fallback: try to extract from model state dict (if stored there)

@@ -122,7 +122,12 @@ def _extract_prompt_and_responses_from_original_data(ctx, batch_indices=None):
 
 def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"):
     """
-    Compute win-rate scores using GPT API to compare responses.
+    Compute win-rate scores using GPT API to compare fine-tuned model vs baseline model responses.
+    
+    This function:
+    1. Generates responses from fine-tuned model for test prompts
+    2. Generates responses from baseline model (with adapter disabled) for same prompts
+    3. Uses GPT API to compare the two responses and determine which is better
     
     Args:
         ctx: Training context
@@ -164,87 +169,216 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
     if hasattr(ctx, cache_key):
         return getattr(ctx, cache_key)
     
-    # Load original data once (cache it in ctx)
-    if not hasattr(ctx, '_original_hhrlhf_data'):
-        ctx._original_hhrlhf_data = _load_original_hhrlhf_data(ctx)
-    
-    original_data = ctx._original_hhrlhf_data
-    if len(original_data) == 0:
-        logger.warning(f"Could not load original data for {metric_name} winrate evaluation")
+    eval_loader = getattr(ctx, f'{ctx.cur_split}_loader', None)
+    if eval_loader is None:
+        logger.warning(f"ctx.{ctx.cur_split}_loader is not available, skipping {metric_name} eval.")
         return {}
+    
+    # Get tokenizer
+    tokenizer = getattr(ctx, 'tokenizer', None)
+    if tokenizer is None:
+        trainer = getattr(ctx, 'trainer', None)
+        if trainer is not None and hasattr(trainer, 'tokenizer'):
+            tokenizer = trainer.tokenizer
+        else:
+            logger.warning("Tokenizer not found, skipping winrate evaluation")
+            return {}
     
     max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 30)
     if max_eval_samples <= 0:
         max_eval_samples = float('inf')
     
-    # Limit to max_eval_samples
-    if max_eval_samples != float('inf'):
-        original_data = original_data[:max_eval_samples]
+    total_samples_evaluated = 0
+    should_limit = max_eval_samples != float('inf')
     
-    all_choices = []  # Store choices made by GPT (0 for A, 1 for B)
+    # Generation kwargs
+    generation_kwargs = {
+        "do_sample": False,
+        "num_beams": 1
+    }
     
-    # Process samples
-    for i, item in enumerate(tqdm(original_data, desc=f"Evaluating {metric_name} winrate with GPT API")):
-        prompt = item['prompt']
-        response_a = item['output_A']
-        response_b = item['output_B']
+    # Set tokenizer padding for generation
+    original_padding_side = tokenizer.padding_side
+    tokenizer.padding_side = 'left'
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+    
+    all_choices = []  # Store choices: 0 if fine-tuned > baseline, 1 if baseline > fine-tuned
+    
+    logger.info(f"Generating responses from fine-tuned and baseline models, then comparing with GPT API ({model_name})...")
+    
+    # Process test loader to generate responses from both models
+    for batch_idx, batch in enumerate(tqdm(eval_loader, desc=f"Evaluating {metric_name} winrate with GPT API")):
+        if should_limit and total_samples_evaluated >= max_eval_samples:
+            break
         
-        if not prompt or not response_a or not response_b:
+        # Handle different data formats
+        if 'win_input_ids' in batch:
+            input_ids = batch['win_input_ids'].to(ctx.device)
+            attention_mask = batch.get('win_attention_mask', None)
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(ctx.device)
+        elif 'input_ids' in batch:
+            input_ids = batch['input_ids'].to(ctx.device)
+            attention_mask = batch.get('attention_mask', None)
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(ctx.device)
+        else:
             continue
         
-        # Create evaluation prompt
-        eval_prompt = prompt_template.format(
-            prompt=prompt,
-            response_a=response_a,
-            response_b=response_b
-        )
+        # Decode prompts
+        prompts = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
         
-        # Call GPT API
-        try:
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that evaluates responses. Respond with only a single capital letter: 'A' or 'B'."},
-                    {"role": "user", "content": eval_prompt}
-                ],
-                temperature=0.0,  # Deterministic
-                max_tokens=1
+        # Generate responses from fine-tuned model (with adapter enabled)
+        with torch.no_grad():
+            if attention_mask is not None:
+                fine_tuned_ids = ctx.model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=ctx.cfg.llm.max_new_token,
+                    **generation_kwargs)
+            else:
+                fine_tuned_ids = ctx.model.generate(
+                    input_ids=input_ids,
+                    max_new_tokens=ctx.cfg.llm.max_new_token,
+                    **generation_kwargs)
+        
+        fine_tuned_completions = tokenizer.batch_decode(fine_tuned_ids, skip_special_tokens=True)
+        
+        # Generate responses from baseline model (with adapter disabled if available)
+        # Check if model supports disable_adapter
+        disable_adapter = False
+        if hasattr(ctx.model, 'generate'):
+            # Try to use disable_adapter if it's a PeftModel
+            try:
+                if hasattr(ctx.model, 'model') and hasattr(ctx.model.model, 'disable_adapter'):
+                    disable_adapter = True
+            except:
+                pass
+        
+        with torch.no_grad():
+            if disable_adapter:
+                # Use baseline model (adapter disabled)
+                if attention_mask is not None:
+                    baseline_ids = ctx.model.generate(
+                        disable_adapter=True,
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=ctx.cfg.llm.max_new_token,
+                        **generation_kwargs)
+                else:
+                    baseline_ids = ctx.model.generate(
+                        disable_adapter=True,
+                        input_ids=input_ids,
+                        max_new_tokens=ctx.cfg.llm.max_new_token,
+                        **generation_kwargs)
+            else:
+                # If adapter cannot be disabled, use the same model (this means no baseline comparison)
+                logger.warning("Cannot disable adapter for baseline generation. Using fine-tuned model for both.")
+                baseline_ids = fine_tuned_ids
+        
+        baseline_completions = tokenizer.batch_decode(baseline_ids, skip_special_tokens=True)
+        
+        # Extract generated responses (remove prompt part)
+        batch_size = len(prompts)
+        if should_limit and total_samples_evaluated + batch_size > max_eval_samples:
+            batch_size = max_eval_samples - total_samples_evaluated
+            prompts = prompts[:batch_size]
+            fine_tuned_completions = fine_tuned_completions[:batch_size]
+            baseline_completions = baseline_completions[:batch_size]
+        
+        for i in range(batch_size):
+            if should_limit and total_samples_evaluated >= max_eval_samples:
+                break
+            
+            prompt = prompts[i]
+            fine_tuned_response = fine_tuned_completions[i]
+            baseline_response = baseline_completions[i]
+            
+            # Remove prompt from generated responses
+            if prompt in fine_tuned_response:
+                fine_tuned_response = fine_tuned_response.replace(prompt, "").strip()
+            if prompt in baseline_response:
+                baseline_response = baseline_response.replace(prompt, "").strip()
+            
+            # Extract just the prompt text (without generation prompt template)
+            # The prompt might contain the generation template, extract the actual user prompt
+            prompt_text = prompt
+            if "### CONVERSATION:" in prompt:
+                # Extract the actual conversation part
+                parts = prompt.split("### CONVERSATION:")
+                if len(parts) > 1:
+                    prompt_text = parts[1].split("### RESPONSE:")[0].strip()
+            
+            # Create evaluation prompt: fine-tuned (A) vs baseline (B)
+            eval_prompt = prompt_template.format(
+                prompt=prompt_text,
+                response_a=fine_tuned_response,  # Fine-tuned model response
+                response_b=baseline_response     # Baseline model response
             )
             
-            choice_text = response.choices[0].message.content.strip().upper()
-            
-            # Parse choice: A -> 0, B -> 1
-            if choice_text == 'A':
-                choice = 0
-            elif choice_text == 'B':
-                choice = 1
-            else:
-                # Try to extract A or B from response
-                if 'A' in choice_text:
-                    choice = 0
-                elif 'B' in choice_text:
-                    choice = 1
+            # Call GPT API to compare
+            try:
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that evaluates responses. Respond with only a single capital letter: 'A' or 'B'."},
+                        {"role": "user", "content": eval_prompt}
+                    ],
+                    temperature=0.0,  # Deterministic
+                    max_tokens=1
+                )
+                
+                choice_text = response.choices[0].message.content.strip().upper()
+                
+                # Parse choice: A (fine-tuned) -> 0, B (baseline) -> 1
+                if choice_text == 'A':
+                    choice = 0  # Fine-tuned wins
+                elif choice_text == 'B':
+                    choice = 1  # Baseline wins
                 else:
-                    logger.warning(f"Unexpected GPT response: {choice_text}, defaulting to A")
-                    choice = 0
+                    # Try to extract A or B from response
+                    if 'A' in choice_text:
+                        choice = 0
+                    elif 'B' in choice_text:
+                        choice = 1
+                    else:
+                        logger.warning(f"Unexpected GPT response: {choice_text}, defaulting to A")
+                        choice = 0
+                
+                all_choices.append(choice)
+                
+                # Rate limiting: small delay to avoid hitting rate limits
+                time.sleep(0.1)
+                
+            except Exception as e:
+                logger.error(f"Error calling GPT API: {e}")
+                # Default to baseline wins on error (conservative)
+                all_choices.append(1)
             
-            all_choices.append(choice)
-            
-            # Rate limiting: small delay to avoid hitting rate limits
-            time.sleep(0.1)
-            
-        except Exception as e:
-            logger.error(f"Error calling GPT API: {e}")
-            # Default to A on error
-            all_choices.append(0)
+            total_samples_evaluated += 1
+        
+        if should_limit and total_samples_evaluated >= max_eval_samples:
+            break
+    
+    # Restore original tokenizer settings
+    tokenizer.padding_side = original_padding_side
     
     # Calculate winrate
+    # winrate = % where fine-tuned model is better than baseline = % where choice == 0
     results = {}
     if len(all_choices) > 0:
-        num_choose_a = sum(1 for c in all_choices if c == 0)
-        winrate = (num_choose_a / len(all_choices)) * 100.0
+        num_wins = sum(1 for c in all_choices if c == 0)  # Fine-tuned better than baseline
+        winrate = (num_wins / len(all_choices)) * 100.0
         results[f'{metric_name}_winrate'] = winrate
-        logger.info(f"Evaluated {len(all_choices)} samples for {metric_name} winrate using GPT API ({model_name}): {winrate:.2f}%")
+        if should_limit:
+            logger.info(f"Evaluated {len(all_choices)} samples for {metric_name} winrate using GPT API ({model_name}): {winrate:.2f}% (limited from full dataset)")
+            logger.info(f"  Wins (fine-tuned > baseline): {num_wins}, Losses (baseline > fine-tuned): {len(all_choices) - num_wins}")
+        else:
+            logger.info(f"Evaluated {len(all_choices)} samples for {metric_name} winrate using GPT API ({model_name}): {winrate:.2f}%")
+            logger.info(f"  Wins (fine-tuned > baseline): {num_wins}, Losses (baseline > fine-tuned): {len(all_choices) - num_wins}")
     
     setattr(ctx, cache_key, results)
     if hasattr(ctx, 'cur_round'):
@@ -255,7 +389,12 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
 
 def _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name="winrate"):
     """
-    Compute win-rate scores using the trained model to compare responses.
+    Compute win-rate scores by comparing our model's generated responses with original chosen/rejected pairs.
+    
+    This function:
+    1. Generates responses from our model for test prompts
+    2. Compares generated response with original chosen (output_A) and rejected (output_B)
+    3. Determines if generated response is better than chosen (win) or worse (lose)
     
     Args:
         ctx: Training context
@@ -297,8 +436,6 @@ def _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name="w
     if ctx.tokenizer.pad_token_id is None:
         ctx.tokenizer.pad_token_id = ctx.tokenizer.eos_token_id
     
-    all_choices = []  # Store choices made by model (0 for A, 1 for B)
-    
     max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 30)
     if max_eval_samples <= 0:
         max_eval_samples = float('inf')
@@ -319,46 +456,115 @@ def _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name="w
     if should_limit:
         original_data = original_data[:max_eval_samples]
     
-    all_choices = []
+    # Get generated responses from hhrl_metrics (if available)
+    # hhrl_metrics generates responses during evaluation and stores them
+    generated_responses = []
+    generated_prompts = []
     
-    # Process in batches for efficiency
-    batch_size = 4  # Process 4 samples at a time
-    for i in tqdm(range(0, len(original_data), batch_size), desc=f"Evaluating {metric_name} winrate"):
-        batch_data = original_data[i:i+batch_size]
+    # Try to get generated responses from hhrl_metrics cache
+    hhrl_cache_key = f'{ctx.cur_split}_hhrl_scores'
+    if hasattr(ctx, hhrl_cache_key):
+        # If hhrl_metrics already computed, we need to regenerate or get from cache
+        # For now, we'll generate them ourselves to ensure consistency
+        pass
+    
+    # Generate responses for test prompts
+    generation_kwargs = {
+        "do_sample": False,
+        "num_beams": 1
+    }
+    
+    all_choices = []  # Store choices: 0 if generated > chosen, 1 if chosen > generated
+    
+    logger.info(f"Generating responses and computing {metric_name} winrate...")
+    
+    # Process test loader to generate responses
+    batch_idx = 0
+    original_data_idx = 0
+    
+    for batch in tqdm(eval_loader, desc=f"Generating responses for {metric_name} winrate"):
+        if should_limit and total_samples_evaluated >= max_eval_samples:
+            break
         
-        for item in batch_data:
-            prompt = item['prompt']
-            response_a = item['output_A']
-            response_b = item['output_B']
+        # Handle different data formats
+        if 'win_input_ids' in batch:
+            input_ids = batch['win_input_ids'].to(ctx.device)
+            attention_mask = batch.get('win_attention_mask', None)
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(ctx.device)
+        elif 'input_ids' in batch:
+            input_ids = batch['input_ids'].to(ctx.device)
+            attention_mask = batch.get('attention_mask', None)
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(ctx.device)
+        else:
+            continue
+        
+        # Decode prompts
+        prompts = ctx.tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+        
+        # Generate responses
+        with torch.no_grad():
+            if attention_mask is not None:
+                generated_ids = ctx.model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=ctx.cfg.llm.max_new_token,
+                    **generation_kwargs)
+            else:
+                generated_ids = ctx.model.generate(
+                    input_ids=input_ids,
+                    max_new_tokens=ctx.cfg.llm.max_new_token,
+                    **generation_kwargs)
+        
+        completions = ctx.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+        
+        # Extract generated responses (remove prompt part)
+        batch_size = len(prompts)
+        if should_limit and total_samples_evaluated + batch_size > max_eval_samples:
+            batch_size = max_eval_samples - total_samples_evaluated
+            prompts = prompts[:batch_size]
+            completions = completions[:batch_size]
+        
+        for i in range(batch_size):
+            if original_data_idx >= len(original_data):
+                break
             
-            if not prompt or not response_a or not response_b:
-                continue
+            prompt = prompts[i]
+            generated_response = completions[i]
             
-            # Create evaluation prompt
+            # Remove prompt from generated response to get only the response
+            if prompt in generated_response:
+                generated_response = generated_response.replace(prompt, "").strip()
+            
+            original_item = original_data[original_data_idx]
+            original_prompt = original_item['prompt']
+            chosen_response = original_item['output_A']  # chosen (better)
+            rejected_response = original_item['output_B']  # rejected (worse)
+            
+            # Compare generated response with chosen response
+            # Create evaluation prompt: generated (A) vs chosen (B)
             eval_prompt = prompt_template.format(
-                prompt=prompt,
-                response_a=response_a,
-                response_b=response_b
+                prompt=original_prompt,
+                response_a=generated_response,
+                response_b=chosen_response
             )
             
-            # Tokenize
-            input_ids = ctx.tokenizer.encode(eval_prompt, return_tensors='pt').to(ctx.device)
+            # Tokenize and get choice
+            input_ids_eval = ctx.tokenizer.encode(eval_prompt, return_tensors='pt').to(ctx.device)
             
-            # Get logits for choice tokens (more reliable than generation)
             with torch.no_grad():
-                outputs = ctx.model(input_ids=input_ids)
+                outputs = ctx.model(input_ids=input_ids_eval)
                 logits = outputs.logits
-                
-                # Get logits at the last position for choice tokens
-                # The model should predict A or B after "YOUR CHOICE:"
-                # We look at the logits right after the prompt ends
-                # Find position after "YOUR CHOICE:" - it's the last token position
                 last_logits = logits[0, -1, choice_tokens]
-                choice = torch.argmax(last_logits).item()  # 0 for A, 1 for B
+                choice = torch.argmax(last_logits).item()  # 0 for A (generated), 1 for B (chosen)
             
+            # choice == 0 means generated (A) is better than chosen (B) -> WIN
+            # choice == 1 means chosen (B) is better than generated (A) -> LOSE
             all_choices.append(choice)
-        
-        total_samples_evaluated += len(batch_data)
+            
+            original_data_idx += 1
+            total_samples_evaluated += 1
         
         if should_limit and total_samples_evaluated >= max_eval_samples:
             break
@@ -366,18 +572,19 @@ def _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name="w
     # Restore original tokenizer settings
     ctx.tokenizer.padding_side = original_padding_side
     
-    # Calculate winrate (percentage choosing A, which is typically the better response)
-    # In hh-rlhf, output_A is chosen (better), output_B is rejected (worse)
-    # So winrate = % choosing A = % where choice == 0
+    # Calculate winrate
+    # winrate = % where generated response is better than chosen = % where choice == 0
     results = {}
     if len(all_choices) > 0:
-        num_choose_a = sum(1 for c in all_choices if c == 0)
-        winrate = (num_choose_a / len(all_choices)) * 100.0
+        num_wins = sum(1 for c in all_choices if c == 0)  # Generated better than chosen
+        winrate = (num_wins / len(all_choices)) * 100.0
         results[f'{metric_name}_winrate'] = winrate
         if should_limit:
             logger.info(f"Evaluated {len(all_choices)} samples for {metric_name} winrate: {winrate:.2f}% (limited from full dataset)")
+            logger.info(f"  Wins (generated > chosen): {num_wins}, Losses (chosen > generated): {len(all_choices) - num_wins}")
         else:
             logger.info(f"Evaluated {len(all_choices)} samples for {metric_name} winrate: {winrate:.2f}%")
+            logger.info(f"  Wins (generated > chosen): {num_wins}, Losses (chosen > generated): {len(all_choices) - num_wins}")
     
     setattr(ctx, cache_key, results)
     if hasattr(ctx, 'cur_round'):

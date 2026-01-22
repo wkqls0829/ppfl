@@ -56,6 +56,7 @@ class LLMMultiLoRAServer(Server):
         self.client_z_values_dict = defaultdict(list)  # {client_id: [z_values]}
         self.client_orthogonal_labels_dict = {}  # {client_id: orthogonal_label} - stores label for each client
         self.client_orthogonal_prototypes_dict = {}  # {client_id: prototypes}
+        self.client_average_z_dict = {}  # {client_id: average_z_tensor} - computed from z_values_dict for checkpoint saving
 
     def _register_default_handlers(self):
         super()._register_default_handlers()
@@ -203,59 +204,150 @@ class LLMMultiLoRAServer(Server):
     def merge_eval_results_from_all_clients(self):
         """
         Override to add VPL-specific wandb logging for aggregated results.
+        Also handles non-VPL FedBiscuit logging to avoid logline_2_wandb_dict removing Results_raw.
         """
         # Call parent method to get aggregated results
         formatted_logs_all_set = super().merge_eval_results_from_all_clients()
         
-        # Log VPL metrics to wandb if enabled (server-side aggregated logging)
-        if (self._cfg.wandb.use and self._cfg.wandb.online_track and 
-            hasattr(self._cfg.llm, 'vpl_latent_dim')):  # VPL is enabled
+        # Log metrics to wandb if enabled (for both VPL and non-VPL)
+        # This avoids the issue where logline_2_wandb_dict removes Results_raw for Server role
+        if (self._cfg.wandb.use and self._cfg.wandb.online_track):
+            is_vpl = hasattr(self._cfg.llm, 'vpl_latent_dim')  # VPL is enabled
             try:
                 import wandb
                 
-                # Extract VPL metrics from aggregated results
                 round = max(self.msg_buffer['eval'].keys())
                 eval_msg_buffer = self.msg_buffer['eval'][round]
-                
-                # Collect VPL metrics from all clients
-                vpl_metrics_all_clients = {
-                    'vpl_total_loss': [],
-                    'vpl_reconstruction_loss': [],
-                    'vpl_kl_loss': [],
-                    'vpl_orthogonal_loss': []
-                }
-                client_ids = []
-                
-                for client_id in eval_msg_buffer:
-                    if eval_msg_buffer[client_id] is None:
-                        continue
-                    if client_id in self.unseen_clients_id:
-                        continue  # Skip unseen clients for aggregated metrics
-                    
-                    client_results = eval_msg_buffer[client_id]
-                    client_ids.append(client_id)
-                    
-                    if 'loss' in client_results:
-                        vpl_metrics_all_clients['vpl_total_loss'].append(float(client_results['loss']))
-                    if 'vpl_reconstruction_loss' in client_results:
-                        vpl_metrics_all_clients['vpl_reconstruction_loss'].append(float(client_results['vpl_reconstruction_loss']))
-                    if 'vpl_kl_loss' in client_results:
-                        vpl_metrics_all_clients['vpl_kl_loss'].append(float(client_results['vpl_kl_loss']))
-                    if 'vpl_orthogonal_loss' in client_results:
-                        vpl_metrics_all_clients['vpl_orthogonal_loss'].append(float(client_results['vpl_orthogonal_loss']))
                 
                 # Check if this is HRL dataset for reward model metrics
                 dataset_type = getattr(self._cfg.data, 'type', '').lower()
                 is_hrl = 'hh-rlhf' in dataset_type or 'hrl' in dataset_type
                 
-                # Collect reward model metrics for HRL
-                reward_metrics_all_clients = {
-                    'avg_harmlessness': [],
-                    'avg_helpfulness': [],
-                    'helpfulness_winrate': [],
-                    'harmlessness_winrate': []
-                }
-                if is_hrl:
+                if is_vpl:
+                    # VPL-specific metrics
+                    # Collect VPL metrics from all clients
+                    vpl_metrics_all_clients = {
+                        'vpl_total_loss': [],
+                        'vpl_reconstruction_loss': [],
+                        'vpl_kl_loss': [],
+                        'vpl_orthogonal_loss': []
+                    }
+                    client_ids = []
+                    
+                    for client_id in eval_msg_buffer:
+                        if eval_msg_buffer[client_id] is None:
+                            continue
+                        if client_id in self.unseen_clients_id:
+                            continue  # Skip unseen clients for aggregated metrics
+                        
+                        client_results = eval_msg_buffer[client_id]
+                        client_ids.append(client_id)
+                        
+                        if 'loss' in client_results:
+                            vpl_metrics_all_clients['vpl_total_loss'].append(float(client_results['loss']))
+                        if 'vpl_reconstruction_loss' in client_results:
+                            vpl_metrics_all_clients['vpl_reconstruction_loss'].append(float(client_results['vpl_reconstruction_loss']))
+                        if 'vpl_kl_loss' in client_results:
+                            vpl_metrics_all_clients['vpl_kl_loss'].append(float(client_results['vpl_kl_loss']))
+                        if 'vpl_orthogonal_loss' in client_results:
+                            vpl_metrics_all_clients['vpl_orthogonal_loss'].append(float(client_results['vpl_orthogonal_loss']))
+                    
+                    # Collect reward model metrics for HRL
+                    reward_metrics_all_clients = {
+                        'avg_harmlessness': [],
+                        'avg_helpfulness': [],
+                        'helpfulness_winrate': [],
+                        'harmlessness_winrate': []
+                    }
+                    if is_hrl:
+                        for client_id in eval_msg_buffer:
+                            if eval_msg_buffer[client_id] is None:
+                                continue
+                            if client_id in self.unseen_clients_id:
+                                continue
+                            
+                            client_results = eval_msg_buffer[client_id]
+                            if 'avg_harmlessness' in client_results:
+                                reward_metrics_all_clients['avg_harmlessness'].append(float(client_results['avg_harmlessness']))
+                            if 'avg_helpfulness' in client_results:
+                                reward_metrics_all_clients['avg_helpfulness'].append(float(client_results['avg_helpfulness']))
+                            if 'helpfulness_winrate' in client_results:
+                                reward_metrics_all_clients['helpfulness_winrate'].append(float(client_results['helpfulness_winrate']))
+                            if 'harmlessness_winrate' in client_results:
+                                reward_metrics_all_clients['harmlessness_winrate'].append(float(client_results['harmlessness_winrate']))
+                    
+                    # Log aggregated metrics (averaged over all clients)
+                    wandb_metrics = {}
+                    if vpl_metrics_all_clients['vpl_total_loss']:
+                        wandb_metrics['server/train/vpl_total_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_total_loss'])
+                    if vpl_metrics_all_clients['vpl_reconstruction_loss']:
+                        wandb_metrics['server/train/vpl_reconstruction_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_reconstruction_loss'])
+                    if vpl_metrics_all_clients['vpl_kl_loss']:
+                        wandb_metrics['server/train/vpl_kl_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_kl_loss'])
+                    if vpl_metrics_all_clients['vpl_orthogonal_loss']:
+                        wandb_metrics['server/train/vpl_orthogonal_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_orthogonal_loss'])
+                    
+                    # Log reward model metrics for HRL (averaged)
+                    if is_hrl:
+                        if reward_metrics_all_clients['avg_harmlessness']:
+                            wandb_metrics['server/train/avg_harmlessness_avg'] = np.mean(reward_metrics_all_clients['avg_harmlessness'])
+                        if reward_metrics_all_clients['avg_helpfulness']:
+                            wandb_metrics['server/train/avg_helpfulness_avg'] = np.mean(reward_metrics_all_clients['avg_helpfulness'])
+                        if reward_metrics_all_clients['helpfulness_winrate']:
+                            wandb_metrics['server/train/helpfulness_winrate_avg'] = np.mean(reward_metrics_all_clients['helpfulness_winrate'])
+                        if reward_metrics_all_clients['harmlessness_winrate']:
+                            wandb_metrics['server/train/harmlessness_winrate_avg'] = np.mean(reward_metrics_all_clients['harmlessness_winrate'])
+                
+                    # Log individual client metrics (for designated clients)
+                    # Log first 3 clients as designated clients (or all if less than 3)
+                    designated_clients = client_ids[:min(3, len(client_ids))]
+                    for client_id in designated_clients:
+                        if eval_msg_buffer[client_id] is None:
+                            continue
+                        client_results = eval_msg_buffer[client_id]
+                        
+                        if 'loss' in client_results:
+                            wandb_metrics[f'client_{client_id}/train/vpl_total_loss'] = float(client_results['loss'])
+                        if 'vpl_reconstruction_loss' in client_results:
+                            wandb_metrics[f'client_{client_id}/train/vpl_reconstruction_loss'] = float(client_results['vpl_reconstruction_loss'])
+                        if 'vpl_kl_loss' in client_results:
+                            wandb_metrics[f'client_{client_id}/train/vpl_kl_loss'] = float(client_results['vpl_kl_loss'])
+                        if 'vpl_orthogonal_loss' in client_results:
+                            wandb_metrics[f'client_{client_id}/train/vpl_orthogonal_loss'] = float(client_results['vpl_orthogonal_loss'])
+                        
+                        # Log reward model metrics for HRL (individual clients)
+                        if is_hrl:
+                            if 'avg_harmlessness' in client_results:
+                                wandb_metrics[f'client_{client_id}/train/avg_harmlessness'] = float(client_results['avg_harmlessness'])
+                            if 'avg_helpfulness' in client_results:
+                                wandb_metrics[f'client_{client_id}/train/avg_helpfulness'] = float(client_results['avg_helpfulness'])
+                            if 'helpfulness_winrate' in client_results:
+                                wandb_metrics[f'client_{client_id}/train/helpfulness_winrate'] = float(client_results['helpfulness_winrate'])
+                            if 'harmlessness_winrate' in client_results:
+                                wandb_metrics[f'client_{client_id}/train/harmlessness_winrate'] = float(client_results['harmlessness_winrate'])
+                    
+                    if wandb_metrics:
+                        wandb.log(wandb_metrics, step=round)
+                        logger.info(f"Logged VPL metrics to wandb for round {round}: {len(wandb_metrics)} metrics")
+                else:
+                    # Non-VPL FedBiscuit: log standard metrics (loss, acc, etc.)
+                    # Collect standard metrics from all clients
+                    standard_metrics_all_clients = {
+                        'loss': [],
+                        'avg_loss': [],
+                        'acc': [],
+                        'total': []
+                    }
+                    
+                    # Collect reward model metrics for HRL
+                    reward_metrics_all_clients = {
+                        'avg_harmlessness': [],
+                        'avg_helpfulness': [],
+                        'helpfulness_winrate': [],
+                        'harmlessness_winrate': []
+                    }
+                    
+                    client_ids = []
                     for client_id in eval_msg_buffer:
                         if eval_msg_buffer[client_id] is None:
                             continue
@@ -263,73 +355,85 @@ class LLMMultiLoRAServer(Server):
                             continue
                         
                         client_results = eval_msg_buffer[client_id]
-                        if 'avg_harmlessness' in client_results:
-                            reward_metrics_all_clients['avg_harmlessness'].append(float(client_results['avg_harmlessness']))
-                        if 'avg_helpfulness' in client_results:
-                            reward_metrics_all_clients['avg_helpfulness'].append(float(client_results['avg_helpfulness']))
-                        if 'helpfulness_winrate' in client_results:
-                            reward_metrics_all_clients['helpfulness_winrate'].append(float(client_results['helpfulness_winrate']))
-                        if 'harmlessness_winrate' in client_results:
-                            reward_metrics_all_clients['harmlessness_winrate'].append(float(client_results['harmlessness_winrate']))
-                
-                # Log aggregated metrics (averaged over all clients)
-                wandb_metrics = {}
-                if vpl_metrics_all_clients['vpl_total_loss']:
-                    wandb_metrics['server/train/vpl_total_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_total_loss'])
-                if vpl_metrics_all_clients['vpl_reconstruction_loss']:
-                    wandb_metrics['server/train/vpl_reconstruction_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_reconstruction_loss'])
-                if vpl_metrics_all_clients['vpl_kl_loss']:
-                    wandb_metrics['server/train/vpl_kl_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_kl_loss'])
-                if vpl_metrics_all_clients['vpl_orthogonal_loss']:
-                    wandb_metrics['server/train/vpl_orthogonal_loss_avg'] = np.mean(vpl_metrics_all_clients['vpl_orthogonal_loss'])
-                
-                # Log reward model metrics for HRL (averaged)
-                if is_hrl:
-                    if reward_metrics_all_clients['avg_harmlessness']:
-                        wandb_metrics['server/train/avg_harmlessness_avg'] = np.mean(reward_metrics_all_clients['avg_harmlessness'])
-                    if reward_metrics_all_clients['avg_helpfulness']:
-                        wandb_metrics['server/train/avg_helpfulness_avg'] = np.mean(reward_metrics_all_clients['avg_helpfulness'])
-                    if reward_metrics_all_clients['helpfulness_winrate']:
-                        wandb_metrics['server/train/helpfulness_winrate_avg'] = np.mean(reward_metrics_all_clients['helpfulness_winrate'])
-                    if reward_metrics_all_clients['harmlessness_winrate']:
-                        wandb_metrics['server/train/harmlessness_winrate_avg'] = np.mean(reward_metrics_all_clients['harmlessness_winrate'])
-                
-                # Log individual client metrics (for designated clients)
-                # Log first 3 clients as designated clients (or all if less than 3)
-                designated_clients = client_ids[:min(3, len(client_ids))]
-                for client_id in designated_clients:
-                    if eval_msg_buffer[client_id] is None:
-                        continue
-                    client_results = eval_msg_buffer[client_id]
+                        client_ids.append(client_id)
+                        
+                        # Collect standard metrics
+                        if 'loss' in client_results:
+                            standard_metrics_all_clients['loss'].append(float(client_results['loss']))
+                        if 'avg_loss' in client_results:
+                            standard_metrics_all_clients['avg_loss'].append(float(client_results['avg_loss']))
+                        if 'acc' in client_results:
+                            standard_metrics_all_clients['acc'].append(float(client_results['acc']))
+                        if 'total' in client_results:
+                            standard_metrics_all_clients['total'].append(float(client_results['total']))
+                        
+                        # Collect reward model metrics for HRL
+                        if is_hrl:
+                            if 'avg_harmlessness' in client_results:
+                                reward_metrics_all_clients['avg_harmlessness'].append(float(client_results['avg_harmlessness']))
+                            if 'avg_helpfulness' in client_results:
+                                reward_metrics_all_clients['avg_helpfulness'].append(float(client_results['avg_helpfulness']))
+                            if 'helpfulness_winrate' in client_results:
+                                reward_metrics_all_clients['helpfulness_winrate'].append(float(client_results['helpfulness_winrate']))
+                            if 'harmlessness_winrate' in client_results:
+                                reward_metrics_all_clients['harmlessness_winrate'].append(float(client_results['harmlessness_winrate']))
                     
-                    if 'loss' in client_results:
-                        wandb_metrics[f'client_{client_id}/train/vpl_total_loss'] = float(client_results['loss'])
-                    if 'vpl_reconstruction_loss' in client_results:
-                        wandb_metrics[f'client_{client_id}/train/vpl_reconstruction_loss'] = float(client_results['vpl_reconstruction_loss'])
-                    if 'vpl_kl_loss' in client_results:
-                        wandb_metrics[f'client_{client_id}/train/vpl_kl_loss'] = float(client_results['vpl_kl_loss'])
-                    if 'vpl_orthogonal_loss' in client_results:
-                        wandb_metrics[f'client_{client_id}/train/vpl_orthogonal_loss'] = float(client_results['vpl_orthogonal_loss'])
+                    # Log aggregated metrics (averaged over all clients)
+                    wandb_metrics = {}
+                    if standard_metrics_all_clients['loss']:
+                        wandb_metrics['server/train/loss_avg'] = np.mean(standard_metrics_all_clients['loss'])
+                    if standard_metrics_all_clients['avg_loss']:
+                        wandb_metrics['server/train/avg_loss_avg'] = np.mean(standard_metrics_all_clients['avg_loss'])
+                    if standard_metrics_all_clients['acc']:
+                        wandb_metrics['server/train/acc_avg'] = np.mean(standard_metrics_all_clients['acc'])
+                    if standard_metrics_all_clients['total']:
+                        wandb_metrics['server/train/total_avg'] = np.mean(standard_metrics_all_clients['total'])
                     
-                    # Log reward model metrics for HRL (individual clients)
+                    # Log reward model metrics for HRL (averaged)
                     if is_hrl:
-                        if 'avg_harmlessness' in client_results:
-                            wandb_metrics[f'client_{client_id}/train/avg_harmlessness'] = float(client_results['avg_harmlessness'])
-                        if 'avg_helpfulness' in client_results:
-                            wandb_metrics[f'client_{client_id}/train/avg_helpfulness'] = float(client_results['avg_helpfulness'])
-                        if 'helpfulness_winrate' in client_results:
-                            wandb_metrics[f'client_{client_id}/train/helpfulness_winrate'] = float(client_results['helpfulness_winrate'])
-                        if 'harmlessness_winrate' in client_results:
-                            wandb_metrics[f'client_{client_id}/train/harmlessness_winrate'] = float(client_results['harmlessness_winrate'])
-                
-                if wandb_metrics:
-                    wandb.log(wandb_metrics, step=round)
-                    logger.info(f"Logged VPL metrics to wandb for round {round}: {len(wandb_metrics)} metrics")
+                        if reward_metrics_all_clients['avg_harmlessness']:
+                            wandb_metrics['server/train/avg_harmlessness_avg'] = np.mean(reward_metrics_all_clients['avg_harmlessness'])
+                        if reward_metrics_all_clients['avg_helpfulness']:
+                            wandb_metrics['server/train/avg_helpfulness_avg'] = np.mean(reward_metrics_all_clients['avg_helpfulness'])
+                        if reward_metrics_all_clients['helpfulness_winrate']:
+                            wandb_metrics['server/train/helpfulness_winrate_avg'] = np.mean(reward_metrics_all_clients['helpfulness_winrate'])
+                        if reward_metrics_all_clients['harmlessness_winrate']:
+                            wandb_metrics['server/train/harmlessness_winrate_avg'] = np.mean(reward_metrics_all_clients['harmlessness_winrate'])
                     
+                    # Log individual client metrics (for designated clients)
+                    # Log first 3 clients as designated clients (or all if less than 3)
+                    designated_clients = client_ids[:min(3, len(client_ids))]
+                    for client_id in designated_clients:
+                        if eval_msg_buffer[client_id] is None:
+                            continue
+                        client_results = eval_msg_buffer[client_id]
+                        
+                        if 'loss' in client_results:
+                            wandb_metrics[f'client_{client_id}/train/loss'] = float(client_results['loss'])
+                        if 'avg_loss' in client_results:
+                            wandb_metrics[f'client_{client_id}/train/avg_loss'] = float(client_results['avg_loss'])
+                        if 'acc' in client_results:
+                            wandb_metrics[f'client_{client_id}/train/acc'] = float(client_results['acc'])
+                        
+                        # Log reward model metrics for HRL (individual clients)
+                        if is_hrl:
+                            if 'avg_harmlessness' in client_results:
+                                wandb_metrics[f'client_{client_id}/train/avg_harmlessness'] = float(client_results['avg_harmlessness'])
+                            if 'avg_helpfulness' in client_results:
+                                wandb_metrics[f'client_{client_id}/train/avg_helpfulness'] = float(client_results['avg_helpfulness'])
+                            if 'helpfulness_winrate' in client_results:
+                                wandb_metrics[f'client_{client_id}/train/helpfulness_winrate'] = float(client_results['helpfulness_winrate'])
+                            if 'harmlessness_winrate' in client_results:
+                                wandb_metrics[f'client_{client_id}/train/harmlessness_winrate'] = float(client_results['harmlessness_winrate'])
+                    
+                    if wandb_metrics:
+                        wandb.log(wandb_metrics, step=round)
+                        logger.info(f"Logged FedBiscuit metrics to wandb for round {round}: {len(wandb_metrics)} metrics")
+                        
             except ImportError:
-                logger.warning("wandb not installed, skipping VPL metrics logging")
-            except Exception as e:
-                logger.warning(f"Failed to log VPL metrics to wandb: {e}")
+                logger.warning("wandb not installed, skipping metrics logging")
+                except Exception as e:
+                logger.warning(f"Failed to log metrics to wandb: {e}")
 
         return formatted_logs_all_set
 
@@ -339,16 +443,16 @@ class LLMMultiLoRAServer(Server):
             logger.info('Waited all clients join, start now...')
             # Only send adapter_eval message if grouping is enabled
             if self._cfg.llm.adapter.grouping.use:
-                self.trigger_for_feat_engr(self.broadcast_model_para, {
-                    'msg_type': 'adapter_eval',
-                    'filter_unseen_clients': False,
-                })
+            self.trigger_for_feat_engr(self.broadcast_model_para, {
+                'msg_type': 'adapter_eval',
+                'filter_unseen_clients': False,
+            })
                 logger.info('Server: Performing a grouping step...')
             else:
                 # If grouping is not enabled, start training round directly
-                logger.info(
-                    '----------- Starting training (Round #{:d}) -------------'.
-                    format(self.state))
+            logger.info(
+                '----------- Starting training (Round #{:d}) -------------'.
+                format(self.state))
                 self._start_new_training_round()
 
     def callback_funcs_for_grouping(self, message: Message):
@@ -788,10 +892,55 @@ class LLMMultiLoRAServer(Server):
         else:
             # Concatenate all new z values and update per-client latest
             all_z_values = np.concatenate(z_values_list, axis=0)
+            # Limit stored z values per client with balanced sampling:
+            # For 50 clients: 10 from harmlessness (label 0) + 10 from helpfulness (label 1) = 20 total
+            # For fewer clients: proportional sampling
+            max_samples_per_client = 20 if self.client_num > 20 else 50
+            samples_per_label = max_samples_per_client // 2  # Split equally between two labels
+            
             for client_id in set(client_ids_list):
                 client_z_mask = np.array(client_ids_list) == client_id
                 client_z = all_z_values[client_z_mask]
+                
+                # Get orthogonal label for this client
+                client_label = self.client_orthogonal_labels_dict.get(client_id, None)
+                
+                if len(client_z) > max_samples_per_client:
+                    # If we have stored z values, merge with new ones
+                    if client_id in self.client_z_values_dict and len(self.client_z_values_dict[client_id]) > 0:
+                        old_z = np.array(self.client_z_values_dict[client_id])
+                        client_z = np.concatenate([old_z, client_z], axis=0)
+                    
+                    # Group by label and sample balanced
+                    if client_label is not None:
+                        # Separate by label if we have multiple clients' data mixed
+                        # For single client, just take recent samples
+                        if len(client_z) > max_samples_per_client:
+                            # Take most recent samples (simple approach for single client)
+                            client_z = client_z[-max_samples_per_client:]
+                    else:
+                        # No label info, just take recent samples
+                        client_z = client_z[-max_samples_per_client:]
+                
                 self.client_z_values_dict[client_id] = client_z.tolist()
+            
+            # After updating all clients, balance across harmlessness and helpfulness
+            # Group clients by label and ensure balanced representation
+            harmless_clients = [cid for cid, label in self.client_orthogonal_labels_dict.items() if label == 0]
+            helpful_clients = [cid for cid, label in self.client_orthogonal_labels_dict.items() if label == 1]
+            
+            # For each label group, limit samples per client
+            for client_id in harmless_clients:
+                if client_id in self.client_z_values_dict:
+                    z_list = self.client_z_values_dict[client_id]
+                    if len(z_list) > samples_per_label:
+                        self.client_z_values_dict[client_id] = z_list[-samples_per_label:]
+            
+            for client_id in helpful_clients:
+                if client_id in self.client_z_values_dict:
+                    z_list = self.client_z_values_dict[client_id]
+                    if len(z_list) > samples_per_label:
+                        self.client_z_values_dict[client_id] = z_list[-samples_per_label:]
         
         # Check all clients (1 to client_num) to ensure we have z for all
         all_client_ids = set(range(1, self.client_num + 1))
@@ -822,22 +971,56 @@ class LLMMultiLoRAServer(Server):
             client_labels_list = []
             orthogonal_labels_list = []
             
-            for client_id, z_list in self.client_z_values_dict.items():
+            # Collect z values with balanced sampling: 10 from harmlessness, 10 from helpfulness per client
+            samples_per_label_per_client = 10  # 10 samples per label per client (harmlessness or helpfulness)
+            
+            # Group clients by label
+            harmless_client_ids = [cid for cid in self.client_z_values_dict.keys() 
+                                 if self.client_orthogonal_labels_dict.get(cid, None) == 0]
+            helpful_client_ids = [cid for cid in self.client_z_values_dict.keys() 
+                                if self.client_orthogonal_labels_dict.get(cid, None) == 1]
+            
+            # Process harmlessness clients (label 0): sample 10 per client
+            for client_id in harmless_client_ids:
+                if client_id not in self.client_z_values_dict:
+                    continue
+                    
+                z_list = self.client_z_values_dict[client_id]
                 if len(z_list) == 0:
                     continue
                 
                 client_z = np.array(z_list)
+                
+                # Sample up to 10 from harmlessness clients
+                if len(client_z) > samples_per_label_per_client:
+                    # Random sample to get diverse representation
+                    indices = np.random.choice(len(client_z), samples_per_label_per_client, replace=False)
+                    client_z = client_z[indices]
+                
                 z_values_list.append(client_z)
                 client_labels_list.extend([client_id] * len(client_z))
+                orthogonal_labels_list.extend([0] * len(client_z))  # Label 0 for harmlessness
+            
+            # Process helpfulness clients (label 1): sample 10 per client
+            for client_id in helpful_client_ids:
+                if client_id not in self.client_z_values_dict:
+                    continue
+                    
+                z_list = self.client_z_values_dict[client_id]
+                if len(z_list) == 0:
+                    continue
                 
-                # Get orthogonal label from stored dict (includes non-participating clients)
-                if client_id in self.client_orthogonal_labels_dict:
-                    orthogonal_labels_list.extend([self.client_orthogonal_labels_dict[client_id]] * len(client_z))
-                elif self.vpl_orthogonal_client_labels and client_id in self.vpl_orthogonal_client_labels:
-                    # Fallback to current round labels if not in stored dict
-                    orthogonal_labels_list.extend([self.vpl_orthogonal_client_labels[client_id]] * len(client_z))
-                else:
-                    orthogonal_labels_list.extend([-1] * len(client_z))
+                client_z = np.array(z_list)
+                
+                # Sample up to 10 from helpfulness clients
+                if len(client_z) > samples_per_label_per_client:
+                    # Random sample to get diverse representation
+                    indices = np.random.choice(len(client_z), samples_per_label_per_client, replace=False)
+                    client_z = client_z[indices]
+                
+                z_values_list.append(client_z)
+                client_labels_list.extend([client_id] * len(client_z))
+                orthogonal_labels_list.extend([1] * len(client_z))  # Label 1 for helpfulness
             
             if len(z_values_list) == 0:
                 return
@@ -872,6 +1055,98 @@ class LLMMultiLoRAServer(Server):
         except Exception as e:
             logger.warning(f"Failed to visualize cross-client z: {e}")
     
+    def _compute_client_average_z_for_checkpoint(self):
+        """
+        Compute average z for each client from stored z_values_dict.
+        This is used to save client-specific z information in checkpoint for RL training.
+        """
+        self.client_average_z_dict = {}
+        
+        for client_id in range(1, self.client_num + 1):
+            if client_id in self.client_z_values_dict and len(self.client_z_values_dict[client_id]) > 0:
+                z_list = self.client_z_values_dict[client_id]
+                z_array = np.array(z_list)  # (num_samples, latent_dim)
+                
+                # Compute average z
+                avg_z = np.mean(z_array, axis=0)  # (latent_dim,)
+                avg_z_tensor = torch.tensor(avg_z, dtype=torch.float32)
+                
+                self.client_average_z_dict[client_id] = avg_z_tensor
+                logger.debug(f"Computed average z for client {client_id}: shape {avg_z_tensor.shape}")
+        
+        if len(self.client_average_z_dict) > 0:
+            logger.info(f"Computed average z for {len(self.client_average_z_dict)} clients for checkpoint saving")
+        else:
+            logger.warning("No client average z computed (no z values stored)")
+    
+    def check_and_save(self):
+        """
+        Override to save client average z information in checkpoint.
+        """
+        # Call parent's check_and_save logic
+        from federatedscope.core.auxiliaries.utils import add_prefix_to_path
+        
+        # early stopping
+        if "Results_weighted_avg" in self.history_results and \
+                self._cfg.eval.best_res_update_round_wise_key in \
+                self.history_results['Results_weighted_avg']:
+            should_stop = self.early_stopper.track_and_check(
+                self.history_results['Results_weighted_avg'][
+                    self._cfg.eval.best_res_update_round_wise_key])
+        elif "Results_avg" in self.history_results and \
+                self._cfg.eval.best_res_update_round_wise_key in \
+                self.history_results['Results_avg']:
+            should_stop = self.early_stopper.track_and_check(
+                self.history_results['Results_avg'][
+                    self._cfg.eval.best_res_update_round_wise_key])
+        else:
+            should_stop = False
+
+        if should_stop:
+            self._monitor.global_converged()
+            self.comm_manager.send(
+                Message(
+                    msg_type="converged",
+                    sender=self.ID,
+                    receiver=list(self.comm_manager.neighbors.keys()),
+                    timestamp=self.cur_timestamp,
+                    state=self.state,
+                ))
+            self.state = self.total_round_num + 1
+
+        if self.state != self.total_round_num and \
+                self.state % self._cfg.federate.save_freq == 0 and \
+                self._cfg.federate.save_freq > 0:
+            path = add_prefix_to_path(f'{self.state}_',
+                                      self._cfg.federate.save_to)
+            if self.ds_rank == 0:
+                # Compute and save client average z before saving checkpoint
+                self._compute_client_average_z_for_checkpoint()
+                self.aggregator.save_model(path, self.state, client_average_z_dict=self.client_average_z_dict)
+
+        if should_stop or self.state == self.total_round_num:
+            logger.info('Server: Final evaluation is finished! Starting '
+                        'merging results.')
+            # last round or early stopped
+            self.save_best_results()
+            if not self._cfg.federate.make_global_eval:
+                self.save_client_eval_results()
+            
+            # Save final checkpoint with client average z
+            if self._cfg.federate.save_to != '':
+                path = add_prefix_to_path('final_', self._cfg.federate.save_to)
+                if self.ds_rank == 0:
+                    # Compute and save client average z before saving final checkpoint
+                    self._compute_client_average_z_for_checkpoint()
+                    self.aggregator.save_model(path, self.state, client_average_z_dict=self.client_average_z_dict)
+            
+            self.terminate(msg_type='finish')
+
+        # Clean the clients evaluation msg buffer
+        if not self._cfg.federate.make_global_eval:
+            round = max(self.msg_buffer['eval'].keys())
+            self.msg_buffer['eval'][round].clear()
+    
     def broadcast_model_para(self,
                              msg_type='model_para',
                              sample_client_num=-1,
@@ -900,19 +1175,19 @@ class LLMMultiLoRAServer(Server):
             }
             
             # Use same logic as parent class: sample if sample_client_num > 0, else broadcast to all
-            if sample_client_num > 0:
+        if sample_client_num > 0:
                 # Check if sampler is available and has idle clients
                 if self.sampler is not None:
                     idle_clients = np.nonzero(self.sampler.client_state)[0]
                     if len(idle_clients) > 0:
                         selected_clients = self.sampler.sample(size=sample_client_num)
-                    else:
+        else:
                         # All clients are working, use all clients instead
                         selected_clients = list(self.comm_manager.neighbors.keys())
                         logger.warning(f"No idle clients available, broadcasting to all {len(selected_clients)} clients")
-                else:
-                    selected_clients = list(self.comm_manager.neighbors.keys())
             else:
+                    selected_clients = list(self.comm_manager.neighbors.keys())
+        else:
                 # Broadcast to all clients
                 selected_clients = list(self.comm_manager.neighbors.keys())
             
@@ -951,12 +1226,12 @@ class LLMMultiLoRAServer(Server):
                 selected_clients = list(self.comm_manager.neighbors.keys())
             
             for receiver in selected_clients:
-                self.comm_manager.send(
+        self.comm_manager.send(
                     Message(msg_type='vpl_orthogonal_labels',
-                            sender=self.ID,
+                    sender=self.ID,
                             receiver=[receiver],
                             state=self.state,
-                            timestamp=self.cur_timestamp,
+                    timestamp=self.cur_timestamp,
                             content=self.vpl_orthogonal_client_labels))
             
             logger.info(f"Broadcasting orthogonal labels to {len(selected_clients)} clients at round {self.state}")

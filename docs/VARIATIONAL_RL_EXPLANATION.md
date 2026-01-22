@@ -281,16 +281,132 @@ python federatedscope/llm/rlhf/main.py \
 3. **Efficiency**: 이전 round의 z 재사용으로 추론 비용 절감
 4. **Flexibility**: Variational selection과 generation을 독립적으로 활성화 가능
 
+## 클라이언트별 평균 Z를 활용한 Conditional Generation
+
+### 개요
+
+RL preference dataset 생성 시, 각 클라이언트의 training set에서 계산된 **평균 z 값**을 사용하여 클라이언트별로 personalized된 conditional generation을 수행합니다. 이는 매번 z를 추론하는 것보다 더 효율적이고 일관성 있는 결과를 제공합니다.
+
+### 동작 방식
+
+#### 1. 클라이언트별 평균 Z 계산 및 저장
+
+Selector training 완료 후, 각 클라이언트의 training data에서 평균 z를 계산합니다:
+
+```python
+# For each client:
+# 1. Extract z from training prompts
+z_list = []
+for prompt in client_prompts:
+    z_mu, z_logvar = variational_encoder.encode(features)
+    z_list.append(z_mu)
+
+# 2. Compute average
+avg_z = torch.stack(z_list).mean(dim=0)  # (latent_dim,)
+client_average_z_dict[client_id] = avg_z
+```
+
+#### 2. Client ID 할당
+
+**VPL 모델인 경우에만** (FedBiscuit 등 다른 알고리즘은 제외):
+
+- Training prompts에 `client_id` 할당 (순환 할당: `client_id = (idx % num_clients) + 1`)
+- Test samples에도 동일하게 `client_id` 할당
+
+```python
+# Check if VPL model
+is_vpl_model = check_vpl_model(selector_ckpt_path)
+
+if is_vpl_model:
+    # Assign client_id to prompts
+    for idx, prompt_data in enumerate(prompts):
+        client_id = (idx % num_clients) + 1
+        prompt_data['client_id'] = client_id
+```
+
+#### 3. Conditional Generation 우선순위
+
+`_generate_pairwise_data`에서 z를 사용하는 우선순위:
+
+1. **클라이언트별 평균 z 사용** (최우선)
+   - 데이터에 `client_id`가 있으면 해당 클라이언트의 평균 z 사용
+   - 없으면 전체 평균 z 사용
+
+2. **데이터에 이미 z가 있으면 사용** (이전 round에서 생성된 z)
+
+3. **전체 평균 z 사용** (fallback)
+
+4. **Input에서 z 추론** (fallback, 권장하지 않음)
+
+```python
+# Priority 1: Use client-specific average z
+if client_average_z_dict is not None:
+    for data in input_data:
+        client_id = data.get('client_id', None)
+        if client_id in client_average_z_dict:
+            z = client_average_z_dict[client_id]  # Use client-specific z
+        else:
+            z = overall_avg_z  # Use overall average
+```
+
+#### 4. 클라이언트별 평균 Z 로딩
+
+Selector checkpoint에서 클라이언트별 평균 z를 로드합니다:
+
+```python
+# Load from checkpoint
+client_average_z_dict = load_client_average_z_from_checkpoint(
+    selector_ckpt_path, device=device
+)
+
+# If not in checkpoint, compute from training data
+if client_average_z_dict is None:
+    _compute_client_average_z_from_training_data(selector_ckpt_path)
+```
+
+#### 5. Generation 단계 시각화
+
+처음 generate 할 때 클라이언트별 평균 z를 t-SNE로 시각화합니다:
+
+- 파일명: `cross_client_z_tsne_generation.png`
+- WandB 로깅: `visualization/client_average_z_tsne_generation`
+- 색상: Harmlessness (Crimson red `#DC143C`), Helpfulness (Deep sky blue `#00BFFF`)
+
+### VPL 모델 감지
+
+Conditional generation은 **VPL 모델일 때만** 적용됩니다:
+
+```python
+# Check if selector checkpoint has VPL components
+variational_encoder, feature_extractor, _, _ = \
+    load_vpl_components_from_checkpoint(selector_ckpt_path, config, device)
+
+is_vpl_model = (variational_encoder is not None and 
+                feature_extractor is not None)
+```
+
+- **VPL 모델**: Client ID 할당, 클라이언트별 평균 z 사용
+- **비VPL 모델** (FedBiscuit 등): 표준 generation (client_id 없음)
+
+### 장점
+
+1. **효율성**: 한 번 계산한 평균 z를 재사용하여 추론 비용 절감
+2. **일관성**: 동일한 클라이언트의 모든 prompt에 대해 동일한 z 사용
+3. **Personalization**: 클라이언트별 preference에 맞춘 generation
+4. **시각화**: Generation 단계에서 클라이언트별 z 분포 확인 가능
+
 ## 제한사항
 
 1. **Selector Dependency**: Selector model checkpoint가 필요
 2. **Latent Dimension**: `vpl_latent_dim`이 selector와 RL training에서 일치해야 함
 3. **Feature Extraction**: Selector와 동일한 feature extraction 방법 사용 필요
+4. **VPL 모델 전용**: Conditional generation은 VPL 모델에서만 동작 (FedBiscuit 등은 표준 generation)
 
 ## 참고 파일
 
 - `federatedscope/llm/rlhf/variational_selector.py`: Variational selection 구현
 - `federatedscope/llm/trainer/reward_trainer.py`: Z-dependent generation 구현
-- `federatedscope/llm/rlhf/load_vpl_components.py`: VPL components 로딩
-- `federatedscope/llm/rlhf/standalone_training.py`: RLHF training 통합
+- `federatedscope/llm/rlhf/load_vpl_components.py`: VPL components 로딩 및 클라이언트별 평균 z 로딩
+- `federatedscope/llm/rlhf/standalone_training.py`: RLHF training 통합, 클라이언트별 평균 z 계산 및 시각화
 - `federatedscope/llm/dataset/llm_dataset.py`: Z 필드 저장/로딩
+- `federatedscope/llm/llm_local/z_visualization.py`: t-SNE 시각화 (클라이언트별 색상 적용)
