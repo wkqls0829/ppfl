@@ -1,5 +1,5 @@
 use_gpu: True
-device: 3  # GPU 3 for hhst-ortho experiment (tid: 50024) - batch_size 16, lower KL and tighter variance cap, orthogonal ENABLED (1.0, 0.1)
+device: 4  # GPU 4 for hhst-ortho experiment (tid: 50024) - batch_size 8, vpl_use_difference_only: True, orthogonal ENABLED (1.0, 0.1)
 early_stop:
   patience: 0
 federate:
@@ -42,6 +42,7 @@ llm:
   vpl_gp_temperature: 1.0
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
+  vpl_use_difference_only: True  # Use only difference embedding (reduces memory: embedding_dim vs embedding_dim * 3)
   vpl_max_logvar: -3.0  # Tighter variance cap (sigma <= 0.223)
   # Orthogonal loss parameters (ENABLED, reduced for better minimization)
   vpl_orthogonal_weight: 1.0  # Pull loss weight (reduced from 10.0)
@@ -50,9 +51,9 @@ llm:
   vpl_num_prototypes: 2  # Number of orthogonal prototypes (k for k-means). For hh-rlhf, this is fixed to 2
   vpl_prototype_scale: 5.0  # Distance of prototypes from origin (default: 5.0, larger = further from origin)
   vpl_tsne_visualize_freq: 10  # Generate t-SNE visualization every 10 rounds
-  grad_accum_step: 2
+  grad_accum_step: 4  # Increased from 2 to maintain effective batch size (8 * 4 = 32)
 dataloader:
-  batch_size: 16  # Same as 50012/50022 for Monte Carlo stability
+  batch_size: 8  # Reduced from 16 to avoid OOM (effective batch size: 8 * 4 = 32)
   num_workers: 4  # DataLoader 병렬화로 데이터 로딩 속도 향상
   pin_memory: True  # GPU 전송 속도 향상
 model:

@@ -121,13 +121,28 @@ class LLMMultiLoRAServer(Server):
 
             # msg_list = [(1, merged_adapter)]
 
+            # Collect VPL components separately for aggregation
+            vpl_components_dict = {}  # {component_name: {param_name: [values from clients]}}
+            
             for client_id in train_msg_buffer.keys():
                 if self.model_num == 1:
                     sample_size, model_para = train_msg_buffer[client_id]
+                    # Extract VPL components (variational_encoder, feature_extractor, latent_projection, z_to_embedding)
+                    vpl_component_keys = []
+                    for key in model_para.keys():
+                        if any(comp in key for comp in ['variational_encoder', 'feature_extractor', 'latent_projection', 'z_to_embedding']):
+                            vpl_component_keys.append(key)
+                    
+                    # Collect VPL components
+                    for key in vpl_component_keys:
+                        if key not in vpl_components_dict:
+                            vpl_components_dict[key] = []
+                        vpl_components_dict[key].append((sample_size, model_para[key]))
+                    
                     # Remove VPL-related keys that are not model parameters
                     # These should be handled separately, not by the aggregator
                     vpl_keys_to_remove = ['client_z_values', 'client_z_mu', 'client_z_logvar', 
-                                          'client_orthogonal_prototypes', 'sample_size']
+                                          'client_orthogonal_prototypes', 'sample_size'] + vpl_component_keys
                     model_para_clean = {k: v for k, v in model_para.items() 
                                        if k not in vpl_keys_to_remove}
                     msg_list.append((sample_size, model_para_clean))
@@ -185,6 +200,37 @@ class LLMMultiLoRAServer(Server):
             # Due to lazy load, we merge two state dict
             merged_param = merge_param_dict(model.state_dict().copy(), result)
             model.load_state_dict(merged_param, strict=False)
+            
+            # Aggregate VPL components (weighted average by sample size)
+            if len(vpl_components_dict) > 0:
+                aggregated_vpl_components = {}
+                for key, client_values in vpl_components_dict.items():
+                    if len(client_values) == 0:
+                        continue
+                    # Weighted average
+                    total_weight = sum(sample_size for sample_size, _ in client_values)
+                    if total_weight > 0:
+                        avg_value = None
+                        for sample_size, value in client_values:
+                            weight = sample_size / total_weight
+                            if isinstance(value, torch.Tensor):
+                                weighted_value = value * weight
+                                if avg_value is None:
+                                    avg_value = weighted_value.clone()
+                                else:
+                                    avg_value = avg_value + weighted_value
+                            else:
+                                # For non-tensor values, use first client's value
+                                if avg_value is None:
+                                    avg_value = value
+                        if avg_value is not None:
+                            aggregated_vpl_components[key] = avg_value
+                
+                # Store aggregated VPL components in aggregator for checkpoint saving
+                if not hasattr(aggregator, 'vpl_components'):
+                    aggregator.vpl_components = {}
+                aggregator.vpl_components.update(aggregated_vpl_components)
+                logger.info(f"Aggregated {len(aggregated_vpl_components)} VPL component parameters")
         
         # VPL-GP: Collect z distributions from clients (only if GP prior is enabled)
         if hasattr(self._cfg.llm, 'vpl_use_gp_prior') and self._cfg.llm.vpl_use_gp_prior:
@@ -432,7 +478,7 @@ class LLMMultiLoRAServer(Server):
                         
             except ImportError:
                 logger.warning("wandb not installed, skipping metrics logging")
-                except Exception as e:
+            except Exception as e:
                 logger.warning(f"Failed to log metrics to wandb: {e}")
 
         return formatted_logs_all_set
@@ -443,16 +489,16 @@ class LLMMultiLoRAServer(Server):
             logger.info('Waited all clients join, start now...')
             # Only send adapter_eval message if grouping is enabled
             if self._cfg.llm.adapter.grouping.use:
-            self.trigger_for_feat_engr(self.broadcast_model_para, {
-                'msg_type': 'adapter_eval',
-                'filter_unseen_clients': False,
-            })
+                self.trigger_for_feat_engr(self.broadcast_model_para, {
+                    'msg_type': 'adapter_eval',
+                    'filter_unseen_clients': False,
+                })
                 logger.info('Server: Performing a grouping step...')
             else:
                 # If grouping is not enabled, start training round directly
-            logger.info(
-                '----------- Starting training (Round #{:d}) -------------'.
-                format(self.state))
+                logger.info(
+                    '----------- Starting training (Round #{:d}) -------------'.
+                    format(self.state))
                 self._start_new_training_round()
 
     def callback_funcs_for_grouping(self, message: Message):
@@ -1058,24 +1104,53 @@ class LLMMultiLoRAServer(Server):
     def _compute_client_average_z_for_checkpoint(self):
         """
         Compute average z for each client from stored z_values_dict.
+        Uses the most recent z values (latest round) for each client.
         This is used to save client-specific z information in checkpoint for RL training.
         """
         self.client_average_z_dict = {}
         
+        # Get the most recent round's z values from train_msg_buffer
+        train_msg_buffer = self.msg_buffer.get('train', {}).get(self.state, {})
+        
         for client_id in range(1, self.client_num + 1):
+            # Priority 1: Use z values from the most recent round (current round)
+            if client_id in train_msg_buffer:
+                if self.model_num == 1:
+                    _, model_para = train_msg_buffer[client_id]
+                else:
+                    _, model_para_multiple = train_msg_buffer[client_id]
+                    model_para = model_para_multiple[0]
+                
+                if 'client_z_values' in model_para:
+                    z_values = model_para['client_z_values']
+                    if isinstance(z_values, torch.Tensor):
+                        z_values = z_values.detach().cpu().numpy()
+                    elif isinstance(z_values, list):
+                        z_values = np.array(z_values)
+                    
+                    if len(z_values.shape) == 1:
+                        z_values = z_values.reshape(1, -1)
+                    
+                    # Compute average z from the most recent round's z values
+                    avg_z = np.mean(z_values, axis=0)  # (latent_dim,)
+                    avg_z_tensor = torch.tensor(avg_z, dtype=torch.float32)
+                    self.client_average_z_dict[client_id] = avg_z_tensor
+                    logger.debug(f"Computed average z for client {client_id} from most recent round: shape {avg_z_tensor.shape}, from {len(z_values)} z samples")
+                    continue
+            
+            # Priority 2: Fallback to stored z_values_dict (if current round data not available)
             if client_id in self.client_z_values_dict and len(self.client_z_values_dict[client_id]) > 0:
                 z_list = self.client_z_values_dict[client_id]
                 z_array = np.array(z_list)  # (num_samples, latent_dim)
                 
-                # Compute average z
+                # Compute average z from stored z values
                 avg_z = np.mean(z_array, axis=0)  # (latent_dim,)
                 avg_z_tensor = torch.tensor(avg_z, dtype=torch.float32)
-                
                 self.client_average_z_dict[client_id] = avg_z_tensor
-                logger.debug(f"Computed average z for client {client_id}: shape {avg_z_tensor.shape}")
+                logger.debug(f"Computed average z for client {client_id} from stored z_values_dict: shape {avg_z_tensor.shape}, from {len(z_list)} z samples")
         
         if len(self.client_average_z_dict) > 0:
-            logger.info(f"Computed average z for {len(self.client_average_z_dict)} clients for checkpoint saving")
+            logger.info(f"Computed average z for {len(self.client_average_z_dict)} clients for checkpoint saving (for RL training)")
         else:
             logger.warning("No client average z computed (no z values stored)")
     
@@ -1175,19 +1250,19 @@ class LLMMultiLoRAServer(Server):
             }
             
             # Use same logic as parent class: sample if sample_client_num > 0, else broadcast to all
-        if sample_client_num > 0:
+            if sample_client_num > 0:
                 # Check if sampler is available and has idle clients
                 if self.sampler is not None:
                     idle_clients = np.nonzero(self.sampler.client_state)[0]
                     if len(idle_clients) > 0:
                         selected_clients = self.sampler.sample(size=sample_client_num)
-        else:
+                    else:
                         # All clients are working, use all clients instead
                         selected_clients = list(self.comm_manager.neighbors.keys())
                         logger.warning(f"No idle clients available, broadcasting to all {len(selected_clients)} clients")
-            else:
+                else:
                     selected_clients = list(self.comm_manager.neighbors.keys())
-        else:
+            else:
                 # Broadcast to all clients
                 selected_clients = list(self.comm_manager.neighbors.keys())
             
@@ -1226,12 +1301,12 @@ class LLMMultiLoRAServer(Server):
                 selected_clients = list(self.comm_manager.neighbors.keys())
             
             for receiver in selected_clients:
-        self.comm_manager.send(
+                self.comm_manager.send(
                     Message(msg_type='vpl_orthogonal_labels',
-                    sender=self.ID,
+                            sender=self.ID,
                             receiver=[receiver],
                             state=self.state,
-                    timestamp=self.cur_timestamp,
+                            timestamp=self.cur_timestamp,
                             content=self.vpl_orthogonal_client_labels))
             
             logger.info(f"Broadcasting orthogonal labels to {len(selected_clients)} clients at round {self.state}")

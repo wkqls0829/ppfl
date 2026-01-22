@@ -1,12 +1,12 @@
 use_gpu: True
-device: 1  # GPU 1 for HRL experiment (tid: 51022) - based on 50022 with reward model evaluation
+device: 1  # GPU 1 for test HRL experiment (tid: 51000) - using 50000 selector checkpoint
 early_stop:
   patience: 0
 federate:
   mode: standalone
   client_num: 1  # RL training uses single client (standalone RLHF)
   total_round_num: 50  # RL training rounds
-  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_51022.ckpt"
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_vplgp_ortho_51000.ckpt"
   ignore_weight: True
   save_freq: 20  # Checkpoint 저장 빈도 줄여서 I/O 시간 감소
   share_local_model: True  # Single GPU mode
@@ -36,15 +36,16 @@ llm:
       use: False
       round: 2
     args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
-  # VPL parameters for z-dependent generation (loaded from selector checkpoint)
+  # VPL parameters for z-dependent generation (loaded from selector checkpoint 50000)
   vpl_latent_dim: 32  # Should match selector's vpl_latent_dim
   vpl_feature_method: 'choice_logits'  # Should match selector's vpl_feature_method
-  vpl_use_feature_difference: True  # Should match selector
+  vpl_use_feature_difference: True  # Should match selector (50000 uses feature difference)
+  vpl_use_difference_only: False  # Should match selector (50000 uses vpl_use_difference_only=False, i.e., [chosen, rejected, difference])
   vpl_gp_temperature: 1.0  # Should match selector's vpl_gp_temperature
   # RLHF with z-dependent generation
   rlhf_use_variational_generation: True  # Use z-dependent generation for RL training
   rlhf_use_variational_selection: True  # Use variational selection for preference data generation
-  rlhf_selector_checkpoint: "/hdd/hdd3/kjb/checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50022.ckpt"  # Selector checkpoint path for loading VPL components (will be overridden by selector_cfg_file)
+  rlhf_selector_checkpoint: "/hdd/hdd3/kjb/checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50000.ckpt"  # Selector checkpoint path (will be overridden by selector_cfg_file)
   reward_coeff: 0.1  # DPO beta coefficient
   grad_accum_step: 4  # Gradient accumulation steps
   max_prompts_for_generation: 50  # Number of prompts to generate per round
@@ -61,7 +62,7 @@ train:
   optimizer:
     type: AdamW
     betas: (0.9, 0.95)
-    lr: 0.0001  # Increased 10x from 0.00001 to compensate for frozen base model
+    lr: 0.0001  # Same as 51024
   is_enable_half: True
 criterion:
   type: CrossEntropyLoss
@@ -74,10 +75,12 @@ eval:
   best_res_update_round_wise_key: train_avg_loss  # Use train_avg_loss instead of val_avg_loss
   count_flops: False
   max_samples_for_reward: 30  # Reduced from 100 to speed up evaluation
-expname: vplgp_hrl_ortho_t51022
+  use_baseline_model_for_winrate: True  # Use base Gemma-2b model for win rate comparison
+  use_gpt_api_for_winrate: False  # Disable GPT API for win rate (use baseline model instead)
+expname: vplgp_hrl_ortho_t51000
 wandb:
   use: True
   name_user: ''
-  name_project: 'fvpl-rl'  # New WandB project for RL experiments
+  name_project: 'fvpl-rl'  # WandB project for RL experiments
   online_track: True
   client_train_info: True

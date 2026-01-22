@@ -32,6 +32,10 @@ if os.environ.get('http_proxy'):
 
 if __name__ == '__main__':
     init_cfg = global_cfg.clone()
+    # Allow new config keys to be added dynamically (for dataset size limits, etc.)
+    init_cfg.set_new_allowed(True)
+    if hasattr(init_cfg, 'data'):
+        init_cfg.data.set_new_allowed(True)
     args = parse_args()
     if args.cfg_file:
         init_cfg.merge_from_file(args.cfg_file)

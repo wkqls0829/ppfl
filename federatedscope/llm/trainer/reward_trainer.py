@@ -390,13 +390,32 @@ class DPORewardTrainer(LLMTrainer):
         z = self._get_z_from_batch(ctx, batch_size, input_ids=win_input_ids, attention_mask=win_attention_mask)
         
         # Inject z into embeddings for win (chosen) responses
+        # Use z if available (either from data or inferred), regardless of use_variational_generation flag
+        # This allows conditional training with z values stored in preference data
         win_inputs_embeds = None
-        if self.use_variational_generation and z is not None:
-            win_inputs_embeds = self._inject_z_to_embeddings(ctx, win_input_ids, z)
+        if z is not None:
+            # Load z_to_embedding if not already loaded (for conditional training with stored z)
+            if self.z_to_embedding is None and 'z' in ctx.data_batch:
+                # Try to load z_to_embedding from selector checkpoint
+                from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint
+                selector_ckpt_path = getattr(ctx.cfg.llm, 'rlhf_selector_checkpoint', None)
+                if selector_ckpt_path is None:
+                    selector_ckpt_path = getattr(ctx.cfg.llm, 'selector_save_to', None)
+                
+                if selector_ckpt_path and os.path.exists(selector_ckpt_path):
+                    _, _, _, z_to_embedding = load_vpl_components_from_checkpoint(
+                        selector_ckpt_path, ctx.cfg, device=ctx.device
+                    )
+                    if z_to_embedding is not None:
+                        self.z_to_embedding = z_to_embedding
+                        logger.info("Loaded z_to_embedding for conditional training with stored z values")
+            
+            if self.z_to_embedding is not None:
+                win_inputs_embeds = self._inject_z_to_embeddings(ctx, win_input_ids, z)
         
         # Inject z into embeddings for lose (rejected) responses
         lose_inputs_embeds = None
-        if self.use_variational_generation and z is not None:
+        if z is not None and self.z_to_embedding is not None:
             lose_inputs_embeds = self._inject_z_to_embeddings(ctx, lose_input_ids, z)
         
         # Forward pass for win (chosen) responses

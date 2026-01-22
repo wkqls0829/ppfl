@@ -80,6 +80,11 @@ class LLMDataset(Dataset):
         ]
         df = pd.DataFrame(categories, columns=["category"])
         self.categories = list(pd.Categorical(df["category"]).codes)
+        
+        # Store client_id if available (for VPL conditional generation)
+        self.client_ids = [
+            example.get('client_id', None) for example in list_data_dict
+        ]
 
     def _tokenize_fn(self, strings, tokenizer):
         tokenized_list = [
@@ -123,9 +128,13 @@ class LLMDataset(Dataset):
         return len(self.input_ids)
 
     def __getitem__(self, i):
-        return dict(input_ids=self.input_ids[i],
-                    labels=self.labels[i],
-                    categories=self.categories[i])
+        result = dict(input_ids=self.input_ids[i],
+                     labels=self.labels[i],
+                     categories=self.categories[i])
+        # Include client_id if available
+        if i < len(self.client_ids) and self.client_ids[i] is not None:
+            result['client_id'] = self.client_ids[i]
+        return result
 
     # def overwrite_by_llm(self, i):
     #     source = self.sources[i]

@@ -62,7 +62,7 @@ class MultiLoRAAvgAggregator(Aggregator):
         """
         self.model.load_state_dict(model_parameters, strict=False)
 
-    def save_model(self, path, cur_round=-1):
+    def save_model(self, path, cur_round=-1, client_average_z_dict=None):
         assert self.model is not None
 
         if self.cfg.llm.offsite_tuning.use and \
@@ -73,6 +73,32 @@ class MultiLoRAAvgAggregator(Aggregator):
             }
         else:
             ckpt = {'cur_round': cur_round, 'model': self.model.state_dict()}
+        
+        # Add VPL components if available
+        if hasattr(self, 'vpl_components') and self.vpl_components is not None and len(self.vpl_components) > 0:
+            for key, value in self.vpl_components.items():
+                if isinstance(value, torch.Tensor):
+                    ckpt['model'][key] = value.cpu()
+                else:
+                    ckpt['model'][key] = value
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Added {len(self.vpl_components)} VPL component parameters to checkpoint")
+        
+        # Add client average z information if provided (for RL training)
+        if client_average_z_dict is not None and len(client_average_z_dict) > 0:
+            # Convert tensors to CPU and numpy for serialization
+            client_average_z_serialized = {}
+            for client_id, z_tensor in client_average_z_dict.items():
+                if isinstance(z_tensor, torch.Tensor):
+                    client_average_z_serialized[int(client_id)] = z_tensor.cpu().numpy().tolist()
+                else:
+                    client_average_z_serialized[int(client_id)] = z_tensor.tolist() if hasattr(z_tensor, 'tolist') else z_tensor
+            ckpt['client_average_z_dict'] = client_average_z_serialized
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Saving checkpoint with client average z for {len(client_average_z_serialized)} clients")
+        
         torch.save(ckpt, path)
 
     def load_model(self, path):

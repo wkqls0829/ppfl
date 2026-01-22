@@ -5,7 +5,7 @@ early_stop:
 federate:
   mode: standalone
   client_num: 1
-  total_round_num: 30  # Increased to compensate for reduced local_update_steps (10*60=600 batches, same total training)
+  total_round_num: 50
   save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice.ckpt"
   save_freq: 50
   share_local_model: True
@@ -34,7 +34,7 @@ trainer:
 dataloader:
   batch_size: 1  # Reduced from 2 to 1 to prevent OOM (effective batch size maintained via grad_accum_step=32)
 train:
-  local_update_steps: 10  # 10 batches per round (10 samples with batch_size=1, but effective batch size = 1 * 32 = 32 via grad_accum_step)
+  local_update_steps: 30  # RL training steps per round
   batch_or_epoch: batch
   optimizer:
     type: AdamW

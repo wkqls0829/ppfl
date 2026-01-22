@@ -5,7 +5,7 @@ early_stop:
 federate:
   mode: standalone
   client_num: 1
-  total_round_num: 30
+  total_round_num: 50
   save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_vplgp.ckpt"
   save_freq: 50
   share_local_model: True
@@ -38,7 +38,7 @@ trainer:
 dataloader:
   batch_size: 1
 train:
-  local_update_steps: 10
+  local_update_steps: 30
   batch_or_epoch: batch
   optimizer:
     type: AdamW

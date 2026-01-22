@@ -220,13 +220,50 @@ def _get_or_compute_hhrl_scores(ctx):
             prompts = prompts[:remaining]
             batch_size = remaining
 
-        harmless_scores = harmless_reward_model.get_rewards(completions,
-                                                            prompts)
-        helpful_scores = helpful_reward_model.get_rewards(completions,
-                                                          prompts)
-
-        all_harmless_scores.extend(harmless_scores)
-        all_helpful_scores.extend(helpful_scores)
+        # Get client_id from batch if available (for client-specific evaluation)
+        batch_client_ids = None
+        if isinstance(batch, dict):
+            batch_client_ids = batch.get('client_id', None)
+        # If not in batch, try to get from dataset
+        if batch_client_ids is None:
+            try:
+                dataset = eval_loader.dataset
+                if hasattr(dataset, 'client_ids') and len(dataset.client_ids) > 0:
+                    start_idx = batch_idx * eval_loader.batch_size
+                    end_idx = min(start_idx + len(completions), len(dataset.client_ids))
+                    batch_client_ids = dataset.client_ids[start_idx:end_idx]
+                    if all(cid is None for cid in batch_client_ids):
+                        batch_client_ids = None
+            except:
+                pass
+        
+        # Determine client type and evaluate only relevant reward model
+        # Harmlessness clients: 1 to client_num // 2
+        # Helpfulness clients: client_num // 2 + 1 to client_num
+        client_num = getattr(ctx.cfg.federate, 'client_num', 10)
+        harmless_clients_num = client_num // 2
+        
+        # Evaluate reward models based on client type
+        if batch_client_ids is not None:
+            # Client-specific evaluation: only evaluate relevant reward model for each client
+            for i, client_id in enumerate(batch_client_ids):
+                if client_id is None:
+                    continue
+                
+                if client_id <= harmless_clients_num:
+                    # Harmlessness client: only evaluate harmlessness reward
+                    harmless_scores = harmless_reward_model.get_rewards([completions[i]], [prompts[i]])
+                    all_harmless_scores.extend(harmless_scores)
+                else:
+                    # Helpfulness client: only evaluate helpfulness reward
+                    helpful_scores = helpful_reward_model.get_rewards([completions[i]], [prompts[i]])
+                    all_helpful_scores.extend(helpful_scores)
+        else:
+            # Fallback: evaluate both (for backward compatibility)
+            harmless_scores = harmless_reward_model.get_rewards(completions, prompts)
+            helpful_scores = helpful_reward_model.get_rewards(completions, prompts)
+            all_harmless_scores.extend(harmless_scores)
+            all_helpful_scores.extend(helpful_scores)
         
         total_samples_evaluated += batch_size
         

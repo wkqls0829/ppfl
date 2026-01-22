@@ -5,7 +5,7 @@ early_stop:
 federate:
   mode: standalone
   client_num: 1  # RL training uses single client (standalone RLHF)
-  total_round_num: 30  # RL training rounds
+  total_round_num: 50  # RL training rounds
   save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_vplgp_ortho_51024.ckpt"
   ignore_weight: True
   save_freq: 20  # Checkpoint 저장 빈도 줄여서 I/O 시간 감소
@@ -56,7 +56,7 @@ dataloader:
 model:
   type: 'google/gemma-2b@huggingface_llm'
 train:
-  local_update_steps: 10  # RL training steps per round
+  local_update_steps: 30  # RL training steps per round
   batch_or_epoch: batch
   optimizer:
     type: AdamW

@@ -57,6 +57,92 @@ HARMLESSNESS_PROMPT_TEMPLATE = """Below is a conversation between a human and an
 ### YOUR CHOICE:"""
 
 
+def _generate_with_z_embedding_for_winrate(model, tokenizer, input_ids, attention_mask,
+                                          z_to_embedding, client_average_z_dict, batch_client_ids,
+                                          max_new_tokens, generation_kwargs, device):
+    """
+    Generate responses using conditional generation with client-specific average z values.
+    
+    Args:
+        model: The model to generate from
+        tokenizer: Tokenizer for the model
+        input_ids: Input token IDs (batch_size, seq_len)
+        attention_mask: Attention mask (batch_size, seq_len)
+        z_to_embedding: Linear layer to project z to embedding space
+        client_average_z_dict: Dictionary mapping client_id to average z tensor
+        batch_client_ids: List of client_ids for each sample in the batch
+        max_new_tokens: Maximum number of tokens to generate
+        generation_kwargs: Additional generation kwargs
+        device: Device to run on
+    
+    Returns:
+        Generated token IDs (batch_size, generated_seq_len)
+    """
+    batch_size = input_ids.shape[0]
+    model_device = next(model.parameters()).device
+    
+    # Get z values for each sample in the batch
+    z_list = []
+    for i in range(batch_size):
+        client_id = batch_client_ids[i] if isinstance(batch_client_ids, list) and i < len(batch_client_ids) else None
+        if client_id is None:
+            # Fallback: use first available client_id
+            client_id = list(client_average_z_dict.keys())[0] if len(client_average_z_dict) > 0 else None
+        
+        if client_id is None or client_id not in client_average_z_dict:
+            logger.warning(f"Client ID {client_id} not found in client_average_z_dict. Using first available client.")
+            if len(client_average_z_dict) > 0:
+                client_id = list(client_average_z_dict.keys())[0]
+            else:
+                raise ValueError("No client average z values available for conditional generation")
+        
+        z = client_average_z_dict[client_id]
+        if isinstance(z, torch.Tensor):
+            z = z.to(device)
+        else:
+            z = torch.tensor(z, dtype=torch.float32, device=device)
+        
+        # Ensure z is 1D: (latent_dim,)
+        if z.dim() > 1:
+            z = z.squeeze()
+        z_list.append(z)
+    
+    # Stack z values: (batch_size, latent_dim)
+    z = torch.stack(z_list, dim=0)  # (batch_size, latent_dim)
+    
+    # Ensure z has correct dtype
+    if z.dtype != z_to_embedding.weight.dtype:
+        z = z.to(z_to_embedding.weight.dtype)
+    
+    # Project z to embedding space
+    z_embedding = z_to_embedding(z)  # (batch_size, embedding_dim)
+    
+    # Get input embeddings
+    input_embeddings = model.get_input_embeddings()(input_ids)  # (batch_size, seq_len, embedding_dim)
+    
+    # Expand z_embedding to match input_embeddings shape
+    seq_len = input_embeddings.shape[1]
+    z_embedding = z_embedding.unsqueeze(1).expand(-1, seq_len, -1)  # (batch_size, seq_len, embedding_dim)
+    
+    # Inject z into input embeddings
+    inputs_embeds = input_embeddings + z_embedding
+    
+    # Ensure inputs_embeds and attention_mask are on model device
+    inputs_embeds = inputs_embeds.to(model_device)
+    if attention_mask is not None:
+        attention_mask = attention_mask.to(model_device)
+    
+    # Generate using inputs_embeds
+    generated_ids = model.generate(
+        inputs_embeds=inputs_embeds,
+        attention_mask=attention_mask,
+        max_new_tokens=max_new_tokens,
+        **generation_kwargs
+    )
+    
+    return generated_ids
+
+
 def _load_original_hhrlhf_data(ctx):
     """
     Load original hh-rlhf data for evaluation.
@@ -207,7 +293,44 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
     
     all_choices = []  # Store choices: 0 if fine-tuned > baseline, 1 if baseline > fine-tuned
     
+    # Check if variational generation is enabled
+    use_variational_generation = getattr(ctx.cfg.llm, 'rlhf_use_variational_generation', False)
+    
+    # Load VPL components if needed for conditional generation
+    variational_encoder = None
+    feature_extractor = None
+    z_to_embedding = None
+    client_average_z_dict = None
+    
+    if use_variational_generation:
+        selector_ckpt_path = getattr(ctx.cfg.llm, 'rlhf_selector_checkpoint', None)
+        if selector_ckpt_path is None:
+            selector_ckpt_path = getattr(ctx.cfg.llm, 'selector_save_to', None)
+        
+        if selector_ckpt_path and os.path.exists(selector_ckpt_path):
+            try:
+                from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint, load_client_average_z_from_checkpoint
+                variational_encoder, feature_extractor, _, z_to_embedding = load_vpl_components_from_checkpoint(
+                    selector_ckpt_path, ctx.cfg, device=ctx.device
+                )
+                client_average_z_dict = load_client_average_z_from_checkpoint(
+                    selector_ckpt_path, device=ctx.device
+                )
+                if z_to_embedding is None:
+                    logger.warning("Failed to load z_to_embedding for winrate generation. Disabling variational generation.")
+                    use_variational_generation = False
+                elif client_average_z_dict is None or len(client_average_z_dict) == 0:
+                    logger.warning("No client average z found for winrate generation. Disabling variational generation.")
+                    use_variational_generation = False
+                else:
+                    logger.info(f"Loaded VPL components for conditional generation. {len(client_average_z_dict)} clients have average z values.")
+            except Exception as e:
+                logger.warning(f"Failed to load VPL components for winrate generation: {e}. Disabling variational generation.")
+                use_variational_generation = False
+    
     logger.info(f"Generating responses from fine-tuned and baseline models, then comparing with GPT API ({model_name})...")
+    if use_variational_generation:
+        logger.info("Using conditional generation with client-specific average z values")
     
     # Process test loader to generate responses from both models
     for batch_idx, batch in enumerate(tqdm(eval_loader, desc=f"Evaluating {metric_name} winrate with GPT API")):
@@ -228,22 +351,86 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
         else:
             continue
         
+        # Get client_id from batch if available (for VPL conditional generation and client-specific evaluation)
+        batch_client_ids = None
+        if isinstance(batch, dict):
+            batch_client_ids = batch.get('client_id', None)
+        # If not in batch, try to get from dataset
+        if batch_client_ids is None:
+            # Try to infer from dataset (if dataset has client_ids attribute)
+            try:
+                dataset = eval_loader.dataset
+                if hasattr(dataset, 'client_ids') and len(dataset.client_ids) > 0:
+                    start_idx = batch_idx * eval_loader.batch_size
+                    end_idx = min(start_idx + len(input_ids), len(dataset.client_ids))
+                    batch_client_ids = dataset.client_ids[start_idx:end_idx]
+                    if all(cid is None for cid in batch_client_ids):
+                        batch_client_ids = None
+            except:
+                pass
+        
+        # Determine client type for filtering (harmlessness: 1 to client_num//2, helpfulness: client_num//2+1 to client_num)
+        client_num = getattr(ctx.cfg.federate, 'client_num', 10)
+        harmless_clients_num = client_num // 2
+        
+        # Filter samples based on metric type and client type
+        # For helpfulness metric: only evaluate helpfulness clients
+        # For harmlessness metric: only evaluate harmlessness clients
+        if batch_client_ids is not None:
+            if 'helpfulness' in metric_name.lower():
+                # Only evaluate helpfulness clients
+                valid_indices = [i for i, cid in enumerate(batch_client_ids) 
+                                if cid is not None and cid > harmless_clients_num]
+            elif 'harmlessness' in metric_name.lower():
+                # Only evaluate harmlessness clients
+                valid_indices = [i for i, cid in enumerate(batch_client_ids) 
+                                if cid is not None and cid <= harmless_clients_num]
+            else:
+                # For general winrate, evaluate all
+                valid_indices = list(range(len(input_ids)))
+            
+            if len(valid_indices) == 0:
+                # Skip this batch if no valid samples for this metric
+                continue
+            
+            # Filter to only valid samples
+            input_ids = input_ids[valid_indices]
+            if attention_mask is not None:
+                attention_mask = attention_mask[valid_indices]
+            batch_client_ids = [batch_client_ids[i] for i in valid_indices]
+        
         # Decode prompts
         prompts = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
         
         # Generate responses from fine-tuned model (with adapter enabled)
         with torch.no_grad():
-            if attention_mask is not None:
-                fine_tuned_ids = ctx.model.generate(
+            if use_variational_generation and z_to_embedding is not None and client_average_z_dict is not None and batch_client_ids is not None:
+                # Conditional generation with client-specific z
+                fine_tuned_ids = _generate_with_z_embedding_for_winrate(
+                    model=ctx.model,
+                    tokenizer=tokenizer,
                     input_ids=input_ids,
                     attention_mask=attention_mask,
+                    z_to_embedding=z_to_embedding,
+                    client_average_z_dict=client_average_z_dict,
+                    batch_client_ids=batch_client_ids,
                     max_new_tokens=ctx.cfg.llm.max_new_token,
-                    **generation_kwargs)
+                    generation_kwargs=generation_kwargs,
+                    device=ctx.device
+                )
             else:
-                fine_tuned_ids = ctx.model.generate(
-                    input_ids=input_ids,
-                    max_new_tokens=ctx.cfg.llm.max_new_token,
-                    **generation_kwargs)
+                # Standard generation
+                if attention_mask is not None:
+                    fine_tuned_ids = ctx.model.generate(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=ctx.cfg.llm.max_new_token,
+                        **generation_kwargs)
+                else:
+                    fine_tuned_ids = ctx.model.generate(
+                        input_ids=input_ids,
+                        max_new_tokens=ctx.cfg.llm.max_new_token,
+                        **generation_kwargs)
         
         fine_tuned_completions = tokenizer.batch_decode(fine_tuned_ids, skip_special_tokens=True)
         

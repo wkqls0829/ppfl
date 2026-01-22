@@ -191,6 +191,23 @@ class LLMMultiLoRAClient(Client):
                 prototypes = self.trainer.get_client_orthogonal_prototypes()
                 if prototypes is not None:
                     model_para_all['client_orthogonal_prototypes'] = prototypes.cpu() if isinstance(prototypes, torch.Tensor) else prototypes
+            
+            # VPL: Add VPL components (variational_encoder, feature_extractor, latent_projection, z_to_embedding) to model parameters
+            if hasattr(self.trainer, 'variational_encoder') and self.trainer.variational_encoder is not None:
+                vpl_state_dict = {}
+                vpl_state_dict['variational_encoder'] = self.trainer.variational_encoder.state_dict()
+                if hasattr(self.trainer, 'feature_extractor') and self.trainer.feature_extractor is not None:
+                    vpl_state_dict['feature_extractor'] = self.trainer.feature_extractor.state_dict()
+                if hasattr(self.trainer, 'latent_projection') and self.trainer.latent_projection is not None:
+                    vpl_state_dict['latent_projection'] = self.trainer.latent_projection.state_dict()
+                if hasattr(self.trainer, 'z_to_embedding') and self.trainer.z_to_embedding is not None:
+                    vpl_state_dict['z_to_embedding'] = self.trainer.z_to_embedding.state_dict()
+                
+                # Add VPL components to model_para_all with prefixes
+                for component_name, component_state_dict in vpl_state_dict.items():
+                    for key, value in component_state_dict.items():
+                        model_para_all[f'{component_name}.{key}'] = value.cpu() if isinstance(value, torch.Tensor) else value
+            
             train_log_res = self._monitor.format_eval_res(
                 results,
                 rnd=self.state,

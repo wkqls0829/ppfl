@@ -39,11 +39,19 @@ class LLMDataCollator(object):
             labels,
             batch_first=True,
             padding_value=DefaultToken.IGNORE_INDEX.value)
-        return dict(
+        
+        result = dict(
             input_ids=input_ids,
             labels=labels,
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
         )
+        
+        # Include client_id if available (for VPL conditional generation)
+        client_ids = [instance.get('client_id', None) for instance in instances]
+        if any(cid is not None for cid in client_ids):
+            result['client_id'] = client_ids
+        
+        return result
 
 
 @dataclass
@@ -62,7 +70,23 @@ class LLMRewardCollator():
         concat_data_collator = LLMDataCollator(tokenizer=self.tokenizer)
         concat_data_dict = concat_data_collator(concat_data)
 
-        return dict(
+        # Extract z values from instances if available (for VPL conditional training)
+        z_values = None
+        if instances and 'z' in instances[0]:
+            z_values = [instance.get('z', None) for instance in instances]
+            # Filter out None values and convert to tensor if all are valid
+            if all(z is not None for z in z_values):
+                import torch
+                if isinstance(z_values[0], list):
+                    z_values = torch.tensor(z_values)
+                elif isinstance(z_values[0], torch.Tensor):
+                    z_values = torch.stack(z_values)
+                else:
+                    z_values = torch.tensor(z_values)
+            else:
+                z_values = None
+
+        batch_dict = dict(
             win_input_ids=concat_data_dict["input_ids"][:len(win_data)],
             win_labels=concat_data_dict["labels"][:len(win_data)],
             win_attention_mask=concat_data_dict["attention_mask"]
@@ -71,6 +95,12 @@ class LLMRewardCollator():
             lose_labels=concat_data_dict["labels"][len(win_data):],
             lose_attention_mask=concat_data_dict["attention_mask"]
             [len(win_data):])
+        
+        # Add z values to batch if available
+        if z_values is not None:
+            batch_dict['z'] = z_values
+        
+        return batch_dict
 
 
 class Generator:

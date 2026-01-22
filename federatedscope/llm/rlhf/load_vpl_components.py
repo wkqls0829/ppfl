@@ -82,19 +82,34 @@ def load_vpl_components_from_checkpoint(checkpoint_path, config, device='cuda:0'
                 hidden_dims=[512, 256, 128]
             ).to(device)
         
-        # Initialize feature extractor
-        feature_extractor = nn.Sequential(
-            nn.Linear(raw_feature_dim, 256),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(256, 512),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(256, feature_extractor_output_dim)
-        ).to(device)
+        # Initialize feature extractor (must match VPLRewardChoiceTrainer architecture)
+        # If vpl_use_llm_feature_extractor=True, use [raw_feature_dim -> 512 -> 256 -> 128]
+        # Otherwise, use [raw_feature_dim -> 256 -> 512 -> 256 -> 128]
+        if vpl_use_llm_feature_extractor:
+            # Match VPLRewardChoiceTrainer architecture for projection-based feature extractor
+            feature_extractor = nn.Sequential(
+                nn.Linear(raw_feature_dim, 512),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(512, 256),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(256, feature_extractor_output_dim)
+            ).to(device)
+        else:
+            # Match VPLRewardChoiceTrainer architecture for MLP feature extractor
+            feature_extractor = nn.Sequential(
+                nn.Linear(raw_feature_dim, 256),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(256, 512),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(512, 256),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(256, feature_extractor_output_dim)
+            ).to(device)
         
         # Initialize latent projection
         choices = getattr(config.trainer, 'choices', ['A', 'B'])
