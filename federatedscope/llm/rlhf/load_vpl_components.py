@@ -167,38 +167,40 @@ def load_vpl_components_from_checkpoint(checkpoint_path, config, device='cuda:0'
         latent_projection_loaded = False
         z_to_embedding_loaded = False
         
-        for key in model_state_dict.keys():
-            if 'variational_encoder' in key:
-                # Load variational encoder weights
+        # Load variational encoder weights (only once, not in loop)
+        if not variational_encoder_loaded:
+            variational_encoder_keys = {k.replace('variational_encoder.', ''): v 
+                                       for k, v in model_state_dict.items() 
+                                       if 'variational_encoder' in k}
+            if variational_encoder_keys:
                 try:
-                    variational_encoder.load_state_dict(
-                        {k.replace('variational_encoder.', ''): v 
-                         for k, v in model_state_dict.items() 
-                         if 'variational_encoder' in k}, strict=False)
+                    variational_encoder.load_state_dict(variational_encoder_keys, strict=False)
                     variational_encoder_loaded = True
                     logger.info(f"Loaded variational encoder from checkpoint")
                 except Exception as e:
                     logger.warning(f"Failed to load variational encoder: {e}")
-            
-            if 'feature_extractor' in key:
-                # Load feature extractor weights
+        
+        # Load feature extractor weights (only once, not in loop)
+        if not feature_extractor_loaded:
+            feature_extractor_keys = {k.replace('feature_extractor.', ''): v 
+                                     for k, v in model_state_dict.items() 
+                                     if 'feature_extractor' in k}
+            if feature_extractor_keys:
                 try:
-                    feature_extractor.load_state_dict(
-                        {k.replace('feature_extractor.', ''): v 
-                         for k, v in model_state_dict.items() 
-                         if 'feature_extractor' in k}, strict=False)
+                    feature_extractor.load_state_dict(feature_extractor_keys, strict=False)
                     feature_extractor_loaded = True
                     logger.info(f"Loaded feature extractor from checkpoint")
                 except Exception as e:
                     logger.warning(f"Failed to load feature extractor: {e}")
-            
-            if 'latent_projection' in key:
-                # Load latent projection weights
+        
+        # Load latent projection weights (only once, not in loop)
+        if not latent_projection_loaded:
+            latent_projection_keys = {k.replace('latent_projection.', ''): v 
+                                     for k, v in model_state_dict.items() 
+                                     if 'latent_projection' in k}
+            if latent_projection_keys:
                 try:
-                    latent_projection.load_state_dict(
-                        {k.replace('latent_projection.', ''): v 
-                         for k, v in model_state_dict.items() 
-                         if 'latent_projection' in k}, strict=False)
+                    latent_projection.load_state_dict(latent_projection_keys, strict=False)
                     latent_projection_loaded = True
                     logger.info(f"Loaded latent projection from checkpoint")
                 except Exception as e:

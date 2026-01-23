@@ -140,8 +140,8 @@ class DPORewardTrainer(LLMTrainer):
 
         ctx.ys_pred = CtxVar([], LIFECYCLE.ROUTINE)
         
-        # Load VPL components for z-dependent generation
-        if self.use_variational_generation:
+        # Load VPL components for z-dependent generation (only once)
+        if self.use_variational_generation and self.variational_encoder is None:
             from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint
             
             selector_ckpt_path = getattr(ctx.cfg.llm, 'rlhf_selector_checkpoint', None)
