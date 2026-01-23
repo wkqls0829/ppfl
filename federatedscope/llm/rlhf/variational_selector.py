@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 from federatedscope.llm.dataset.llm_dataset import LLMComparisonDataset, DefaultToken
 from federatedscope.llm.model.variational_encoder import VariationalEncoder
 from federatedscope.llm.model.variational_encoder_gp import VariationalEncoderGP
+from federatedscope.llm.dataloader import LLMRewardCollator
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,8 @@ def extract_preference_features_for_variational(model, tokenizer, list_data_dict
         choice="fake_choice",  # Temporary choice for dataset creation
     )
     
-    dataloader = DataLoader(dataset, batch_size=4)
+    collator = LLMRewardCollator(tokenizer=tokenizer)
+    dataloader = DataLoader(dataset, batch_size=4, collate_fn=collator)
     
     features_list = []
     hidden_states_list = []
@@ -292,7 +294,8 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
                     output_B="output_B",
                     choice="fake_choice",
                 )
-                dataloader = DataLoader(dataset, batch_size=4)
+                collator = LLMRewardCollator(tokenizer=selector_tokenizer)
+                dataloader = DataLoader(dataset, batch_size=4, collate_fn=collator)
                 
                 # Ensure selector_model is on the correct device
                 selector_model_device = device
@@ -450,7 +453,8 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
                     output_B="output_B",
                     choice="fake_choice",
                 )
-                dataloader = DataLoader(dataset, batch_size=4)
+                collator = LLMRewardCollator(tokenizer=selector_tokenizer)
+                dataloader = DataLoader(dataset, batch_size=4, collate_fn=collator)
                 
                 batch_predictions = []
                 z_idx = 0  # Track z index across batches
