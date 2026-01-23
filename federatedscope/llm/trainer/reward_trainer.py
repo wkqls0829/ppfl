@@ -285,7 +285,10 @@ class DPORewardTrainer(LLMTrainer):
             z_mu, z_logvar = self.variational_encoder.encode(features)
             
             # Sample z using reparameterization trick
-            if self.training:
+            # Use ctx.cur_mode to determine if in training mode
+            from federatedscope.core.trainers.enums import MODE
+            is_training = hasattr(ctx, 'cur_mode') and ctx.cur_mode == MODE.TRAIN
+            if is_training:
                 std = torch.exp(0.5 * z_logvar)
                 eps = torch.randn_like(std)
                 z = z_mu + eps * std
@@ -335,7 +338,10 @@ class DPORewardTrainer(LLMTrainer):
                 logger.debug("z not found in batch and input_ids not available, using zero z")
         
         # Collect z values for visualization (store mean z per batch)
-        if z is not None and self.training:
+        # Use ctx.cur_mode to determine if in training mode
+        from federatedscope.core.trainers.enums import MODE
+        is_training = hasattr(ctx, 'cur_mode') and ctx.cur_mode == MODE.TRAIN
+        if z is not None and is_training:
             # Store z values (detach to avoid gradient tracking)
             z_detached = z.detach().cpu()
             # Store mean z per batch (or all z values if batch is small)
