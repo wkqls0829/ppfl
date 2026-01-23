@@ -158,7 +158,17 @@ class DPORewardTrainer(LLMTrainer):
                     self.variational_encoder = variational_encoder
                     self.feature_extractor = feature_extractor
                     self.z_to_embedding = z_to_embedding
-                    logger.info("VPL components loaded successfully for z-dependent generation")
+                    
+                    # Match dtype with model
+                    model_dtype = next(ctx.model.parameters()).dtype
+                    if self.variational_encoder is not None:
+                        self.variational_encoder = self.variational_encoder.to(dtype=model_dtype)
+                    if self.feature_extractor is not None:
+                        self.feature_extractor = self.feature_extractor.to(dtype=model_dtype)
+                    if self.z_to_embedding is not None:
+                        self.z_to_embedding = self.z_to_embedding.to(dtype=model_dtype)
+                    
+                    logger.info(f"VPL components loaded successfully for z-dependent generation (dtype: {model_dtype})")
                 else:
                     logger.warning("Failed to load VPL components. Falling back to standard generation.")
                     self.use_variational_generation = False
@@ -270,10 +280,14 @@ class DPORewardTrainer(LLMTrainer):
             # Get embeddings from model
             input_embeddings = ctx.model.get_input_embeddings()(input_ids)
             
+            # Match dtype with model
+            model_dtype = next(ctx.model.parameters()).dtype
+            input_embeddings = input_embeddings.to(dtype=model_dtype)
+            
             # Extract features (use mean pooling over sequence length)
             if attention_mask is not None:
                 # Mask out padding tokens
-                mask = attention_mask.unsqueeze(-1).float()
+                mask = attention_mask.unsqueeze(-1).to(dtype=model_dtype)
                 pooled_embeddings = (input_embeddings * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
             else:
                 pooled_embeddings = input_embeddings.mean(dim=1)
@@ -300,7 +314,8 @@ class DPORewardTrainer(LLMTrainer):
             logger.warning(f"Failed to infer z from input: {e}. Using zero z.")
             vpl_latent_dim = getattr(ctx.cfg.llm, 'vpl_latent_dim', 32)
             batch_size = input_ids.shape[0]
-            return torch.zeros(batch_size, vpl_latent_dim, device=ctx.device)
+            model_dtype = next(ctx.model.parameters()).dtype
+            return torch.zeros(batch_size, vpl_latent_dim, device=ctx.device, dtype=model_dtype)
     
     def _get_z_from_batch(self, ctx, batch_size, input_ids=None, attention_mask=None):
         """Get z values from batch data or infer via variational encoder (Step 4: improved inference)."""
