@@ -364,16 +364,21 @@ class DPORewardTrainer(LLMTrainer):
             # Store z values (detach to avoid gradient tracking)
             z_detached = z.detach().cpu()
             # Store mean z per batch (or all z values if batch is small)
+            # Convert to float32 before numpy conversion (BFloat16 is not supported by numpy)
             if batch_size <= 4:
                 if isinstance(z_detached, torch.Tensor):
-                    self.collected_z_values.extend(z_detached.numpy())
+                    # Convert BFloat16 to float32 for numpy compatibility
+                    z_detached_float = z_detached.float() if z_detached.dtype == torch.bfloat16 else z_detached
+                    self.collected_z_values.extend(z_detached_float.numpy())
                 else:
                     self.collected_z_values.extend(z_detached)
             else:
                 # For larger batches, store mean z
                 if isinstance(z_detached, torch.Tensor):
                     mean_z = z_detached.mean(dim=0, keepdim=True)
-                    self.collected_z_values.extend(mean_z.numpy())
+                    # Convert BFloat16 to float32 for numpy compatibility
+                    mean_z_float = mean_z.float() if mean_z.dtype == torch.bfloat16 else mean_z
+                    self.collected_z_values.extend(mean_z_float.numpy())
                 else:
                     import numpy as np
                     mean_z = np.mean(z_detached, axis=0, keepdims=True)
