@@ -1,5 +1,5 @@
 use_gpu: True
-device: 1  # GPU 1 for test HRL experiment (tid: 51000) - using 50000 selector checkpoint
+device: 2  # GPU 2 for test HRL experiment (tid: 51000) - using 50000 selector checkpoint
 early_stop:
   patience: 0
 federate:

@@ -1,15 +1,15 @@
 use_gpu: True
-device: 4  # GPU 4 for RL training
+device: 4  # GPU 4 for test RL experiment (tid: 21000) - 1 round eval, 10 rounds only
 early_stop:
   patience: 0
 federate:
   mode: standalone
   client_num: 1  # RLHF uses single client
   sample_client_num: 1
-  total_round_num: 50
-  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_fedbiscuit_21023.ckpt"
+  total_round_num: 10  # Test: 10 rounds only
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_fedbiscuit_21000.ckpt"
   ignore_weight: True
-  save_freq: 20
+  save_freq: 10  # Save at the end
   share_local_model: True  # Single GPU mode
   online_aggr: False
 data:
@@ -67,15 +67,15 @@ criterion:
 trainer:
   type: llmdporewardtrainer  # FedBiscuit RLHF trainer (no VPL)
 eval:
-  freq: 10
+  freq: 1  # Evaluate every round (1 round = 1 eval)
   metrics: ['loss', 'acc', 'avg_helpfulness', 'avg_harmlessness', 'helpfulness_winrate', 'harmlessness_winrate', 'avg_winlose_rate']
   best_res_update_round_wise_key: train_avg_loss
   count_flops: False
-  max_samples_for_reward: 30
+  max_samples_for_reward: 30  # Intermediate eval: use limited samples
   split: ['test', 'val']
   use_baseline_model_for_winrate: True
   use_gpt_api_for_winrate: False
-expname: fedbiscuit_hrl_t21023
+expname: fedbiscuit_hrl_t21000
 wandb:
   use: True
   name_user: ''

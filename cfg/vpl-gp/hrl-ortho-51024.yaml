@@ -1,5 +1,5 @@
 use_gpu: True
-device: 3  # GPU 3 for HRL experiment (tid: 51024) - based on 51022 but using 50024 selector
+device: 3  # GPU 3 for HRL experiment (tid: 51024) - using 50024 selector checkpoint
 early_stop:
   patience: 0
 federate:
@@ -40,11 +40,12 @@ llm:
   vpl_latent_dim: 32  # Should match selector's vpl_latent_dim
   vpl_feature_method: 'choice_logits'  # Should match selector's vpl_feature_method
   vpl_use_feature_difference: True  # Should match selector (50024 uses feature difference)
+  vpl_use_difference_only: True  # Should match selector (50024 uses vpl_use_difference_only=True)
   vpl_gp_temperature: 1.0  # Should match selector's vpl_gp_temperature
   # RLHF with z-dependent generation
   rlhf_use_variational_generation: True  # Use z-dependent generation for RL training
   rlhf_use_variational_selection: True  # Use variational selection for preference data generation
-  rlhf_selector_checkpoint: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50024.ckpt"  # Selector checkpoint path (will be overridden by selector_cfg_file)
+  rlhf_selector_checkpoint: "/hdd/hdd3/kjb/checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50024.ckpt"  # Selector checkpoint path (will be overridden by selector_cfg_file)
   reward_coeff: 0.1  # DPO beta coefficient
   grad_accum_step: 4  # Gradient accumulation steps
   max_prompts_for_generation: 50  # Number of prompts to generate per round
@@ -61,19 +62,21 @@ train:
   optimizer:
     type: AdamW
     betas: (0.9, 0.95)
-    lr: 0.0001  # Same as 51022
+    lr: 0.0001  # Same as 51000
   is_enable_half: True
 criterion:
   type: CrossEntropyLoss
 trainer:
   type: llmdporewardtrainer  # DPO trainer for RL training (not binary selector)
 eval:
-  freq: 5  # Evaluation 빈도
+  freq: 10  # Evaluation 빈도
   metrics: ['loss', 'acc', 'avg_helpfulness', 'avg_harmlessness',
             'helpfulness_winrate', 'harmlessness_winrate', 'avg_winlose_rate']  # RL: drop VPL losses, add avg win/lose
   best_res_update_round_wise_key: train_avg_loss  # Use train_avg_loss instead of val_avg_loss
   count_flops: False
   max_samples_for_reward: 30  # Reduced from 100 to speed up evaluation
+  use_baseline_model_for_winrate: True  # Use base Gemma-2b model for win rate comparison
+  use_gpt_api_for_winrate: False  # Disable GPT API for win rate (use baseline model instead)
 expname: vplgp_hrl_ortho_t51024
 wandb:
   use: True

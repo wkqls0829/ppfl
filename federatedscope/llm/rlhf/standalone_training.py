@@ -403,10 +403,41 @@ class RLHF_finetuning:
         # This file save selector's choices
         fp = os.path.join(self.data_root, f"generated_choose_{saveto}.json")
 
+        list_preference_data = None
+        should_regenerate = False
+        
         if os.path.exists(fp):
             list_preference_data = json.load(open(fp, "r"))
+            logger.info(f"Loaded preference data from existing file: {fp} ({len(list_preference_data)} samples)")
+            
+            # Check if data has 'choice' key (required for LLMComparisonDataset)
+            if len(list_preference_data) > 0:
+                if 'choice' not in list_preference_data[0]:
+                    logger.warning(f"Loaded preference data does not have 'choice' key. Regenerating with binary selection...")
+                    should_regenerate = True
+                else:
+                    # Validate that all samples have 'choice' key
+                    samples_without_choice = [i for i, d in enumerate(list_preference_data) if 'choice' not in d]
+                    if len(samples_without_choice) > 0:
+                        logger.warning(f"Found {len(samples_without_choice)} samples without 'choice' key. Regenerating...")
+                        should_regenerate = True
+                    else:
+                        # Validate choice values are valid (0 or 1)
+                        invalid_choices = [i for i, d in enumerate(list_preference_data) if d.get('choice') not in [0, 1]]
+                        if len(invalid_choices) > 0:
+                            logger.warning(f"Found {len(invalid_choices)} samples with invalid choice values. Regenerating...")
+                            should_regenerate = True
+            elif len(list_preference_data) == 0:
+                logger.warning(f"Loaded preference data file is empty. Regenerating...")
+                should_regenerate = True
+            
+            if should_regenerate:
+                # Delete the file and regenerate
+                os.remove(fp)
+                logger.info(f"Deleted invalid preference data file: {fp}")
+                list_preference_data = None
 
-        else:
+        if list_preference_data is None:
             list_pairwise_data = self.load_pairwise_data()
 
             # For VPL: Split pairwise data into harmlessness and helpfulness sets
@@ -680,6 +711,27 @@ class RLHF_finetuning:
             if early_exiting:
                 # For choosing the answer
                 exit(0)
+        
+        # Ensure list_preference_data is not None and has valid format
+        if list_preference_data is None:
+            logger.error("Failed to load or generate preference data. list_preference_data is None.")
+            raise ValueError("list_preference_data is None. Check logs for errors in load_pairwise_data or binary selection.")
+        
+        if len(list_preference_data) == 0:
+            logger.error("Preference data is empty. Cannot proceed with training.")
+            raise ValueError("list_preference_data is empty. Check logs for errors in load_pairwise_data or binary selection.")
+        
+        # Validate data format: check if 'choice' key exists
+        if len(list_preference_data) > 0:
+            sample = list_preference_data[0]
+            if 'choice' not in sample:
+                logger.error(f"Preference data sample missing 'choice' key. Sample keys: {list(sample.keys())}")
+                raise ValueError("Preference data must have 'choice' key (0 or 1). Regenerate preference data.")
+            valid_choices = [d for d in list_preference_data if 'choice' in d and d['choice'] in [0, 1]]
+            if len(valid_choices) == 0:
+                logger.error(f"No valid choice values found. All samples have invalid choice values.")
+                raise ValueError("All preference data samples have invalid choice values. Regenerate preference data.")
+            logger.info(f"Preference data validation: {len(valid_choices)} / {len(list_preference_data)} samples have valid choice values")
 
         return list_preference_data
 
@@ -929,6 +981,7 @@ class RLHF_finetuning:
                                 list_test_dict.append({
                                     'prompt': prompt_dict['prompt'],
                                     'client_id': client_id,  # Assign client_id from the split
+                                    'output': '',  # Empty output for test data (will be generated during evaluation)
                                 })
                     
                     logger.info(f"Loaded {len(list_test_dict)} test prompts split by {len(client_test_data)} clients "
@@ -948,7 +1001,7 @@ class RLHF_finetuning:
                     logger.warning("No test prompts loaded. Test evaluation will be skipped.")
                 else:
                     # Convert prompts to list of dicts with 'prompt' key
-                    list_test_dict = [{'prompt': p['prompt']} for p in list_test_prompts if p.get('prompt')]
+                    list_test_dict = [{'prompt': p['prompt'], 'output': ''} for p in list_test_prompts if p.get('prompt')]  # Add empty 'output' for test data
                     
                     # Assign client_id for VPL models (for conditional generation) - cyclic assignment
                     if is_vpl_model:
@@ -1006,8 +1059,7 @@ class RLHF_finetuning:
             try:
                 from federatedscope.llm.llm_local.z_visualization import visualize_cross_client_z
                 import numpy as np
-                import torch
-                # os is already imported at the top of the file
+                # torch and os are already imported at the top of the file
                 
                 logger.info("Visualizing client-specific average z values at the start of RL training...")
                 

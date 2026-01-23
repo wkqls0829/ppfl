@@ -4,6 +4,7 @@ Uses VPL-trained variational encoder to sample client-specific z and make condit
 """
 import torch
 import torch.nn.functional as F
+import numpy as np
 import logging
 from tqdm import tqdm
 from torch.utils.data import DataLoader
@@ -254,7 +255,7 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
     
     with torch.no_grad():
         if use_provided_z and num_provided == len(list_data_dict):
-            # Use provided z values directly
+            # Use provided z values directly (skip inference, but still need to perform selection)
             logger.info("Using all provided z values, skipping inference")
             mu_cpu = None
             logvar_cpu = None
@@ -271,6 +272,125 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
             if use_provided_z:
                 # All z provided, use them directly
                 z_mean = np.array([z[0] for z in all_z_samples])  # (batch, latent_dim)
+                # Still need to perform selection using provided z values
+                # Convert z_mean to tensor for selection
+                z_tensor = torch.tensor(z_mean, dtype=torch.float32).to(device)
+                
+                # Create dataset for binary choice
+                dataset = LLMComparisonDataset(
+                    list_data_dict,
+                    selector_tokenizer,
+                    prompt_input=prompt_template,
+                    prompt_no_input=prompt_template,
+                    output_A="output_A",
+                    output_B="output_B",
+                    choice="fake_choice",
+                )
+                dataloader = DataLoader(dataset, batch_size=4)
+                
+                # Ensure selector_model is on the correct device
+                selector_model_device = device
+                if hasattr(selector_model, 'device'):
+                    selector_model_device = selector_model.device
+                elif hasattr(selector_model, 'base_model') and hasattr(selector_model.base_model, 'device'):
+                    selector_model_device = selector_model.base_model.device
+                else:
+                    try:
+                        selector_model_device = next(selector_model.parameters()).device
+                    except:
+                        selector_model_device = device
+                
+                # Project z to choice logits
+                latent_dim = z_tensor.shape[-1]
+                num_choices = len(choices)
+                
+                batch_predictions = []
+                z_idx = 0
+                
+                for batch_idx, data_batch in enumerate(tqdm(dataloader, desc="Variational selection (using provided z)")):
+                    win_input_ids = data_batch["win_input_ids"].to(selector_model_device)
+                    win_labels = data_batch["win_labels"].to(selector_model_device)
+                    win_attention_mask = data_batch["win_attention_mask"].to(selector_model_device)
+                    lose_input_ids = data_batch["lose_input_ids"].to(selector_model_device)
+                    lose_labels = data_batch["lose_labels"].to(selector_model_device)
+                    lose_attention_mask = data_batch["lose_attention_mask"].to(selector_model_device)
+                    
+                    batch_size = win_input_ids.shape[0]
+                    z_batch = z_tensor[z_idx:z_idx + batch_size].to(selector_model_device)
+                    z_idx += batch_size
+                
+                    # Get logits for both responses
+                    win_outputs = selector_model(input_ids=win_input_ids, attention_mask=win_attention_mask)
+                    lose_outputs = selector_model(input_ids=lose_input_ids, attention_mask=lose_attention_mask)
+                
+                    win_logits = win_outputs.logits
+                    lose_logits = lose_outputs.logits
+                
+                    # Use provided latent_projection if available
+                    if latent_projection is not None:
+                        if next(latent_projection.parameters()).device != z_batch.device:
+                            latent_projection = latent_projection.to(z_batch.device)
+                        z_projection = latent_projection(z_batch)  # (batch, num_choices)
+                    else:
+                        # Create temporary projection
+                        temp_projection = torch.nn.Linear(latent_dim, num_choices).to(z_batch.device)
+                        torch.nn.init.normal_(temp_projection.weight, mean=0.0, std=0.01)
+                        torch.nn.init.zeros_(temp_projection.bias)
+                        z_projection = temp_projection(z_batch)
+                
+                    # Get logits at choice positions
+                    shift_win_logits = win_logits[..., :-1, :].contiguous()
+                    shift_lose_logits = lose_logits[..., :-1, :].contiguous()
+                    shift_win_labels = win_labels[..., 1:].contiguous()
+                    shift_lose_labels = lose_labels[..., 1:].contiguous()
+                
+                    # Extract choice logits
+                    win_choice_logits = shift_win_logits[..., choices]  # (batch, seq_len-1, num_choices)
+                    lose_choice_logits = shift_lose_logits[..., choices]
+                
+                    # Find choice token positions
+                    A_token, B_token = choices[0], choices[1]
+                
+                    batch_choices = []
+                    for b in range(batch_size):
+                        # Find A and B positions in win (output_A)
+                        win_A_pos = (shift_win_labels[b] == A_token)
+                        win_B_pos = (shift_win_labels[b] == B_token)
+                    
+                        # Find A and B positions in lose (output_B)
+                        lose_A_pos = (shift_lose_labels[b] == A_token)
+                        lose_B_pos = (shift_lose_labels[b] == B_token)
+                    
+                        # Get logits at choice positions
+                        if win_A_pos.any():
+                            win_A_logit = win_choice_logits[b, win_A_pos, 0].mean()  # Choice 0 = A
+                        else:
+                            win_A_logit = win_choice_logits[b, :, 0].mean()
+                    
+                        if lose_B_pos.any():
+                            lose_B_logit = lose_choice_logits[b, lose_B_pos, 1].mean()  # Choice 1 = B
+                        else:
+                            lose_B_logit = lose_choice_logits[b, :, 1].mean()
+                    
+                        # Add z-conditioned bias
+                        z_bias_A = z_projection[b, 0]  # Bias for choice A
+                        z_bias_B = z_projection[b, 1]  # Bias for choice B
+                    
+                        # Compare: A (win) vs B (lose) with z conditioning
+                        score_A = win_A_logit + z_bias_A
+                        score_B = lose_B_logit + z_bias_B
+                    
+                        # Choose based on scores
+                        if score_A > score_B:
+                            choice = 0  # A is better
+                        else:
+                            choice = 1  # B is better
+                    
+                        batch_choices.append(choice)
+                
+                    batch_predictions.extend(batch_choices)
+                
+                predicted_indices = batch_predictions
         else:
             # Encode to get posterior parameters
             # Ensure variational_encoder is on the same device as features

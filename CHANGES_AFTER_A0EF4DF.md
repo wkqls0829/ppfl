@@ -2,6 +2,8 @@
 
 **기준 커밋**: `a0ef4df` (2026-01-22 16:27:35) - "Fix client_average_z_dict loading and t-SNE visualization for RL training"
 
+**최종 업데이트**: 2026-01-23 11:30 (현재 상황 및 최근 버그 수정 포함)
+
 ## 📝 수정된 파일 (3개)
 
 ### 1. `federatedscope/llm/llm_local/server.py`
@@ -156,6 +158,97 @@
   - `cfg/feddpo/hrl-10000.yaml`
 - **참고**: `cfg/fedbiscuit/hrl-21023.yaml`과 `cfg/fedbiscuit/hrl-21024.yaml`은 이미 50/30으로 설정되어 있음
 
-### 5. 추가 수정사항
+### 5. Test Evaluation 캐시 문제 수정 (2026-01-23 11:20)
+**파일들**: 
+- `federatedscope/llm/metric/hhrl_metrics.py`
+- `federatedscope/llm/metric/winrate_metrics.py`
+
+**문제**: 
+- Test evaluation에서 reward model score가 변하지 않고 winrate가 항상 높게 나오는 문제
+- 원인: Test evaluation에서 캐시를 사용하여 매 round마다 새로운 response를 생성하지 않음
+- Winrate 계산 시 prompt 매칭이 인덱스 기반으로만 되어 잘못된 비교 발생
+
+**해결**:
+- Test split에서는 캐시를 사용하지 않도록 수정 (매 round마다 새로운 response 생성)
+- Winrate 계산 시 prompt 텍스트 기반 정확한 매칭으로 변경
+- `prompt_to_original_idx` 딕셔너리를 사용하여 정확한 prompt 매칭
+
+### 6. Variational Selector Choice Key 누락 버그 수정 (2026-01-23 11:25)
+**파일**: `federatedscope/llm/rlhf/variational_selector.py`
+
+**문제**:
+- `use_provided_z=True`일 때 z 값은 사용하지만 실제 선택(choice) 로직이 실행되지 않음
+- `predicted_indices`가 비어있어서 `choice` key가 생성되지 않음
+- 에러: "Preference data sample missing 'choice' key"
+
+**해결**:
+- `use_provided_z=True`일 때도 제공된 z 값을 사용하여 실제 선택을 수행하도록 수정
+- 제공된 z 값을 사용한 binary selection 로직 추가
+
+### 7. TOKENIZERS_PARALLELISM 경고 수정 (2026-01-23 11:30)
+**파일**: `scripts/fedbiscuit/hrl-21000.sh`
+
+**문제**:
+- "The current process just got forked, after parallelism has already been used" 경고가 계속 발생
+
+**해결**:
+- `TOKENIZERS_PARALLELISM=false` 환경 변수 추가
+
+### 8. 추가 수정사항
 - **Feature extractor 로딩 경고 해결**: Shape mismatch 문제 해결로 feature extractor가 정상적으로 로드됨
 - **실험 51000 정상 실행**: 모든 에러 수정 후 실험이 정상적으로 진행 중
+
+---
+
+## 🖥️ 현재 실행 중인 실험 현황 (2026-01-23 11:30)
+
+### GPU 0 (44.3 GB / 49.1 GB 사용, 97%)
+- **PID 2340462**: FedBiscuit HHST (TID 20124)
+  - Config: `cfg/fedbiscuit/hhst-20124.yaml`
+  - 50 clients baseline 비교 실험
+
+### GPU 1 (6.7 GB / 49.1 GB 사용, 0%)
+- **PID 2902403**: VPL-GP HHST (TID 50124)
+  - Config: `cfg/vpl-gp/hhst-ortho-50124.yaml`
+  - 50 clients, orthogonal loss 활성화
+
+### GPU 2 (12.2 GB / 49.1 GB 사용, 42%)
+- **PID 2942114**: VPL-GP RL (TID 51000)
+  - Config: `cfg/vpl-gp/hrl-ortho-51000.yaml` (selector: `hhst-ortho-50000.yaml`)
+  - Test HRL 실험 (50000 selector checkpoint 사용)
+  - Variational generation 및 selection 활성화
+
+### GPU 3 (비어있음)
+- 사용 가능
+
+### GPU 4 (12.6 GB / 49.1 GB 사용, 39%)
+- **PID 2956476 등**: FedBiscuit RL (TID 21000)
+  - Config: `cfg/fedbiscuit/hrl-21000.yaml` (selector: `hhst-20023.yaml`)
+  - Test RL 실험 (매 round 평가, 10 rounds)
+  - TOKENIZERS_PARALLELISM 경고 수정됨
+
+### GPU 5-7
+- 다른 프로세스 (VLLM 등) 실행 중
+
+---
+
+## 📝 최근 수정된 파일 요약 (2026-01-23)
+
+1. **`federatedscope/llm/metric/hhrl_metrics.py`**
+   - Test evaluation 캐시 비활성화
+   - 매 round마다 새로운 response 생성
+
+2. **`federatedscope/llm/metric/winrate_metrics.py`**
+   - Test evaluation 캐시 비활성화
+   - Prompt 텍스트 기반 정확한 매칭으로 변경
+   - GPT API 버전과 internal model 버전 모두 수정
+
+3. **`federatedscope/llm/rlhf/variational_selector.py`**
+   - `use_provided_z=True`일 때도 선택 로직 실행하도록 수정
+   - Choice key 생성 보장
+
+4. **`scripts/fedbiscuit/hrl-21000.sh`**
+   - `TOKENIZERS_PARALLELISM=false` 환경 변수 추가
+
+5. **`cfg/fedbiscuit/hrl-21000.yaml`**
+   - Device를 GPU 4로 변경 (1 → 4)

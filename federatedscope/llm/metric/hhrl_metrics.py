@@ -70,6 +70,8 @@ def _get_or_compute_hhrl_scores(ctx):
     
     cache_key = f'{ctx.cur_split}_hhrl_scores'
     # Clear cache if round has changed (for training, we want fresh metrics each round)
+    # IMPORTANT: For test evaluation, we should NOT cache results across rounds
+    # because the model changes during training, so responses should be regenerated
     round_cache_key = f'{cache_key}_round'
     current_round = getattr(ctx, 'cur_round', None)
     cached_round = getattr(ctx, round_cache_key, None)
@@ -78,8 +80,17 @@ def _get_or_compute_hhrl_scores(ctx):
     if cached_round is not None and current_round is not None and cached_round != current_round:
         if hasattr(ctx, cache_key):
             delattr(ctx, cache_key)
+            logger.info(f"Cleared reward model cache for {ctx.cur_split} (round changed from {cached_round} to {current_round})")
     
-    if hasattr(ctx, cache_key):
+    # For test evaluation, always regenerate responses (don't use cache)
+    # because the model is being trained and responses should change each round
+    if ctx.cur_split == 'test':
+        if hasattr(ctx, cache_key):
+            delattr(ctx, cache_key)
+            logger.info(f"Cleared reward model cache for test evaluation (forcing regeneration for round {current_round})")
+    
+    if hasattr(ctx, cache_key) and ctx.cur_split != 'test':
+        # Only use cache for non-test splits (e.g., val)
         return getattr(ctx, cache_key)
 
     eval_loader = getattr(ctx, f'{ctx.cur_split}_loader', None)
@@ -141,8 +152,17 @@ def _get_or_compute_hhrl_scores(ctx):
 
     # Limit the number of samples for evaluation to speed up
     # Default: evaluate on max 30 samples, or all if less than 30
+    # Final round: use full dataset (no limit)
+    is_final_round = False
+    if hasattr(ctx, 'cur_round') and hasattr(ctx.cfg.federate, 'total_round_num'):
+        is_final_round = (ctx.cur_round + 1 == ctx.cfg.federate.total_round_num)
+    
     max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 30)
-    if max_eval_samples <= 0:
+    if is_final_round:
+        # Final round: use full dataset (no limit)
+        max_eval_samples = float('inf')
+        logger.info(f"Final round detected (round {ctx.cur_round + 1}/{ctx.cfg.federate.total_round_num}). Using full dataset for reward model evaluation.")
+    elif max_eval_samples <= 0:
         max_eval_samples = float('inf')  # Evaluate on all samples
     
     total_samples_evaluated = 0
