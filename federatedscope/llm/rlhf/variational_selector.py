@@ -276,6 +276,12 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
                 # Convert z_mean to tensor for selection
                 z_tensor = torch.tensor(z_mean, dtype=torch.float32).to(device)
                 
+                # Add fake_choice to all samples so LLMComparisonDataset doesn't filter them out
+                # We'll compute the actual choice during selection
+                for sample in list_data_dict:
+                    if "fake_choice" not in sample:
+                        sample["fake_choice"] = 0  # Temporary placeholder, will be replaced
+                
                 # Create dataset for binary choice
                 dataset = LLMComparisonDataset(
                     list_data_dict,
