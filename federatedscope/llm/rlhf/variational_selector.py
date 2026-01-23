@@ -391,6 +391,9 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
                     batch_predictions.extend(batch_choices)
                 
                 predicted_indices = batch_predictions
+                mu_cpu = None
+                logvar_cpu = None
+                all_z_samples = [z_mean]  # Store z_mean for consistency
         else:
             # Encode to get posterior parameters
             # Ensure variational_encoder is on the same device as features
@@ -573,9 +576,14 @@ def variational_better_response(list_data_dict, selector_model, selector_tokeniz
             sample["z_mu"] = mu_cpu[idx].tolist()  # Posterior mean
             sample["z_logvar"] = logvar_cpu[idx].tolist()  # Posterior log variance
             sample["z"] = z_mean[idx].tolist()  # Sampled z (or averaged if num_samples > 1)
-        elif "z" not in sample:
-            # If z was provided and not inferred, keep the original z
-            logger.warning(f"Sample {idx} has no z value (neither provided nor inferred)")
+        elif "z" not in sample and len(all_z_samples) > 0:
+            # If z was provided and not inferred, store the provided z
+            if isinstance(z_mean, np.ndarray):
+                sample["z"] = z_mean[idx].tolist()
+            elif isinstance(z_mean, torch.Tensor):
+                sample["z"] = z_mean[idx].cpu().numpy().tolist()
+            else:
+                logger.warning(f"Sample {idx} has no z value (neither provided nor inferred)")
     
     logger.info(f"Variational selection completed. Choices: {sum(predicted_indices)}/{len(predicted_indices)} chose B")
     logger.info(f"Stored z values (mu, logvar, z) for {len(list_data_dict)} samples")

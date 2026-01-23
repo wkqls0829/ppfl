@@ -840,10 +840,19 @@ def _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name="w
             input_ids_eval = ctx.tokenizer.encode(eval_prompt, return_tensors='pt').to(ctx.device)
             
             with torch.no_grad():
-                # Use baseline model for comparison if available, otherwise use fine-tuned model
-                if use_baseline_model and disable_adapter:
+                # Use baseline model (selector) for comparison, not fine-tuned model
+                # The selector model should be used for fair comparison
+                if hasattr(ctx, 'selector_model') and ctx.selector_model is not None:
+                    # Use selector model for comparison (trained binary selector)
+                    selector_device = next(ctx.selector_model.parameters()).device
+                    input_ids_eval_selector = input_ids_eval.to(selector_device)
+                    outputs = ctx.selector_model(input_ids=input_ids_eval_selector)
+                elif use_baseline_model and disable_adapter:
+                    # Fallback: use baseline model (adapter disabled)
                     outputs = ctx.model(input_ids=input_ids_eval, disable_adapter=True)
                 else:
+                    # Last resort: use fine-tuned model (may be biased)
+                    logger.warning("Using fine-tuned model for winrate comparison (may be biased). Consider using selector model.")
                     outputs = ctx.model(input_ids=input_ids_eval)
                 logits = outputs.logits
                 last_logits = logits[0, -1, choice_tokens]

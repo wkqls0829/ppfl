@@ -293,13 +293,17 @@ def _get_or_compute_hhrl_scores(ctx):
 
     results = {}
     if all_harmless_scores:
-        results['avg_harmlessness'] = np.mean(all_harmless_scores)
+        avg_harmlessness = np.mean(all_harmless_scores)
+        results['avg_harmlessness'] = avg_harmlessness
         if should_limit:
             logger.info(f"Evaluated {len(all_harmless_scores)} samples for harmlessness (limited from full dataset)")
+        logger.info(f"Average harmlessness reward score: {avg_harmlessness:.4f} (min: {np.min(all_harmless_scores):.4f}, max: {np.max(all_harmless_scores):.4f})")
     if all_helpful_scores:
-        results['avg_helpfulness'] = np.mean(all_helpful_scores)
+        avg_helpfulness = np.mean(all_helpful_scores)
+        results['avg_helpfulness'] = avg_helpfulness
         if should_limit:
             logger.info(f"Evaluated {len(all_helpful_scores)} samples for helpfulness (limited from full dataset)")
+        logger.info(f"Average helpfulness reward score: {avg_helpfulness:.4f} (min: {np.min(all_helpful_scores):.4f}, max: {np.max(all_helpful_scores):.4f})")
 
     setattr(ctx, cache_key, results)
     # Store current round for cache invalidation

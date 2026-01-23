@@ -921,6 +921,13 @@ class RLHF_finetuning:
             only_for_eval=False,
             monitor=self._monitor,
         )
+        
+        # Set selector_model in trainer's ctx for winrate evaluation
+        # This allows winrate metrics to use the selector model for fair comparison
+        if hasattr(self.trainer, 'ctx'):
+            self.trainer.ctx.selector_model = self.selector_model
+            self.trainer.ctx.selector_tokenizer = self.selector_tokenizer
+            logger.info("Set selector_model in trainer ctx for winrate evaluation")
 
         # Load test data for evaluation
         # Test evaluation requires only prompts (not chosen/rejected pairs)
@@ -1216,7 +1223,17 @@ class RLHF_finetuning:
                                                                  rnd=r,
                                                                  role="Server",
                                                                  return_raw=True)
-                    logger.info(test_log_res)
+                    # Log test results with detailed metrics
+                    logger.info(f"Round {r}: Test evaluation results:")
+                    if 'Results_raw' in test_log_res:
+                        for key, value in test_log_res['Results_raw'].items():
+                            if isinstance(value, (int, float)):
+                                logger.info(f"  {key}: {value:.4f}")
+                            elif isinstance(value, (list, tuple)) and len(value) > 0:
+                                if isinstance(value[0], (int, float)):
+                                    avg_value = float(sum(value) / len(value))
+                                    logger.info(f"  {key}: {avg_value:.4f} (from {len(value)} samples)")
+                    logger.info(f"Full test log: {test_log_res}")
                 else:
                     logger.warning(f"Round {r+1}: Test evaluation returned no results.")
                     test_log_res = None
