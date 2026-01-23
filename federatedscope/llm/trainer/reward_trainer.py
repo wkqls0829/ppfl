@@ -329,6 +329,9 @@ class DPORewardTrainer(LLMTrainer):
             if not isinstance(z, torch.Tensor):
                 z = torch.tensor(z)
             z = z.to(ctx.device)
+            # Match dtype with model
+            model_dtype = next(ctx.model.parameters()).dtype
+            z = z.to(dtype=model_dtype)
             # Ensure correct shape: (batch_size, latent_dim)
             if z.dim() == 1:
                 z = z.unsqueeze(0).expand(batch_size, -1)
@@ -349,7 +352,8 @@ class DPORewardTrainer(LLMTrainer):
             else:
                 # Fallback: use zero z if input_ids not available
                 vpl_latent_dim = getattr(ctx.cfg.llm, 'vpl_latent_dim', 32)
-                z = torch.zeros(batch_size, vpl_latent_dim, device=ctx.device)
+                model_dtype = next(ctx.model.parameters()).dtype
+                z = torch.zeros(batch_size, vpl_latent_dim, device=ctx.device, dtype=model_dtype)
                 logger.debug("z not found in batch and input_ids not available, using zero z")
         
         # Collect z values for visualization (store mean z per batch)
@@ -381,6 +385,10 @@ class DPORewardTrainer(LLMTrainer):
         """Inject z-dependent bias into input embeddings."""
         if z is None or self.z_to_embedding is None:
             return None  # Return None to use input_ids directly
+        
+        # Match z dtype with model dtype
+        model_dtype = next(ctx.model.parameters()).dtype
+        z = z.to(dtype=model_dtype)
         
         # Get input embeddings
         input_embeddings = ctx.model.get_input_embeddings()(input_ids)
