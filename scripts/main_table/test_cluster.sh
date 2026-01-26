@@ -8,7 +8,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH -t 0-02:00:00
-#SBATCH -o /home/jbkoo/slurm/logs/slurm-%A-%x.out
+#SBATCH -o /home2/jbkoo/slurm/logs/slurm-%A-%x.out
 #SBATCH --exclude=n27,n33,n42,n72
 
 # Check if running inside SLURM job
@@ -60,7 +60,7 @@ if [ -z "$MODEL" ] || [ -z "$METHOD" ]; then
 fi
 
 # Set working directory
-WORK_DIR="/home/jbkoo/ppfl"
+WORK_DIR="/home2/jbkoo/ppfl"
 cd $WORK_DIR
 
 # Set PYTHONPATH

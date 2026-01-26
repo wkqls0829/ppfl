@@ -3,7 +3,7 @@
 # Submit all Gemma-2B RL experiments to SLURM
 # Run this after selector jobs complete
 
-WORK_DIR="/home/jbkoo/ppfl"
+WORK_DIR="/home2/jbkoo/ppfl"
 cd $WORK_DIR
 
 # TID ranges

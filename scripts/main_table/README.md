@@ -135,7 +135,7 @@ squeue -u $USER
 tail -f outputs/62130.log
 
 # SLURM 출력 확인
-tail -f /home/jbkoo/slurm/logs/slurm-*.out
+tail -f /home2/jbkoo/slurm/logs/slurm-*.out
 ```
 
 ### 체크포인트 확인

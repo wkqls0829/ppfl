@@ -3,7 +3,7 @@
 # Submit all Gemma-2B main table experiments to SLURM
 # This script submits all selector and RL jobs
 
-WORK_DIR="/home/jbkoo/ppfl"
+WORK_DIR="/home2/jbkoo/ppfl"
 cd $WORK_DIR
 
 # TID ranges
