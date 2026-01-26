@@ -37,30 +37,30 @@
 
 | Model | Method | Client Count | Selector TID | RL TID |
 |-------|--------|--------------|--------------|--------|
-| Qwen 2 | FedDPO | 10 | 60000 | 70000 |
-| Qwen 2 | FedDPO | 50 | 60001 | 70001 |
-| Qwen 2 | FedDPO | 100 | 60002 | 70002 |
-| Qwen 2 | FedBiscuit | 10 | 60010 | 70010 |
-| Qwen 2 | FedBiscuit | 50 | 60011 | 70011 |
-| Qwen 2 | FedBiscuit | 100 | 60012 | 70012 |
-| Qwen 2 | FedVPL | 10 | 60020 | 70020 |
-| Qwen 2 | FedVPL | 50 | 60021 | 70021 |
-| Qwen 2 | FedVPL | 100 | 60022 | 70022 |
-| Qwen 2 | FedVPA-GP | 10 | 60030 | 70030 |
-| Qwen 2 | FedVPA-GP | 50 | 60031 | 70031 |
-| Qwen 2 | FedVPA-GP | 100 | 60032 | 70032 |
-| Gemma-2B | FedDPO | 10 | 60100 | 70100 |
-| Gemma-2B | FedDPO | 50 | 60101 | 70101 |
-| Gemma-2B | FedDPO | 100 | 60102 | 70102 |
-| Gemma-2B | FedBiscuit | 10 | 60110 | 70110 |
-| Gemma-2B | FedBiscuit | 50 | 60111 | 70111 |
-| Gemma-2B | FedBiscuit | 100 | 60112 | 70112 |
-| Gemma-2B | FedVPL | 10 | 60120 | 70120 |
-| Gemma-2B | FedVPL | 50 | 60121 | 70121 |
-| Gemma-2B | FedVPL | 100 | 60122 | 70122 |
-| Gemma-2B | FedVPA-GP | 10 | 60130 | 70130 |
-| Gemma-2B | FedVPA-GP | 50 | 60131 | 70131 |
-| Gemma-2B | FedVPA-GP | 100 | 60132 | 70132 |
+| Qwen 2 | FedDPO | 10 | 62200 | 63200 |
+| Qwen 2 | FedDPO | 50 | 62201 | 63201 |
+| Qwen 2 | FedDPO | 100 | 62202 | 63202 |
+| Qwen 2 | FedBiscuit | 10 | 62210 | 63210 |
+| Qwen 2 | FedBiscuit | 50 | 62211 | 63211 |
+| Qwen 2 | FedBiscuit | 100 | 62212 | 63212 |
+| Qwen 2 | FedVPL | 10 | 62220 | 63220 |
+| Qwen 2 | FedVPL | 50 | 62221 | 63221 |
+| Qwen 2 | FedVPL | 100 | 62222 | 63222 |
+| Qwen 2 | FedVPA-GP | 10 | 62230 | 63230 |
+| Qwen 2 | FedVPA-GP | 50 | 62231 | 63231 |
+| Qwen 2 | FedVPA-GP | 100 | 62232 | 63232 |
+| Gemma-2B | FedDPO | 10 | 62100 | 63100 |
+| Gemma-2B | FedDPO | 50 | 62101 | 63101 |
+| Gemma-2B | FedDPO | 100 | 62102 | 63102 |
+| Gemma-2B | FedBiscuit | 10 | 62110 | 63110 |
+| Gemma-2B | FedBiscuit | 50 | 62111 | 63111 |
+| Gemma-2B | FedBiscuit | 100 | 62112 | 63112 |
+| Gemma-2B | FedVPL | 10 | 62120 | 63120 |
+| Gemma-2B | FedVPL | 50 | 62121 | 63121 |
+| Gemma-2B | FedVPL | 100 | 62122 | 63122 |
+| Gemma-2B | FedVPA-GP | 10 | 62130 | 63130 |
+| Gemma-2B | FedVPA-GP | 50 | 62131 | 63131 |
+| Gemma-2B | FedVPA-GP | 100 | 62132 | 63132 |
 
 ## 방법별 설정
 
