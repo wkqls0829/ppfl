@@ -47,22 +47,29 @@ for method in "${METHODS[@]}"; do
         selector_tid=$((SELECTOR_BASE + method_offset + client_offset))
         rl_tid=$((RL_BASE + method_offset + client_offset))
         
-        # Check if selector checkpoint exists
-        CHECKPOINT_DIR="$WORK_DIR/checkpoints"
-        SELECTOR_CKPT="$CHECKPOINT_DIR/final_hhrl_choice_gemma-2b_fedbiscuit_u3_${method}_t${selector_tid}.ckpt"
-        if [ ! -f "$SELECTOR_CKPT" ]; then
-            SELECTOR_CKPT="$CHECKPOINT_DIR/hhrl_choice_gemma-2b_fedbiscuit_u3_${method}_t${selector_tid}.ckpt"
+        # FedDPO는 selector checkpoint가 필요 없음 (USE_SELECTOR=false)
+        if [ "$method" != "feddpo" ]; then
+            # Check if selector checkpoint exists
+            CHECKPOINT_DIR="$WORK_DIR/checkpoints"
+            SELECTOR_CKPT="$CHECKPOINT_DIR/final_hhrl_choice_gemma-2b_fedbiscuit_u3_${method}_t${selector_tid}.ckpt"
+            if [ ! -f "$SELECTOR_CKPT" ]; then
+                SELECTOR_CKPT="$CHECKPOINT_DIR/hhrl_choice_gemma-2b_fedbiscuit_u3_${method}_t${selector_tid}.ckpt"
+            fi
+            
+            if [ ! -f "$SELECTOR_CKPT" ]; then
+                echo "  WARNING: Selector checkpoint not found for $method, N=$client_count (TID=$selector_tid)"
+                echo "  Skipping RL job..."
+                continue
+            fi
         fi
         
-        if [ ! -f "$SELECTOR_CKPT" ]; then
-            echo "  WARNING: Selector checkpoint not found for $method, N=$client_count (TID=$selector_tid)"
-            echo "  Skipping RL job..."
-            continue
+        # FedDPO는 selector_tid를 dummy 값으로 사용 (실제로는 사용 안 함)
+        if [ "$method" == "feddpo" ]; then
+            selector_tid="dummy"
         fi
         
         echo "  Submitting: $method, N=$client_count, RL_TID=$rl_tid, Selector_TID=$selector_tid"
         sbatch --job-name="rl_${method}_n${client_count}_${rl_tid}" \
-               --dependency=afterok:$(squeue -u $USER -n "sel_${method}_n${client_count}_${selector_tid}" -h -o %i 2>/dev/null || echo "") \
                scripts/main_table/run_rl_gemma.sh \
                $method $client_count $rl_tid $selector_tid
         sleep 1

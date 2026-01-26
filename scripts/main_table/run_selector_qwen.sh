@@ -4,7 +4,7 @@
 # SLURM cluster execution script
 # TID range: 62200-62232 (Qwen 2 selector experiments)
 
-#SBATCH -p A6000,RTX4090,RTX6000ADA,A5000
+#SBATCH -p A6000,RTX6000ADA  # Exclude RTX4090(24GB) and A5000(24GB) to avoid OOM
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH -t 2-00:00:00

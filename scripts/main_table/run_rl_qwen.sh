@@ -4,7 +4,7 @@
 # SLURM cluster execution script
 # TID range: 63200-63232 (Qwen 2 RL experiments)
 
-#SBATCH -p A6000,RTX4090,RTX6000ADA,A5000
+#SBATCH -p A6000,RTX6000ADA  # Exclude RTX4090(24GB) and A5000(24GB) to avoid OOM
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH -t 3-00:00:00
@@ -52,42 +52,62 @@ mkdir -p "$HF_HOME" "$TRANSFORMERS_CACHE"
 CHECKPOINT_DIR="$WORK_DIR/checkpoints"
 mkdir -p $CHECKPOINT_DIR
 
-# Check if selector checkpoint exists
-SELECTOR_CKPT="$CHECKPOINT_DIR/final_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
-if [ ! -f "$SELECTOR_CKPT" ]; then
-    # Try regular checkpoint
-    SELECTOR_CKPT="$CHECKPOINT_DIR/hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
-    if [ ! -f "$SELECTOR_CKPT" ]; then
-        echo "ERROR: Selector checkpoint not found:"
-        echo "  Tried: $CHECKPOINT_DIR/final_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
-        echo "  Tried: $CHECKPOINT_DIR/hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
+# Method-specific settings (check early to determine if selector is needed)
+case $METHOD in
+    feddpo)
+        USE_SELECTOR=false
+        ;;
+    fedbiscuit)
+        USE_SELECTOR=false
+        ;;
+    fedvpl)
+        USE_SELECTOR=true
+        ;;
+    fedvpagp)
+        USE_SELECTOR=true
+        ;;
+    *)
+        echo "Unknown method: $METHOD"
         exit 1
+        ;;
+esac
+
+# Check if selector checkpoint exists (only for methods that use selector)
+SELECTOR_CKPT=""
+if [ "$USE_SELECTOR" == "true" ]; then
+    SELECTOR_CKPT="$CHECKPOINT_DIR/final_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
+    if [ ! -f "$SELECTOR_CKPT" ]; then
+        # Try regular checkpoint
+        SELECTOR_CKPT="$CHECKPOINT_DIR/hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
+        if [ ! -f "$SELECTOR_CKPT" ]; then
+            echo "ERROR: Selector checkpoint not found:"
+            echo "  Tried: $CHECKPOINT_DIR/final_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
+            echo "  Tried: $CHECKPOINT_DIR/hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
+            exit 1
+        fi
     fi
+    echo "Using selector checkpoint: $SELECTOR_CKPT"
+else
+    echo "Method $METHOD does not require selector checkpoint (USE_SELECTOR=false)"
 fi
 
-echo "Using selector checkpoint: $SELECTOR_CKPT"
-
-# Method-specific settings
+# Method-specific settings (USE_SELECTOR already determined above)
 case $METHOD in
     feddpo)
         TRAINER="llmdporewardtrainer"
         CONFIG_BASE="cfg/feddpo/hrl-10000.yaml"
-        USE_SELECTOR=false
         ;;
     fedbiscuit)
         TRAINER="llmdporewardtrainer"
         CONFIG_BASE="cfg/fedbiscuit/hrl.yaml"
-        USE_SELECTOR=false
         ;;
     fedvpl)
         TRAINER="llmdporewardtrainer"
         CONFIG_BASE="cfg/vpl/hrl.yaml"
-        USE_SELECTOR=true
         ;;
     fedvpagp)
         TRAINER="llmdporewardtrainer"
         CONFIG_BASE="cfg/vpl-gp/hrl.yaml"
-        USE_SELECTOR=true
         ;;
     *)
         echo "Unknown method: $METHOD"

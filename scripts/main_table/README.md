@@ -5,32 +5,32 @@ SLURM 클러스터에서 Main Table 실험을 실행하기 위한 스크립트�
 ## 실험 구조
 
 - **2 models**: Qwen 2, Gemma-2B
-- **4 methods**: FedDPO, FedBiscuit, FedVPL, FedVPA-GP
+- **Selector methods**: FedBiscuit, FedVPL, FedVPA-GP (3개)
+- **RL methods**: FedDPO, FedBiscuit, FedVPL, FedVPA-GP (4개)
 - **3 client counts**: 10, 50, 100
-- **총 24 experiments** (Selector 24개 + RL 24개 = 48개)
+- **총 18 selector experiments + 24 RL experiments = 42개**
+- **Note**: FedDPO는 RL에서만 사용 (selector training 불필요)
 
 ## TID 번호 체계
 
 ### Gemma-2B
-- **Selector**: 62100-62132
-  - FedDPO: 62100-62102 (N=10,50,100)
+- **Selector**: 62110-62132 (FedDPO 제외)
   - FedBiscuit: 62110-62112 (N=10,50,100)
   - FedVPL: 62120-62122 (N=10,50,100)
   - FedVPA-GP: 62130-62132 (N=10,50,100)
 - **RL**: 63100-63132
-  - FedDPO: 63100-63102 (N=10,50,100)
+  - FedDPO: 63100-63102 (N=10,50,100) - selector checkpoint 불필요
   - FedBiscuit: 63110-63112 (N=10,50,100)
   - FedVPL: 63120-63122 (N=10,50,100)
   - FedVPA-GP: 63130-63132 (N=10,50,100)
 
 ### Qwen 2
-- **Selector**: 62200-62232
-  - FedDPO: 62200-62202 (N=10,50,100)
+- **Selector**: 62210-62232 (FedDPO 제외)
   - FedBiscuit: 62210-62212 (N=10,50,100)
   - FedVPL: 62220-62222 (N=10,50,100)
   - FedVPA-GP: 62230-62232 (N=10,50,100)
 - **RL**: 63200-63232
-  - FedDPO: 63200-63202 (N=10,50,100)
+  - FedDPO: 63200-63202 (N=10,50,100) - selector checkpoint 불필요
   - FedBiscuit: 63210-63212 (N=10,50,100)
   - FedVPL: 63220-63222 (N=10,50,100)
   - FedVPA-GP: 63230-63232 (N=10,50,100)

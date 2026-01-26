@@ -31,6 +31,7 @@ TRAINER_CLASS_DICT = {
     "atc_trainer": "ATCTrainer",
     "llmtrainer": "LLMTrainer",
     "llmdporewardtrainer": "DPORewardTrainer",
+    "llmdporewardchoicetrainer": "RewardChoiceTrainer",  # DPO with choice data (FedDPO)
     "llmrewardchoicetrainer": "RewardChoiceTrainer",
     "llmpporewardtrainer": "PPORewardTrainer",
     "vplrewardchoicetrainer": "VPLRewardChoiceTrainer",
@@ -168,7 +169,8 @@ def get_trainer(model=None,
             dict_path = "federatedscope.llm.trainer.trainer"
         elif config.trainer.type.lower() in ['llmdporewardtrainer']:
             dict_path = "federatedscope.llm.trainer.reward_trainer"
-        elif config.trainer.type.lower() in ['llmrewardchoicetrainer']:
+        elif config.trainer.type.lower() in ['llmdporewardchoicetrainer', 'llmrewardchoicetrainer']:
+            # Both use RewardChoiceTrainer (FedDPO uses choice data with DPO approach)
             dict_path = "federatedscope.llm.trainer.reward_choice_trainer"
         elif config.trainer.type.lower() in ['llmpporewardtrainer']:
             dict_path = "federatedscope.llm.trainer.PPO_reward_trainer"

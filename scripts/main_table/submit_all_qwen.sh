@@ -11,15 +11,24 @@ cd $WORK_DIR
 # RL: 63200-63232
 
 # Experiment matrix
-declare -a METHODS=("feddpo" "fedbiscuit" "fedvpl" "fedvpagp")
+# Note: FedDPO is only for RL, not for selector training
+declare -a SELECTOR_METHODS=("fedbiscuit" "fedvpl" "fedvpagp")
+declare -a RL_METHODS=("feddpo" "fedbiscuit" "fedvpl" "fedvpagp")
 declare -a CLIENT_COUNTS=("10" "50" "100")
 
 # Base TIDs
 SELECTOR_BASE=62200
 RL_BASE=63200
 
-# Method offsets
-declare -A METHOD_OFFSETS=(
+# Method offsets (selector: FedDPO 제외)
+declare -A SELECTOR_METHOD_OFFSETS=(
+    ["fedbiscuit"]=10
+    ["fedvpl"]=20
+    ["fedvpagp"]=30
+)
+
+# Method offsets (RL: FedDPO 포함)
+declare -A RL_METHOD_OFFSETS=(
     ["feddpo"]=0
     ["fedbiscuit"]=10
     ["fedvpl"]=20
@@ -37,12 +46,12 @@ echo "=========================================="
 echo "Submitting Qwen 2 Main Table Experiments"
 echo "=========================================="
 
-# Submit selector jobs
+# Submit selector jobs (FedDPO 제외)
 echo ""
-echo "Submitting Selector Jobs..."
-for method in "${METHODS[@]}"; do
+echo "Submitting Selector Jobs (FedDPO는 RL에서만 사용)..."
+for method in "${SELECTOR_METHODS[@]}"; do
     for client_count in "${CLIENT_COUNTS[@]}"; do
-        method_offset=${METHOD_OFFSETS[$method]}
+        method_offset=${SELECTOR_METHOD_OFFSETS[$method]}
         client_offset=${CLIENT_OFFSETS[$client_count]}
         tid=$((SELECTOR_BASE + method_offset + client_offset))
         
