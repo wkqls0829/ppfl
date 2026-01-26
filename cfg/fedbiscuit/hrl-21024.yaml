@@ -1,0 +1,86 @@
+use_gpu: True
+device: 3  # GPU 3 for RL training
+early_stop:
+  patience: 0
+federate:
+  mode: standalone
+  client_num: 1  # RLHF uses single client
+  sample_client_num: 1
+  total_round_num: 50
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_fedbiscuit_21024.ckpt"
+  ignore_weight: True
+  save_freq: 20
+  share_local_model: True  # Single GPU mode
+  online_aggr: False
+data:
+  root: /hdd/hdd3/kjb/
+  type: 'hh-rlhf@llm'
+  splits: [0.9,0.09,0.01]
+  splitter: 'iid'
+llm:
+  use: True
+  tok_len: 1024
+  max_new_token: 512
+  accelerator:
+    use: False
+  chat:
+    max_len: 512
+  adapter:
+    use: True
+    count: 3
+    warmup:
+      use: True
+      round: 2
+    grouping:
+      use: False
+      round: 2
+    args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
+  freeze_base_model: True
+  grad_accum_step: 4
+  generation_batch_size: 3
+  max_prompts_for_generation: 50
+  num_completions: 2
+  rlhf: true
+  rlhf_selector_checkpoint: /hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_20023.ckpt
+  # No variational elements - using standard FedBiscuit algorithm
+  # rlhf_use_variational_generation: False (implicit)
+  # rlhf_use_variational_selection: False (implicit)
+  reward_coeff: 0.1
+  retry_on_nan_loss: false
+dataloader:
+  batch_size: 1
+  num_workers: 4
+  pin_memory: True
+  shuffle: True
+model:
+  type: 'google/gemma-2b@huggingface_llm'
+train:
+  local_update_steps: 30  # RLHF local update steps
+  batch_or_epoch: batch
+  optimizer:
+    type: AdamW
+    betas: (0.9, 0.95)
+    lr: 0.0001
+  is_enable_half: True
+criterion:
+  type: CrossEntropyLoss
+trainer:
+  type: llmdporewardtrainer  # FedBiscuit RLHF trainer (no VPL)
+eval:
+  freq: 10
+  metrics: ['loss', 'acc', 'avg_helpfulness', 'avg_harmlessness', 'helpfulness_winrate', 'harmlessness_winrate', 'avg_winlose_rate']
+  best_res_update_round_wise_key: train_avg_loss
+  count_flops: False
+  max_samples_for_reward: 30
+  split: ['test', 'val']
+  use_baseline_model_for_winrate: True
+  use_gpt_api_for_winrate: True  # Use GPT API for winrate evaluation (more accurate than internal model)
+  openai_model: 'gpt-4o-mini'  # GPT model to use for evaluation (default: gpt-4o-mini for cost efficiency)
+  # openai_api_key: set via environment variable OPENAI_API_KEY
+expname: fedbiscuit_hrl_t21024
+wandb:
+  use: True
+  name_user: ''
+  name_project: 'fvpl-rl'
+  online_track: True
+  client_train_info: True

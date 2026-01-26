@@ -1,0 +1,81 @@
+use_gpu: True
+device: 6  # GPU 6 for FedDPO HRL experiment (tid: 11024)
+early_stop:
+  patience: 0
+federate:
+  mode: standalone
+  client_num: 10  # RLHF uses 10 clients for hh-rlhf dataset (harmless + helpful split)
+  total_round_num: 50
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_feddpo_11024.ckpt"
+  save_freq: 20  # Same as recent experiments
+  share_local_model: True
+  online_aggr: False
+data:
+  root: /hdd/hdd3/kjb/
+  type: 'hh-rlhf@llm'
+  splits: [0.9,0.09,0.01]
+  splitter: 'iid'
+model:
+  type: 'google/gemma-2b@huggingface_llm'
+llm:
+  use: True
+  rlhf: True
+  tok_len: 1024
+  max_new_token: 512
+  num_completions: 2
+  accelerator:
+    use: False
+  chat:
+    max_len: 512
+  adapter:
+    use: True
+    count: 3
+    warmup:
+      use: True
+      round: 2
+    grouping:
+      use: False
+      round: 2
+    args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
+  # Federated Direct Preference Optimization (FedDPO) parameters for RLHF
+  # FedDPO is pure DPO for federated learning (baseline)
+  # WITHOUT VPL, GP prior, or orthogonal loss
+  # Direct Preference Optimization: https://arxiv.org/abs/2305.18290
+  reward_coeff: 0.1  # DPO beta parameter (temperature)
+  grad_accum_step: 4  # Same as recent experiments (effective batch size = 1 * 4 = 4)
+  max_prompts_for_generation: 50
+  generation_batch_size: 3
+expname: feddpo_hrl_t11024
+trainer:
+  type: llmdporewardtrainer  # Pure DPO trainer (no VPL)
+dataloader:
+  batch_size: 1  # Small batch size for RL training (same as recent experiments)
+  num_workers: 4
+  pin_memory: True
+train:
+  local_update_steps: 30
+  batch_or_epoch: batch
+  optimizer:
+    type: AdamW
+    betas: (0.9, 0.95)
+    lr: 0.0001
+  is_enable_half: True
+criterion:
+  type: CrossEntropyLoss
+eval:
+  freq: 5  # Same as recent experiments
+  metrics: ['loss', 'acc', 'avg_helpfulness', 'avg_harmlessness',
+            'helpfulness_winrate', 'harmlessness_winrate', 'avg_winlose_rate']
+  best_res_update_round_wise_key: train_avg_loss
+  count_flops: False
+  max_samples_for_reward: 30  # Reduced from 100 to speed up training evaluation
+  use_baseline_model_for_winrate: True  # Use base Gemma-2b model for win rate comparison
+  use_gpt_api_for_winrate: True  # Use GPT API for winrate evaluation (faster than internal model generation)
+  openai_model: 'gpt-4o-mini'  # GPT model to use for evaluation (default: gpt-4o-mini for cost efficiency)
+  # openai_api_key: set via environment variable OPENAI_API_KEY
+wandb:
+  use: True
+  name_user: ''
+  name_project: 'fvpl-rl'  # Same project as recent RL experiments
+  online_track: True
+  client_train_info: True

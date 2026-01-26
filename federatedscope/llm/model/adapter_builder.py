@@ -204,7 +204,10 @@ class AdapterModel(nn.Module):
             # When does evaluation in HELM,
             # half precision will cause RuntimeError,
             # the following solves it
-            if 'do_sample' in kwargs.keys():
+            # BUT: Don't remove do_sample if num_return_sequences > 1
+            num_return_sequences = kwargs.get('num_return_sequences', 1)
+            if 'do_sample' in kwargs.keys() and num_return_sequences == 1:
+                # Only remove do_sample if num_return_sequences == 1
                 del kwargs['do_sample']
                 if isinstance(self.model, PeftModel) and disable_adapter:
                     with self.model.disable_adapter():

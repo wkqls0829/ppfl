@@ -1,0 +1,96 @@
+use_gpu: True
+device: 1  # GPU 1 for FedVPL HRL experiment (tid: 30000)
+early_stop:
+  patience: 0
+federate:
+  mode: standalone
+  client_num: 1
+  total_round_num: 50
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_fedvpl_30000.ckpt"
+  save_freq: 20  # Same as recent experiments
+  share_local_model: True
+  online_aggr: False
+data:
+  root: /hdd/hdd3/kjb/
+  type: 'hh-rlhf@llm'
+  splits: [0.9,0.09,0.01]
+  splitter: 'iid'
+model:
+  type: 'google/gemma-2b@huggingface_llm'
+llm:
+  use: True
+  rlhf: True
+  tok_len: 1024
+  max_new_token: 512
+  num_completions: 2
+  accelerator:
+    use: False
+  chat:
+    max_len: 512
+  adapter:
+    use: True
+    count: 3
+    warmup:
+      use: True
+      round: 2
+    grouping:
+      use: False
+      round: 2
+    args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
+  # Federated Variational Preference Learning (FedVPL) parameters for RLHF
+  # FedVPL is naive VPL for federated learning (baseline)
+  # WITHOUT gradient prior (GP) or orthogonal loss
+  # Based on: https://github.com/WEIRDLabUW/vpl
+  # Following original VPL implementation: uses logits-based features (NOT embedding difference)
+  vpl_use_gp_prior: False  # No GP prior (standard VPL)
+  vpl_latent_dim: 32
+  vpl_kl_weight: 0.1
+  vpl_gp_temperature: 1.0
+  vpl_feature_method: 'choice_logits'  # Original VPL uses logits at choice positions
+  vpl_use_feature_difference: False  # Original VPL does NOT use embedding difference
+  vpl_max_logvar: -3.0  # Variance cap (same as recent experiments)
+  # Orthogonal loss parameters (DISABLED for FedVPL baseline)
+  vpl_orthogonal_weight: 0.0  # Orthogonal loss disabled
+  vpl_orthogonal_orthonorm_weight: 0.0  # Orthonormal constraint disabled
+  vpl_use_manual_orthogonal_labels: False
+  vpl_num_prototypes: 0
+  vpl_prototype_scale: 0.0
+  vpl_tsne_visualize_freq: 10
+  # VPL-specific parameters for conditional generation in RLHF
+  rlhf_use_variational_selection: True  # Use variational selection for pseudo-label generation
+  rlhf_use_variational_generation: False  # FedVPL does not use z-dependent generation (baseline)
+  rlhf_selector_checkpoint: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_fedvpl_30000.ckpt"  # Path to selector checkpoint
+  reward_coeff: 0.1
+  grad_accum_step: 4  # Same as recent experiments
+  max_prompts_for_generation: 50
+  generation_batch_size: 3
+expname: fedvpl_hrl_t30000
+trainer:
+  type: llmdporewardtrainer  # DPO trainer for RLHF
+dataloader:
+  batch_size: 1  # Small batch size for RL training (same as recent experiments)
+  num_workers: 4
+  pin_memory: True
+train:
+  local_update_steps: 30
+  batch_or_epoch: batch
+  optimizer:
+    type: AdamW
+    betas: (0.9, 0.95)
+    lr: 0.0001
+  is_enable_half: True
+criterion:
+  type: CrossEntropyLoss
+eval:
+  freq: 5  # Same as recent experiments
+  metrics: ['loss', 'acc', 'avg_helpfulness', 'avg_harmlessness',
+            'helpfulness_winrate', 'harmlessness_winrate', 'avg_winlose_rate']
+  best_res_update_round_wise_key: train_avg_loss
+  count_flops: False
+  max_samples_for_reward: 100
+wandb:
+  use: True
+  name_user: ''
+  name_project: 'fvpl-rl'  # Same project as recent RL experiments
+  online_track: True
+  client_train_info: True

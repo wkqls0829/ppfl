@@ -66,10 +66,20 @@ class Monitor(object):
         for mode in ['train', 'val', 'test']:
             if mode in self.round_wise_update_key:
                 update_key = self.round_wise_update_key.split(f'{mode}_')[1]
-        assert update_key in self.metric_calculator.eval_metric, \
-            f'{update_key} not found in metrics.'
-        self.the_larger_the_better = self.metric_calculator.eval_metric[
-            update_key][1]
+        if update_key is None:
+            raise ValueError("Could not determine update key")
+
+        key_is_valid = update_key in self.metric_calculator.eval_metric
+
+        if not key_is_valid and 'hhrl_reward' in self.cfg.eval.metrics:
+            if update_key in ['avg_helpfulness', 'avg_harmlessness']:
+                key_is_valid = True
+                self.the_larger_the_better = True
+
+        assert key_is_valid, f"'{update_key}' not found in metrics."
+
+        if update_key in self.metric_calculator.eval_metric:
+            self.the_larger_the_better = self.metric_calculator.eval_metric[update_key][1]
 
         # =======  efficiency indicators of the worker to be monitored =======
         # leveraged the flops counter provided by [fvcore](

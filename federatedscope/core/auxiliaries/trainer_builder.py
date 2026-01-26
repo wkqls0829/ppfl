@@ -33,6 +33,9 @@ TRAINER_CLASS_DICT = {
     "llmdporewardtrainer": "DPORewardTrainer",
     "llmrewardchoicetrainer": "RewardChoiceTrainer",
     "llmpporewardtrainer": "PPORewardTrainer",
+    "vplrewardchoicetrainer": "VPLRewardChoiceTrainer",
+    "vplrewardtrainer": "VPLRewardTrainer",
+    "vplgprewardchoicetrainer": "VPLRewardChoiceTrainer",  # Unified trainer (GP prior controlled by config)
 }
 
 
@@ -169,11 +172,21 @@ def get_trainer(model=None,
             dict_path = "federatedscope.llm.trainer.reward_choice_trainer"
         elif config.trainer.type.lower() in ['llmpporewardtrainer']:
             dict_path = "federatedscope.llm.trainer.PPO_reward_trainer"
+        elif config.trainer.type.lower() in ['vplrewardchoicetrainer', 'vplgprewardchoicetrainer']:
+            # Both use the unified VPLRewardChoiceTrainer (GP prior controlled by config)
+            dict_path = "federatedscope.llm.trainer.vpl_reward_choice_trainer"
+        elif config.trainer.type.lower() in ['vplrewardtrainer']:
+            dict_path = "federatedscope.llm.trainer.vpl_reward_trainer"
         else:
             raise ValueError
 
+        # For vplgprewardchoicetrainer, use VPLRewardChoiceTrainer (unified trainer)
+        trainer_class_name = TRAINER_CLASS_DICT[config.trainer.type.lower()]
+        if config.trainer.type.lower() == 'vplgprewardchoicetrainer':
+            trainer_class_name = 'VPLRewardChoiceTrainer'
+        
         trainer_cls = getattr(importlib.import_module(name=dict_path),
-                              TRAINER_CLASS_DICT[config.trainer.type.lower()])
+                              trainer_class_name)
         trainer = trainer_cls(model=model,
                               data=data,
                               device=device,

@@ -80,6 +80,11 @@ class LLMDataset(Dataset):
         ]
         df = pd.DataFrame(categories, columns=["category"])
         self.categories = list(pd.Categorical(df["category"]).codes)
+        
+        # Store client_id if available (for VPL conditional generation)
+        self.client_ids = [
+            example.get('client_id', None) for example in list_data_dict
+        ]
 
     def _tokenize_fn(self, strings, tokenizer):
         tokenized_list = [
@@ -123,9 +128,13 @@ class LLMDataset(Dataset):
         return len(self.input_ids)
 
     def __getitem__(self, i):
-        return dict(input_ids=self.input_ids[i],
-                    labels=self.labels[i],
-                    categories=self.categories[i])
+        result = dict(input_ids=self.input_ids[i],
+                     labels=self.labels[i],
+                     categories=self.categories[i])
+        # Include client_id if available
+        if i < len(self.client_ids) and self.client_ids[i] is not None:
+            result['client_id'] = self.client_ids[i]
+        return result
 
     # def overwrite_by_llm(self, i):
     #     source = self.sources[i]
@@ -151,11 +160,17 @@ class LLMComparisonDataset(Dataset):
                  choice='choice'):
         new_list_data_dict = []
         for example in list_data_dict:
-            if choice in example and int(example[choice]) == 1:
-                # output_B is better than output_A
-                example[output_A], example[output_B] = \
-                    example[output_B], example[output_A]
-                new_list_data_dict.append(example)
+            if choice in example:
+                choice_val = int(example[choice])
+                if choice_val == 1:
+                    # output_B is better than output_A, swap them
+                    example[output_A], example[output_B] = \
+                        example[output_B], example[output_A]
+                    new_list_data_dict.append(example)
+                elif choice_val == 0:
+                    # output_A is better than output_B, keep as is
+                    new_list_data_dict.append(example)
+                # else: invalid choice value, skip
         # remove the data without choice
         list_data_dict = new_list_data_dict
 
@@ -177,6 +192,16 @@ class LLMComparisonDataset(Dataset):
         ]
         df = pd.DataFrame(categories, columns=["category"])
         self.categories = list(pd.Categorical(df["category"]).codes)
+        
+        # Store z values from data (if available)
+        self.z_values = []
+        self.z_mu_values = []
+        self.z_logvar_values = []
+        for example in list_data_dict:
+            # Store z, z_mu, z_logvar if available
+            self.z_values.append(example.get('z', None))
+            self.z_mu_values.append(example.get('z_mu', None))
+            self.z_logvar_values.append(example.get('z_logvar', None))
 
         # super(LLMComparisonDataset, self).__init__(
         #     list_data_dict, tokenizer, prompt_input,
@@ -195,6 +220,16 @@ class LLMComparisonDataset(Dataset):
         return len(self.win_dataset)
 
     def __getitem__(self, i):
-        return dict(win_data=self.win_dataset[i],
-                    lose_data=self.lose_dataset[i],
-                    categories=self.categories[i])
+        result = dict(win_data=self.win_dataset[i],
+                     lose_data=self.lose_dataset[i],
+                     categories=self.categories[i])
+        
+        # Include z values if available
+        if i < len(self.z_values) and self.z_values[i] is not None:
+            result['z'] = self.z_values[i]
+        if i < len(self.z_mu_values) and self.z_mu_values[i] is not None:
+            result['z_mu'] = self.z_mu_values[i]
+        if i < len(self.z_logvar_values) and self.z_logvar_values[i] is not None:
+            result['z_logvar'] = self.z_logvar_values[i]
+        
+        return result

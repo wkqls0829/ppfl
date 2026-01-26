@@ -1,0 +1,89 @@
+use_gpu: True
+device: 3  # GPU 3 for FedVPL experiment (tid: 30024) - same hyperparameters as 50024 but no GP prior and no orthogonal loss
+early_stop:
+  patience: 0
+federate:
+  mode: standalone
+  client_num: 10
+  sample_client_num: 5
+  total_round_num: 50
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_fedvpl_30024.ckpt"
+  ignore_weight: True
+  save_freq: 20  # Checkpoint 저장 빈도 줄여서 I/O 시간 감소
+  share_local_model: True  # Single GPU mode
+  online_aggr: False
+data:
+  root: /hdd/hdd3/kjb/
+  type: 'hh-rlhf@llm'  # Using hh-rlhf dataset but without reward model evaluation
+  splits: [0.9,0.09,0.01]
+  splitter: 'meta'
+llm:
+  use: True
+  tok_len: 1024
+  max_new_token: 512
+  accelerator:
+    use: False
+  chat:
+    max_len: 512
+  adapter:
+    use: True
+    count: 3
+    warmup:
+      use: True
+      round: 2
+    grouping:
+      use: False
+      round: 2
+    args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
+  # Federated Variational Preference Learning (FedVPL) parameters
+  # FedVPL is naive VPL for federated learning (baseline)
+  # WITHOUT gradient prior (GP) or orthogonal loss
+  # Based on: https://github.com/WEIRDLabUW/vpl
+  # Same hyperparameters as 50024 but without GP prior and orthogonal loss
+  vpl_use_gp_prior: False  # No GP prior (standard VPL, baseline)
+  vpl_latent_dim: 32
+  vpl_kl_weight: 0.1  # Same as 50024
+  vpl_gp_temperature: 1.0
+  vpl_feature_method: 'choice_logits'  # Original VPL uses logits at choice positions
+  vpl_use_feature_difference: False  # Original VPL does NOT use embedding difference (baseline)
+  vpl_max_logvar: -3.0  # Same as 50024 (tighter variance cap, sigma <= 0.223)
+  # Orthogonal loss parameters (DISABLED for FedVPL baseline)
+  vpl_orthogonal_weight: 0.0  # Orthogonal loss disabled
+  vpl_orthogonal_orthonorm_weight: 0.0  # Orthonormal constraint disabled
+  vpl_use_manual_orthogonal_labels: False  # Not needed when orthogonal loss is disabled
+  vpl_num_prototypes: 0  # Not used when orthogonal loss is disabled
+  vpl_prototype_scale: 0.0
+  vpl_tsne_visualize_freq: 10  # Generate t-SNE visualization every 10 rounds
+  grad_accum_step: 4  # Increased from 2 to maintain effective batch size (8 * 4 = 32)
+dataloader:
+  batch_size: 8  # Reduced from 16 to avoid OOM (effective batch size: 8 * 4 = 32)
+  num_workers: 4  # DataLoader 병렬화로 데이터 로딩 속도 향상
+  pin_memory: True  # GPU 전송 속도 향상
+model:
+  type: 'google/gemma-2b@huggingface_llm'
+train:
+  local_update_steps: 30
+  batch_or_epoch: batch
+  optimizer:
+    type: AdamW
+    betas: (0.9, 0.95)
+    lr: 0.0001  # Same as 50024
+  is_enable_half: True
+criterion:
+  type: CrossEntropyLoss
+trainer:
+  type: vplgprewardchoicetrainer  # Use VPL trainer (GP prior controlled by config: False)
+  choices: ['A', 'B']
+eval:
+  freq: 5  # Evaluation 빈도 줄여서 전체 트레이닝 시간 단축
+  metrics: ['loss', 'acc', 'vpl_kl_loss', 'vpl_reconstruction_loss', 'vpl_orthogonal_loss']  # VPL metrics
+  best_res_update_round_wise_key: train_avg_loss  # Use train_avg_loss instead of val_avg_loss
+  count_flops: False
+  max_samples_for_reward: 100
+expname: fedvpl_hhst_t30024
+wandb:
+  use: True
+  name_user: ''
+  name_project: 'fvpl-selector'  # Same project as 50024 for comparison
+  online_track: True
+  client_train_info: True

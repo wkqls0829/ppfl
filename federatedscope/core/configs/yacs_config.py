@@ -522,6 +522,10 @@ def _merge_a_into_b(a, b, root, key_list):
             v = _check_and_coerce_cfg_value_type(v, b[k], k, full_key)
             # Recursively merge dicts
             if isinstance(v, CfgNode):
+                # Ensure both source and target subconfigs allow new keys
+                if isinstance(b[k], CfgNode):
+                    b[k].set_new_allowed(True)
+                v.set_new_allowed(True)
                 try:
                     _merge_a_into_b(v, b[k], root, key_list + [k])
                 except BaseException:

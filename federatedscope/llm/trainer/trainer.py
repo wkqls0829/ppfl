@@ -60,6 +60,10 @@ class LLMTrainer(GeneralTorchTrainer):
                                           config.llm.tok_len)
         self.eval_metrics = config.eval.metrics
 
+    def evaluate(self, target_data_split_name="test"):
+        self.ctx.tokenizer = self.tokenizer
+        super(LLMTrainer,self).evaluate(target_data_split_name)
+
     def register_default_hooks_train(self):
         super().register_default_hooks_train()
         self.register_hook_in_train(self._hook_on_fit_end_free_space,
@@ -130,12 +134,6 @@ class LLMTrainer(GeneralTorchTrainer):
                 if batch_i >= self.ctx.num_train_batch_last_epoch - 1:
                     break
 
-    # def _hook_on_fit_start_numerical_precision(self, ctx):
-    #     if self.cfg.train.is_enable_half:
-    #         if not ctx.cfg.llm.deepspeed.use and \
-    #            not ctx.cfg.llm.accelerator.use:
-    #             ctx.model.to(torch.bfloat16)
-
     def _hook_on_fit_start_init(self, ctx):
         if ctx.cfg.llm.accelerator.use:
             # prepare model sharding
@@ -167,8 +165,6 @@ class LLMTrainer(GeneralTorchTrainer):
 
         elif ctx.cfg.llm.deepspeed.use:
             # Enable deepspeed
-            # TODO: save ctx.optimizer and ctx.scheduler
-            # TODO: should clients share the same `ctx.model_engine`?
             assert deepspeed is not None, "Please install deepspeed."
             if not hasattr(ctx, 'model_engine'):
                 ctx.model_engine, ctx.optimizer, _, ctx.scheduler = \
@@ -178,17 +174,12 @@ class LLMTrainer(GeneralTorchTrainer):
                         model_parameters=filter(lambda p: p.requires_grad,
                                                 ctx.model.parameters()),
                     )
-            # Enable all cards from 0
             ctx.device = ctx.model_engine.local_rank
-            # if ctx.cfg.train.is_enable_half:
-            #     ctx.fp16 = ctx.model_engine.fp16_enabled()
 
         else:
             # prepare model and optimizer
             ctx.model.to(ctx.device)
             if ctx.cur_mode in [MODE.TRAIN, MODE.FINETUNE]:
-                # Initialize optimizer here to avoid the reuse of optimizers
-                # across different routines
                 ctx.optimizer = get_optimizer(
                     ctx.model, **ctx.cfg[ctx.cur_mode].optimizer)
                 ctx.scheduler = get_scheduler(
@@ -292,7 +283,6 @@ class LLMTrainer(GeneralTorchTrainer):
     def _hook_on_batch_end(self, ctx):
         if ctx.skip_this_batch:
             if ctx.cfg.llm.retry_on_nan_loss:
-                # Retry with new data in train and finetune
                 if ctx.cur_mode == MODE.TRAIN:
                     self._run_batch(self.hooks_in_train, run_step=1)
                 elif ctx.cur_mode == MODE.FINETUNE:
@@ -312,10 +302,15 @@ class LLMTrainer(GeneralTorchTrainer):
             f'{ctx.cur_split}_total': ctx.num_samples,
             f'{ctx.cur_split}_avg_loss': avg_loss,
         }
+
+        # Call the monitor to calculate metrics
+        if self.monitor is not None:
+            results_metrics = self.monitor.eval(ctx)
+            eval_results.update(results_metrics)
+
         setattr(ctx, 'eval_metrics', eval_results)
 
     def _hook_on_fit_end_free_space(self, ctx):
-        # Move trainable part to `cpu`, which can save memory but cost time
         if ctx.cfg.llm.adapter.mv_to_cpu:
             for p in ctx.model.parameters():
                 if p.requires_grad:
@@ -328,31 +323,10 @@ class LLMTrainer(GeneralTorchTrainer):
         if hasattr(ctx, 'scheduler') and ctx.scheduler is not None:
             del ctx.scheduler
 
-        # free the space
         gc.collect()
         torch.cuda.empty_cache()
 
     def _hook_on_batch_forward_flop_count(self, ctx):
-        """
-        The monitoring hook to calculate the flops during the fl course
-
-        Note:
-          For customized cases that the forward process is not only \
-          based on ctx.model, please override this function (inheritance \
-          case) or replace this hook (plug-in case)
-
-          The modified attributes and according operations are shown below:
-            ==================================  ===========================
-            Attribute                           Operation
-            ==================================  ===========================
-            ``ctx.monitor``                     Track average flops
-            ==================================  ===========================
-        """
-
-        # The process may occupy a large amount of video memory
-        # if the garbage collection is not triggered in time
-        # when there is plenty of video memory left. Set
-        # `eval.count_flops = False` to avoid this.
         if not isinstance(ctx.monitor, Monitor):
             logger.warning(
                 f"The trainer {type(self)} does contain a valid monitor, "
@@ -362,7 +336,6 @@ class LLMTrainer(GeneralTorchTrainer):
             return
 
         if self.cfg.eval.count_flops and ctx.monitor.flops_per_sample == 0:
-            # calculate the flops_per_sample
             try:
                 input_ids = ctx.data_batch['input_ids'].to(ctx.device)
                 labels = ctx.data_batch['labels'].to(ctx.device)
@@ -384,7 +357,6 @@ class LLMTrainer(GeneralTorchTrainer):
                                "`cfg.eval.count_flops` to `False` "
                                "to avoid error or warning like this.")
                 logger.error(e)
-                # Raise warning at the first failure
                 logger.warning(
                     "current flop count implementation is for general LLM "
                     "trainer case: "
@@ -397,8 +369,6 @@ class LLMTrainer(GeneralTorchTrainer):
                     "flop_count function")
                 ctx.monitor.flops_per_sample = -1
 
-        # by default, we assume the data has the same input shape,
-        # thus simply multiply the flops to avoid redundant forward
         ctx.monitor.total_flops += ctx.monitor.flops_per_sample * \
             ctx.batch_size
 

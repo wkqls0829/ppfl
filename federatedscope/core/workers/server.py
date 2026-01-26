@@ -629,11 +629,17 @@ class Server(BaseServer):
                             del formatted_logs[key]
                 logger.info(formatted_logs)
                 formatted_logs_all_set.update(formatted_logs)
-                self._monitor.update_best_result(
-                    self.best_results,
-                    metrics_all_clients,
-                    results_type="unseen_client_best_individual"
-                    if merge_type == "unseen" else "client_best_individual")
+                
+                # Only update best result if metrics are not empty
+                if metrics_all_clients and isinstance(metrics_all_clients, dict) and len(metrics_all_clients) > 0:
+                    # Check if best_res_update_round_wise_key exists in metrics
+                    if (hasattr(self._cfg.eval, 'best_res_update_round_wise_key') and
+                        self._cfg.eval.best_res_update_round_wise_key in metrics_all_clients):
+                        self._monitor.update_best_result(
+                            self.best_results,
+                            metrics_all_clients,
+                            results_type="unseen_client_best_individual"
+                            if merge_type == "unseen" else "client_best_individual")
 
                 self._monitor.save_formatted_results(formatted_logs)
 
@@ -648,13 +654,26 @@ class Server(BaseServer):
                     if form != "raw":
                         metric_name = form + "_unseen" if merge_type == \
                                                           "unseen" else form
-                        update_best_this_round_tmp = \
-                            self._monitor.update_best_result(
-                                self.best_results,
-                                formatted_logs[f"Results_{metric_name}"],
-                                results_type=f"unseen_client_summarized_{form}"
-                                if merge_type == "unseen" else
-                                f"client_summarized_{form}")
+                        # Only update if the key exists in formatted_logs and contains the required key
+                        if f"Results_{metric_name}" in formatted_logs:
+                            results_dict = formatted_logs[f"Results_{metric_name}"]
+                            if (results_dict and isinstance(results_dict, dict) and len(results_dict) > 0):
+                                # Check if best_res_update_round_wise_key exists if it's configured
+                                if (not hasattr(self._cfg.eval, 'best_res_update_round_wise_key') or
+                                    self._cfg.eval.best_res_update_round_wise_key in results_dict):
+                                    update_best_this_round_tmp = \
+                                        self._monitor.update_best_result(
+                                            self.best_results,
+                                            results_dict,
+                                            results_type=f"unseen_client_summarized_{form}"
+                                            if merge_type == "unseen" else
+                                            f"client_summarized_{form}")
+                                else:
+                                    update_best_this_round_tmp = False
+                            else:
+                                update_best_this_round_tmp = False
+                        else:
+                            update_best_this_round_tmp = False
                         if update_prior_tmp >= update_prior:
                             update_prior = update_prior_tmp
                             update_best_this_round = update_best_this_round_tmp
@@ -964,10 +983,17 @@ class Server(BaseServer):
                     role='Server #',
                     forms=self._cfg.eval.report,
                     return_raw=self._cfg.federate.make_global_eval)
-                self._monitor.update_best_result(
-                    self.best_results,
-                    formatted_eval_res['Results_raw'],
-                    results_type="server_global_eval")
+                
+                # Only update best result if Results_raw is not empty and contains the key
+                if (formatted_eval_res and 'Results_raw' in formatted_eval_res and 
+                    formatted_eval_res['Results_raw'] and isinstance(formatted_eval_res['Results_raw'], dict) and
+                    len(formatted_eval_res['Results_raw']) > 0):
+                    if (not hasattr(self._cfg.eval, 'best_res_update_round_wise_key') or
+                        self._cfg.eval.best_res_update_round_wise_key in formatted_eval_res['Results_raw']):
+                        self._monitor.update_best_result(
+                            self.best_results,
+                            formatted_eval_res['Results_raw'],
+                            results_type="server_global_eval")
                 self.history_results = merge_dict_of_results(
                     self.history_results, formatted_eval_res)
                 self._monitor.save_formatted_results(formatted_eval_res)

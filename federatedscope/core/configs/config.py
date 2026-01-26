@@ -104,8 +104,16 @@ class CN(CfgNode):
             check_cfg: whether enable ``assert_cfg()``
         """
         cfg_check_funcs = copy.copy(self.__cfg_check_funcs__)
+        # Enable new keys in both self and loaded config to allow merging new keys
+        self.set_new_allowed(True)
         with open(cfg_filename, "r") as f:
             cfg = self.load_cfg(f)
+        cfg.set_new_allowed(True)
+        # Also enable new keys in data subconfig if it exists
+        if hasattr(cfg, 'data'):
+            cfg.data.set_new_allowed(True)
+        if hasattr(self, 'data'):
+            self.data.set_new_allowed(True)
         self.merge_from_other_cfg(cfg)
         self.__cfg_check_funcs__.clear()
         self.__cfg_check_funcs__.extend(cfg_check_funcs)

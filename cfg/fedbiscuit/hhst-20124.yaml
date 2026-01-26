@@ -1,0 +1,71 @@
+use_gpu: True
+device: 0  # GPU 0 for 50 clients baseline comparison
+early_stop:
+  patience: 0
+federate:
+  mode: standalone
+  client_num: 50  # Scaled to 50 clients
+  sample_client_num: 25  # Sample half of clients per round
+  total_round_num: 50
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_20124.ckpt"
+  ignore_weight: True
+  save_freq: 20  # Same as 20023
+  share_local_model: True  # Single GPU mode
+  online_aggr: False
+data:
+  root: /hdd/hdd3/kjb/
+  type: 'hh-rlhf@llm'  # Same as 20023
+  splits: [0.9,0.09,0.01]
+  splitter: 'meta'
+llm:
+  use: True
+  tok_len: 1024
+  max_new_token: 512
+  accelerator:
+    use: False
+  chat:
+    max_len: 512
+  adapter:
+    use: True
+    count: 3
+    warmup:
+      use: True
+      round: 2  # Same as 20023
+    grouping:
+      use: False
+      round: 2
+    args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
+  freeze_base_model: True  # Freeze base model for adapter-only training (same as VPL trainer)
+  grad_accum_step: 8  # Increased to maintain effective batch size with smaller batch_size
+dataloader:
+  batch_size: 8  # Same as 20023 (effective batch size = 8 * 8 = 64)
+  num_workers: 4  # Same as 20023
+  pin_memory: True  # Same as 20023
+model:
+  type: 'google/gemma-2b@huggingface_llm'
+train:
+  local_update_steps: 30  # Same as 20023
+  batch_or_epoch: batch
+  optimizer:
+    type: AdamW
+    betas: (0.9, 0.95)  # Same as 20023
+    lr: 0.0001  # Same as 20023
+  is_enable_half: True
+criterion:
+  type: CrossEntropyLoss
+trainer:
+  type: llmrewardchoicetrainer  # Baseline trainer (no VPL)
+  choices: ['A', 'B']
+eval:
+  freq: 5  # Same as 20023
+  metrics: ['loss', 'acc']  # Baseline metrics (no VPL metrics)
+  best_res_update_round_wise_key: train_avg_loss  # Same as 20023
+  count_flops: False
+  max_samples_for_reward: 100
+expname: fedbiscuit_hhst_t20124
+wandb:
+  use: True
+  name_user: ''
+  name_project: 'fvpl-selector'  # Same project as 50024 for comparison
+  online_track: True
+  client_train_info: True

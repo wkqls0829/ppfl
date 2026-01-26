@@ -1,0 +1,57 @@
+use_gpu: True
+device: 2
+early_stop:
+  patience: 0
+federate:
+  mode: standalone
+  client_num: 1
+  total_round_num: 50
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice.ckpt"
+  save_freq: 50
+  share_local_model: True
+  online_aggr: False
+data:
+  root: /hdd/hdd3/kjb/
+  type: 'hh-rlhf@llm'
+  splits: [0.9,0.09,0.01]
+  splitter: 'iid'
+model:
+  type: 'google/gemma-2b@huggingface_llm'
+llm:
+  use: True
+  rlhf: True
+  tok_len: 1024
+  max_new_token: 512
+  num_completions: 2
+  metrics: ['loss', 'acc']
+  best_res_update: False
+  grad_accum_step: 32  # Increased gradient accumulation to compensate for reduced batch_size (effective batch size = batch_size * grad_accum_step = 1 * 32 = 32, same as before)
+  max_prompts_for_generation: 50  # Randomly sample 50 prompts per round instead of using all 1000 (reduces generation time from ~30min to ~1.5min)
+  generation_batch_size: 3  # Batch size for text generation (reduced from 5 to save memory). Lower = less memory but slower generation
+expname: hhrl/rlhf_gemma/hhrl_choice_gemma_fedbiscuit_u3
+trainer:
+  type: llmdporewardtrainer
+dataloader:
+  batch_size: 1  # Reduced from 2 to 1 to prevent OOM (effective batch size maintained via grad_accum_step=32)
+train:
+  local_update_steps: 30  # RL training steps per round
+  batch_or_epoch: batch
+  optimizer:
+    type: AdamW
+    betas: (0.9, 0.95)
+    lr: 0.0001
+  is_enable_half: True
+eval:
+  freq: 1  # Evaluate every round
+  metrics: ['loss', 'acc', 'avg_harmlessness', 'avg_helpfulness']
+  count_flops: False
+  # Limit the number of samples for reward model evaluation to speed up
+  # Set to -1 to evaluate on all samples (slower but more accurate)
+  # Reduced from 100 to 20 to speed up evaluation (24 iterations -> ~5 iterations)
+  max_samples_for_reward: 20
+wandb:
+  use: True  # Enable wandb tracking
+  name_user: ''  # Your wandb username (leave empty for default)
+  name_project: 'fvpl-rl'  # Project name in wandb (RL training, separate from binary selector)
+  online_track: True  # Track results online (real-time)
+  client_train_info: True  # Track client training information

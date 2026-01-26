@@ -51,6 +51,14 @@ class LLMMultiLoRAClient(Client):
         self.register_handlers('set_active_adapter_idx',
                                self.callback_funcs_for_setting_adapter_idx,
                                [None])
+        # Register VPL-GP prior handler
+        self.register_handlers('vpl_gp_prior',
+                               self.callback_funcs_for_vpl_gp_prior,
+                               [None])
+        # Register VPL orthogonal labels handler
+        self.register_handlers('vpl_orthogonal_labels',
+                               self.callback_funcs_for_vpl_orthogonal_labels,
+                               [None])
 
     def callback_funcs_for_model_para(self, message: Message):
         round = message.state
@@ -119,12 +127,25 @@ class LLMMultiLoRAClient(Client):
                                 target_data_split_name='val')
                             logger.info(
                                 f'Adapter {i} with the results: {metrics}')
+                            
+                            # Check if metrics is None before accessing
+                            if metrics is None:
+                                logger.warning(f"Client {self.ID}: metrics is None for adapter {i}, adding to indices anyway")
+                                adapter_indices.append(i)
+                                continue
+                            
                             if i == 0 or min_loss > metrics['val_avg_loss']:
                                 min_loss, adapter_indices = metrics[
                                     'val_avg_loss'], [i]
                             elif min_loss == metrics['val_avg_loss']:
                                 adapter_indices.append(i)
-                        logger.info(adapter_indices)
+                        
+                        # If no adapters were evaluated successfully, use all adapters
+                        if len(adapter_indices) == 0:
+                            logger.warning(f"Client {self.ID}: No adapters evaluated successfully, using all adapters")
+                            adapter_indices = list(range(self._cfg.llm.adapter.count))
+                        
+                        logger.info(f"Client {self.ID}: Selected adapter indices: {adapter_indices}")
                         adapter_idx = random.choice(adapter_indices)
                 # activate the selected adapter for further training
                 logger.info(
@@ -146,6 +167,47 @@ class LLMMultiLoRAClient(Client):
                     for key, value in model_para_all.items()
                     if f'Adapter_{adapter_idx}.' in key
                 }
+            
+            # VPL: Add z distribution and values to model parameters
+            # Always collect z values for visualization (not just for GP prior)
+            if hasattr(self.trainer, 'get_client_z_values'):
+                z_values = self.trainer.get_client_z_values()
+                if z_values is not None:
+                    model_para_all['client_z_values'] = z_values.cpu() if isinstance(z_values, torch.Tensor) else z_values
+            
+            # VPL-GP: Add z distribution for GP prior (only if GP prior is enabled)
+            if (hasattr(self._cfg.llm, 'vpl_use_gp_prior') and 
+                self._cfg.llm.vpl_use_gp_prior and
+                hasattr(self.trainer, 'get_client_z_distribution')):
+                z_dist = self.trainer.get_client_z_distribution()
+                if z_dist is not None:
+                    mu, logvar = z_dist
+                    model_para_all['client_z_mu'] = mu.cpu() if isinstance(mu, torch.Tensor) else mu
+                    model_para_all['client_z_logvar'] = logvar.cpu() if isinstance(logvar, torch.Tensor) else logvar
+                    model_para_all['sample_size'] = sample_size
+            
+            # Add orthogonal prototypes (if available)
+            if hasattr(self.trainer, 'get_client_orthogonal_prototypes'):
+                prototypes = self.trainer.get_client_orthogonal_prototypes()
+                if prototypes is not None:
+                    model_para_all['client_orthogonal_prototypes'] = prototypes.cpu() if isinstance(prototypes, torch.Tensor) else prototypes
+            
+            # VPL: Add VPL components (variational_encoder, feature_extractor, latent_projection, z_to_embedding) to model parameters
+            if hasattr(self.trainer, 'variational_encoder') and self.trainer.variational_encoder is not None:
+                vpl_state_dict = {}
+                vpl_state_dict['variational_encoder'] = self.trainer.variational_encoder.state_dict()
+                if hasattr(self.trainer, 'feature_extractor') and self.trainer.feature_extractor is not None:
+                    vpl_state_dict['feature_extractor'] = self.trainer.feature_extractor.state_dict()
+                if hasattr(self.trainer, 'latent_projection') and self.trainer.latent_projection is not None:
+                    vpl_state_dict['latent_projection'] = self.trainer.latent_projection.state_dict()
+                if hasattr(self.trainer, 'z_to_embedding') and self.trainer.z_to_embedding is not None:
+                    vpl_state_dict['z_to_embedding'] = self.trainer.z_to_embedding.state_dict()
+                
+                # Add VPL components to model_para_all with prefixes
+                for component_name, component_state_dict in vpl_state_dict.items():
+                    for key, value in component_state_dict.items():
+                        model_para_all[f'{component_name}.{key}'] = value.cpu() if isinstance(value, torch.Tensor) else value
+            
             train_log_res = self._monitor.format_eval_res(
                 results,
                 rnd=self.state,
@@ -184,7 +246,12 @@ class LLMMultiLoRAClient(Client):
                     target_data_split_name='val')
                 logger.info(f'Client {self.ID} Adapter {i} with '
                             f'the results: {adap_metrics}')
-                metrics[f'adapter_{i}_avg_loss'] = adap_metrics['val_avg_loss']
+                if adap_metrics is not None and 'val_avg_loss' in adap_metrics:
+                    metrics[f'adapter_{i}_avg_loss'] = adap_metrics['val_avg_loss']
+                else:
+                    # Fallback if evaluation returns None or missing key
+                    metrics[f'adapter_{i}_avg_loss'] = random.random()
+                    logger.warning(f'Client {self.ID} Adapter {i} evaluation returned None, using random value')
 
         self.comm_manager.send(
             Message(msg_type='grouping',
@@ -196,3 +263,35 @@ class LLMMultiLoRAClient(Client):
 
     def callback_funcs_for_setting_adapter_idx(self, message: Message):
         self.adapter_idx = message.content
+    
+    def callback_funcs_for_vpl_gp_prior(self, message: Message):
+        """
+        Handle VPL-GP prior update from server.
+        """
+        if hasattr(self.trainer, 'update_prior_from_server'):
+            prior_mus = message.content.get('vpl_gp_prior_mus')
+            prior_logvars = message.content.get('vpl_gp_prior_logvars')
+            prior_weights = message.content.get('vpl_gp_prior_weights')
+            
+            if prior_mus is not None and prior_logvars is not None:
+                # Convert to tensors if needed
+                if not isinstance(prior_mus, torch.Tensor):
+                    prior_mus = torch.tensor(prior_mus, dtype=torch.float32).to(self.device)
+                if not isinstance(prior_logvars, torch.Tensor):
+                    prior_logvars = torch.tensor(prior_logvars, dtype=torch.float32).to(self.device)
+                if not isinstance(prior_weights, torch.Tensor):
+                    prior_weights = torch.tensor(prior_weights, dtype=torch.float32).to(self.device)
+                
+                self.trainer.update_prior_from_server(prior_mus, prior_logvars, prior_weights)
+                logger.info(f"Client {self.ID} updated VPL-GP prior from server with "
+                          f"{len(prior_mus)} client distributions at round {message.state}")
+    
+    def callback_funcs_for_vpl_orthogonal_labels(self, message: Message):
+        """
+        Handle orthogonal labels from server.
+        """
+        if hasattr(self.trainer, 'update_orthogonal_label_from_server'):
+            labels = message.content
+            if isinstance(labels, dict) and self.ID in labels:
+                self.trainer.update_orthogonal_label_from_server(labels[self.ID])
+                logger.info(f"Client {self.ID} updated orthogonal label from server: {labels[self.ID]}")
