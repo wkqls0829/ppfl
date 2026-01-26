@@ -33,6 +33,7 @@ trainer:
   type: llmdporewardtrainer
 dataloader:
   batch_size: 1  # Reduced from 2 to 1 to prevent OOM (effective batch size maintained via grad_accum_step=32)
+  num_workers: 0  # Set to 0 to avoid "Too many open files" error in cluster environment
 train:
   local_update_steps: 30  # RL training steps per round
   batch_or_epoch: batch

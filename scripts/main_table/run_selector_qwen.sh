@@ -96,10 +96,27 @@ fi
 python3 << EOF
 import yaml
 import sys
+import os
 
 config_file = "$CONFIG_FILE"
 with open(config_file, 'r') as f:
     config = yaml.safe_load(f)
+
+# Set Hugging Face cache directory in config
+if 'llm' not in config:
+    config['llm'] = {}
+if 'cache' not in config['llm']:
+    config['llm']['cache'] = {}
+config['llm']['cache']['model'] = "$WORK_DIR/.cache/huggingface/transformers"
+
+# Set device to 0 (SLURM sets CUDA_VISIBLE_DEVICES, so always use device 0)
+config['use_gpu'] = True
+config['device'] = 0
+
+# Set num_workers to 0 to avoid "Too many open files" error in cluster environment
+if 'dataloader' not in config:
+    config['dataloader'] = {}
+config['dataloader']['num_workers'] = 0
 
 # Update federate settings
 config['federate']['client_num'] = int("$CLIENT_COUNT")

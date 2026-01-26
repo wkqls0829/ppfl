@@ -54,7 +54,7 @@ llm:
   grad_accum_step: 2
 dataloader:
   batch_size: 16
-  num_workers: 4
+  num_workers: 0  # Set to 0 to avoid "Too many open files" error in cluster environment
   pin_memory: True
 model:
   type: 'google/gemma-2b@huggingface_llm'

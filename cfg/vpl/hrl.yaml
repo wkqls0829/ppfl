@@ -45,6 +45,7 @@ trainer:
   type: llmdporewardtrainer  # DPO trainer (not VPL trainer, as this is for policy learning)
 dataloader:
   batch_size: 1
+  num_workers: 0  # Set to 0 to avoid "Too many open files" error in cluster environment
 train:
   local_update_steps: 30
   batch_or_epoch: batch

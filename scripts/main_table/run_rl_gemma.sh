@@ -43,6 +43,18 @@ if [ -f "$WORK_DIR/.env" ]; then
     echo "Loaded environment variables from .env file"
 fi
 
+# Set Hugging Face cache directory (use local repo to avoid cache issues)
+export HF_HOME="$WORK_DIR/.cache/huggingface"
+export TRANSFORMERS_CACHE="$WORK_DIR/.cache/huggingface/transformers"
+mkdir -p "$HF_HOME" "$TRANSFORMERS_CACHE"
+
+# Check if Hugging Face token is set (required for gated models like Gemma)
+if [ -z "$HF_TOKEN" ] && [ -z "$HUGGING_FACE_HUB_TOKEN" ]; then
+    echo "WARNING: HF_TOKEN or HUGGING_FACE_HUB_TOKEN not set."
+    echo "Gemma-2B is a gated model and may require authentication."
+    echo "Set HF_TOKEN in .env file or export it before running."
+fi
+
 # Set checkpoint path (local repo instead of /hdd/hdd3)
 CHECKPOINT_DIR="$WORK_DIR/checkpoints"
 mkdir -p $CHECKPOINT_DIR
@@ -114,10 +126,27 @@ fi
 python3 << EOF
 import yaml
 import sys
+import os
 
 config_file = "$CONFIG_FILE"
 with open(config_file, 'r') as f:
     config = yaml.safe_load(f)
+
+# Set Hugging Face cache directory in config
+if 'llm' not in config:
+    config['llm'] = {}
+if 'cache' not in config['llm']:
+    config['llm']['cache'] = {}
+config['llm']['cache']['model'] = "$WORK_DIR/.cache/huggingface/transformers"
+
+# Set device to 0 (SLURM sets CUDA_VISIBLE_DEVICES, so always use device 0)
+config['use_gpu'] = True
+config['device'] = 0
+
+# Set num_workers to 0 to avoid "Too many open files" error in cluster environment
+if 'dataloader' not in config:
+    config['dataloader'] = {}
+config['dataloader']['num_workers'] = 0
 
 # Update federate settings
 config['federate']['client_num'] = 1  # RL uses single client

@@ -1,5 +1,5 @@
 use_gpu: True
-device: 1  # GPU 1 for FedDPO HRL experiment (tid: 10000)
+device: 0  # SLURM sets CUDA_VISIBLE_DEVICES, so always use device 0
 early_stop:
   patience: 0
 federate:
@@ -50,7 +50,7 @@ trainer:
   type: llmdporewardtrainer  # Pure DPO trainer (no VPL)
 dataloader:
   batch_size: 1  # Small batch size for RL training (same as recent experiments)
-  num_workers: 4
+  num_workers: 0  # Set to 0 to avoid "Too many open files" error in cluster environment
   pin_memory: True
 train:
   local_update_steps: 30
