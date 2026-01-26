@@ -4,7 +4,7 @@
 # SLURM cluster execution script
 # TID range: 62100-62132 (Gemma-2B selector experiments)
 
-#SBATCH -p 3090,A6000,RTX4090,RTX6000ADA,A5000
+#SBATCH -p A6000,RTX4090,RTX6000ADA,A5000
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH -t 2-00:00:00

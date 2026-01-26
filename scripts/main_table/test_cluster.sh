@@ -4,7 +4,7 @@
 # Quick test to verify cluster setup before running full experiments
 # Tests both Selector and RL training with minimal rounds and data
 
-#SBATCH -p 3090,A6000,RTX4090,RTX6000ADA,A5000
+#SBATCH -p A6000,RTX4090,RTX6000ADA,A5000
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH -t 0-02:00:00
