@@ -113,18 +113,18 @@ if "$MODEL" == "gemma-2b":
     config['dataloader']['batch_size'] = 8
     config['llm']['grad_accum_step'] = 4
 
-# For FedVPA-GP, add hyperparameters from 52001
+# For FedVPA-GP, add hyperparameters from hyperparameter search results
 if "$METHOD" == "fedvpagp":
     config['llm']['vpl_use_gp_prior'] = True
     config['llm']['vpl_latent_dim'] = 32
-    config['llm']['vpl_kl_weight'] = 0.1
+    config['llm']['vpl_kl_weight'] = 0.02  # Updated from hyperparameter search
     config['llm']['vpl_gp_temperature'] = 1.0
     config['llm']['vpl_feature_method'] = 'choice_logits'
     config['llm']['vpl_use_feature_difference'] = True
     config['llm']['vpl_use_difference_only'] = True
     config['llm']['vpl_max_logvar'] = -3.0
     config['llm']['vpl_orthogonal_weight'] = 1.0
-    config['llm']['vpl_orthogonal_orthonorm_weight'] = 0.1
+    config['llm']['vpl_orthogonal_orthonorm_weight'] = 0.0  # Updated from hyperparameter search
     config['llm']['vpl_use_manual_orthogonal_labels'] = True
     config['llm']['vpl_num_prototypes'] = 2
     config['llm']['vpl_prototype_scale'] = 5.0
