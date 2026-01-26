@@ -113,7 +113,7 @@ federate:
 ```yaml
 federate:
   client_num: 100
-  sample_client_num: 20  # 20% sampling rate
+  sample_client_num: 10  # 10 clients per round (same as N=10)
 ```
 
 ## 공통 설정
