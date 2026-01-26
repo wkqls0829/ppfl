@@ -94,13 +94,31 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             self.orthogonal_label = None
         
         # Get model dimensions
+        # Try multiple methods to get embedding dimension
+        embedding_dim = None
         try:
             embedding_dim = self.model.get_input_embeddings().embedding_dim
-        except:
+            logger.info(f"Got embedding_dim={embedding_dim} from get_input_embeddings()")
+        except Exception as e:
+            logger.debug(f"Could not get embedding_dim from get_input_embeddings(): {e}")
             try:
                 embedding_dim = self.model.config.hidden_size
-            except:
-                embedding_dim = 2048  # Default for gemma-2b
+                logger.info(f"Got embedding_dim={embedding_dim} from config.hidden_size")
+            except Exception as e2:
+                logger.debug(f"Could not get embedding_dim from config.hidden_size: {e2}")
+                # Try to infer from model type
+                model_type = getattr(config.model, 'type', '')
+                if 'gemma' in model_type.lower():
+                    embedding_dim = 2048  # Gemma-2B
+                elif 'qwen' in model_type.lower():
+                    embedding_dim = 896  # Qwen2-0.5B
+                else:
+                    embedding_dim = 2048  # Default fallback
+                logger.info(f"Using inferred embedding_dim={embedding_dim} for model type: {model_type}")
+        
+        if embedding_dim is None:
+            embedding_dim = 2048  # Final fallback
+            logger.warning(f"Could not determine embedding_dim, using default: {embedding_dim}")
         
         # Initialize feature extractor
         # Strategy: Reuse hidden_states from main forward pass, no additional forward passes

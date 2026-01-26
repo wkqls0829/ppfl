@@ -11,6 +11,40 @@
 #SBATCH -o /home/jbkoo/slurm/logs/slurm-%A-%x.out
 #SBATCH --exclude=n27,n33,n42,n72
 
+# Check if running inside SLURM job
+if [ -z "$SLURM_JOB_ID" ]; then
+    echo "ERROR: This script must be run via SLURM (sbatch)"
+    echo ""
+    echo "Usage:"
+    echo "  sbatch $0 <model> <method>"
+    echo ""
+    echo "Example:"
+    echo "  sbatch $0 gemma-2b fedvpagp"
+    echo ""
+    echo "The cluster login nodes don't have GPUs. You must submit this as a SLURM job."
+    exit 1
+fi
+
+# Check if GPU is available
+echo "Checking GPU availability..."
+if ! command -v nvidia-smi &> /dev/null; then
+    echo "ERROR: nvidia-smi not found. GPU may not be available."
+    exit 1
+fi
+
+# Verify GPU is accessible
+if ! nvidia-smi &> /dev/null; then
+    echo "ERROR: Cannot access GPU. Make sure you're running in a SLURM job with GPU allocation."
+    echo "Current SLURM_JOB_ID: $SLURM_JOB_ID"
+    echo "SLURM_GPUS_ON_NODE: $SLURM_GPUS_ON_NODE"
+    exit 1
+fi
+
+# Display GPU info
+echo "GPU Information:"
+nvidia-smi --query-gpu=index,name,memory.total,memory.free --format=csv,noheader
+echo ""
+
 # Parse arguments
 MODEL=$1  # gemma-2b or qwen2
 METHOD=$2  # feddpo, fedbiscuit, fedvpl, fedvpagp
@@ -151,6 +185,11 @@ if 'max_test_samples' not in config.get('data', {}):
 config['model']['type'] = "$MODEL_TYPE"
 config['trainer']['type'] = "$TRAINER_SELECTOR"
 
+# GPU settings: ensure GPU is used (SLURM allocates GPU)
+config['use_gpu'] = True
+# Use GPU 0 (SLURM allocates single GPU)
+config['device'] = 0
+
 # Training settings
 config['train']['optimizer']['lr'] = $LR
 config['dataloader']['batch_size'] = $BATCH_SIZE
@@ -251,6 +290,11 @@ if 'max_test_samples' not in config.get('data', {}):
 # Model settings
 config['model']['type'] = "$MODEL_TYPE"
 config['trainer']['type'] = "$TRAINER_RL"
+
+# GPU settings: ensure GPU is used (SLURM allocates GPU)
+config['use_gpu'] = True
+# Use GPU 0 (SLURM allocates single GPU)
+config['device'] = 0
 
 # Training settings
 config['train']['optimizer']['lr'] = $LR

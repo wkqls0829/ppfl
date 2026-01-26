@@ -12,6 +12,10 @@
 
 ## 사용 방법
 
+### ⚠️ 중요: SLURM을 통해 실행해야 합니다
+
+**클러스터의 로그인 노드에는 GPU가 없습니다.** 반드시 `sbatch`를 사용하여 SLURM job으로 제출해야 합니다.
+
 ### 기본 사용법
 
 ```bash
@@ -24,6 +28,17 @@ sbatch scripts/main_table/test_cluster.sh qwen2 feddpo
 # FedBiscuit 테스트
 sbatch scripts/main_table/test_cluster.sh gemma-2b fedbiscuit
 ```
+
+### ❌ 잘못된 사용법 (오류 발생)
+
+```bash
+# 직접 실행하면 GPU가 없어서 오류 발생
+bash scripts/main_table/test_cluster.sh gemma-2b fedvpagp
+# 또는
+./scripts/main_table/test_cluster.sh gemma-2b fedvpagp
+```
+
+스크립트는 SLURM job 내에서 실행되는지 자동으로 확인하며, 그렇지 않으면 명확한 오류 메시지를 출력합니다.
 
 ### 지원하는 조합
 
