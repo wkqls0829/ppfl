@@ -111,10 +111,11 @@ bash scripts/main_table/submit_rl_qwen.sh
 
 ## 하이퍼파라미터
 
-### FedVPA-GP (52001 실험 설정 기반)
+### FedVPA-GP (하이퍼파라미터 서치 결과 기반)
 - `vpl_orthogonal_weight: 1.0`
 - `vpl_prototype_scale: 5.0`
-- `vpl_kl_weight: 0.1`
+- `vpl_kl_weight: 0.02` (하이퍼파라미터 서치 결과)
+- `vpl_orthogonal_orthonorm_weight: 0.0` (하이퍼파라미터 서치 결과)
 - `vpl_gp_temperature: 1.0`
 
 ### 모델별 Learning Rate
