@@ -5,7 +5,7 @@ early_stop:
 federate:
   mode: standalone
   client_num: 100
-  sample_client_num: 50
+  sample_client_num: 10  # 10 clients per round (same as N=10)
   total_round_num: 50
   save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50224.ckpt"
   ignore_weight: True
