@@ -1483,27 +1483,129 @@ class RLHF_finetuning:
             # Non-VPL: use original prompts without client assignment
             list_data_dict_for_generation = list_data_dict
         
+        # For VPL: Use helpful/harmless prompts for each prompt (generate 2 responses per prompt: one helpful, one harmless)
+        helpful_prompt = None
+        harmless_prompt = None
+        if is_vpl_selector:
+            from federatedscope.llm.dataloader.hh_rlhf import HH_RLHF_PROMPT_DICT
+            helpful_prompt = HH_RLHF_PROMPT_DICT.get("generation_helpful", prompt)
+            harmless_prompt = HH_RLHF_PROMPT_DICT.get("generation_harmless", prompt)
+            logger.info(f"VPL generation: For each prompt, generating 2 responses (one helpful, one harmless)")
+        
+        # Get model device (handle device_map='auto' case) - needed for both VPL and non-VPL paths
+        if hasattr(model, 'device'):
+            model_device = model.device
+        elif hasattr(model, 'base_model') and hasattr(model.base_model, 'device'):
+            model_device = model.base_model.device
+        else:
+            try:
+                model_device = next(model.parameters()).device
+            except:
+                model_device = self.device
+        
         new_list_data_dict = []
         for input_data in get_input_data(list_data_dict_for_generation):
-            input_texts = [prompt.format_map(data) for data in input_data]
+            # For VPL: Generate 2 responses per prompt (one helpful, one harmless)
+            if is_vpl_selector and helpful_prompt is not None and harmless_prompt is not None:
+                # For each prompt, generate 2 responses: one with helpful prompt, one with harmless prompt
+                # Store them in response_map like the original logic
+                response_map = [[] for _ in input_data]
+                input_texts = []
+                
+                for idx, data in enumerate(input_data):
+                    # Generate with helpful prompt (first response)
+                    helpful_input_text = helpful_prompt.format_map(data)
+                    helpful_input_tokens = tokenizer(
+                        [helpful_input_text],
+                        padding=True,
+                        add_special_tokens=True,
+                        return_tensors="pt",
+                    )
+                    helpful_input_tokens_device = {k: v.to(model_device) if isinstance(v, torch.Tensor) else v 
+                                                  for k, v in helpful_input_tokens.items()}
+                    
+                    # Generate with harmless prompt (second response)
+                    harmless_input_text = harmless_prompt.format_map(data)
+                    harmless_input_tokens = tokenizer(
+                        [harmless_input_text],
+                        padding=True,
+                        add_special_tokens=True,
+                        return_tensors="pt",
+                    )
+                    harmless_input_tokens_device = {k: v.to(model_device) if isinstance(v, torch.Tensor) else v 
+                                                   for k, v in harmless_input_tokens.items()}
+                    
+                    # Generate both responses (one each)
+                    helpful_generate_kwargs = dict(
+                        top_p=1.0,
+                        temperature=0.7,
+                        do_sample=True,
+                        max_new_tokens=max_new_tokens,
+                        num_return_sequences=1,
+                    )
+                    harmless_generate_kwargs = dict(
+                        top_p=1.0,
+                        temperature=0.7,
+                        do_sample=True,
+                        max_new_tokens=max_new_tokens,
+                        num_return_sequences=1,
+                    )
+                    
+                    helpful_output_ids = model.generate(**helpful_input_tokens_device, **helpful_generate_kwargs)
+                    harmless_output_ids = model.generate(**harmless_input_tokens_device, **harmless_generate_kwargs)
+                    
+                    helpful_responses = tokenizer.batch_decode(helpful_output_ids, skip_special_tokens=True, ignore_tokenization_space=True)
+                    harmless_responses = tokenizer.batch_decode(harmless_output_ids, skip_special_tokens=True, ignore_tokenization_space=True)
+                    
+                    # Extract generated text (remove prompt)
+                    helpful_gen = helpful_responses[0].replace(helpful_input_text, "").strip().replace("</s>", "")
+                    harmless_gen = harmless_responses[0].replace(harmless_input_text, "").strip().replace("</s>", "")
+                    
+                    # Store both responses in response_map (like original logic)
+                    # Randomly assign order for output_A/output_B
+                    if random.random() < 0.5:
+                        response_map[idx].append(helpful_gen)
+                        response_map[idx].append(harmless_gen)
+                    else:
+                        response_map[idx].append(harmless_gen)
+                        response_map[idx].append(helpful_gen)
+                    
+                    input_texts.append(helpful_input_text)  # For logging purposes
+                
+                # Now use the original logic: create pairs from response_map using combinations
+                for i, data in enumerate(input_data):
+                    prompt_text = data.get('prompt', '')[:100] if 'prompt' in data else ''
+                    logger.info(f"Data {i}: prompt={prompt_text}...")
+                    for j, res in enumerate(response_map[i]):
+                        logger.info(f'Generated {j}-th response: {res[:100]}...')
+
+                    # Create pairwise combinations with client assignment (for VPL)
+                    # Each pair will be conditioned with both harmless_client_id and helpful_client_id
+                    for output_A, output_B in combinations(response_map[i], 2):
+                        new_data = copy.deepcopy(data)
+                        new_data["output_A"] = output_A
+                        new_data["output_B"] = output_B
+                        # Keep harmless_client_id and helpful_client_id from prompt assignment (if VPL)
+                        # These will be used for z conditioning during selection
+                        if is_vpl_selector:
+                            if 'harmless_client_id' not in new_data:
+                                # Fallback if not assigned
+                                new_data['harmless_client_id'] = random.choice(harmless_client_ids) if len(harmless_client_ids) > 0 else 1
+                            if 'helpful_client_id' not in new_data:
+                                # Fallback if not assigned
+                                new_data['helpful_client_id'] = random.choice(helpful_client_ids) if len(helpful_client_ids) > 0 else 2
+                        new_list_data_dict.append(new_data)
+                
+                continue  # Skip the standard generation below
+            else:
+                # Non-VPL or fallback: use standard prompt
+                input_texts = [prompt.format_map(data) for data in input_data]
             input_text_tokens = tokenizer(
                 input_texts,
                 padding=True,
                 add_special_tokens=True,
                 return_tensors="pt",
             )
-            
-            # Ensure model is on the correct device before tokenizing
-            # Get model device (handle device_map='auto' case)
-            if hasattr(model, 'device'):
-                model_device = model.device
-            elif hasattr(model, 'base_model') and hasattr(model.base_model, 'device'):
-                model_device = model.base_model.device
-            else:
-                try:
-                    model_device = next(model.parameters()).device
-                except:
-                    model_device = self.device
             
             # Move tokens to model device
             input_text_tokens_device = {k: v.to(model_device) if isinstance(v, torch.Tensor) else v 

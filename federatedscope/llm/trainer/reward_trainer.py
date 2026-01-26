@@ -395,6 +395,10 @@ class DPORewardTrainer(LLMTrainer):
         model_dtype = next(ctx.model.parameters()).dtype
         z = z.to(dtype=model_dtype)
         
+        # Ensure z_to_embedding has the same dtype as the model
+        if self.z_to_embedding.weight.dtype != model_dtype:
+            self.z_to_embedding = self.z_to_embedding.to(dtype=model_dtype)
+        
         # Get input embeddings
         input_embeddings = ctx.model.get_input_embeddings()(input_ids)
         
@@ -441,8 +445,11 @@ class DPORewardTrainer(LLMTrainer):
                         selector_ckpt_path, ctx.cfg, device=ctx.device
                     )
                     if z_to_embedding is not None:
+                        # Match dtype with model
+                        model_dtype = next(ctx.model.parameters()).dtype
+                        z_to_embedding = z_to_embedding.to(dtype=model_dtype)
                         self.z_to_embedding = z_to_embedding
-                        logger.info("Loaded z_to_embedding for conditional training with stored z values")
+                        logger.info(f"Loaded z_to_embedding for conditional training with stored z values (dtype: {model_dtype})")
             
             if self.z_to_embedding is not None:
                 win_inputs_embeds = self._inject_z_to_embeddings(ctx, win_input_ids, z)

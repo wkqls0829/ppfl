@@ -938,11 +938,8 @@ class LLMMultiLoRAServer(Server):
         else:
             # Concatenate all new z values and update per-client latest
             all_z_values = np.concatenate(z_values_list, axis=0)
-            # Limit stored z values per client with balanced sampling:
-            # For 50 clients: 10 from harmlessness (label 0) + 10 from helpfulness (label 1) = 20 total
-            # For fewer clients: proportional sampling
-            max_samples_per_client = 20 if self.client_num > 20 else 50
-            samples_per_label = max_samples_per_client // 2  # Split equally between two labels
+            # Store only the latest round's z values per client (replace old z, don't accumulate)
+            # This ensures t-SNE visualization shows only the current round's z distribution
             
             for client_id in set(client_ids_list):
                 client_z_mask = np.array(client_ids_list) == client_id
@@ -951,23 +948,8 @@ class LLMMultiLoRAServer(Server):
                 # Get orthogonal label for this client
                 client_label = self.client_orthogonal_labels_dict.get(client_id, None)
                 
-                if len(client_z) > max_samples_per_client:
-                    # If we have stored z values, merge with new ones
-                    if client_id in self.client_z_values_dict and len(self.client_z_values_dict[client_id]) > 0:
-                        old_z = np.array(self.client_z_values_dict[client_id])
-                        client_z = np.concatenate([old_z, client_z], axis=0)
-                    
-                    # Group by label and sample balanced
-                    if client_label is not None:
-                        # Separate by label if we have multiple clients' data mixed
-                        # For single client, just take recent samples
-                        if len(client_z) > max_samples_per_client:
-                            # Take most recent samples (simple approach for single client)
-                            client_z = client_z[-max_samples_per_client:]
-                    else:
-                        # No label info, just take recent samples
-                        client_z = client_z[-max_samples_per_client:]
-                
+                # Replace old z with new z (only keep latest round's z values)
+                # This prevents accumulation across rounds and keeps t-SNE visualization clean
                 self.client_z_values_dict[client_id] = client_z.tolist()
             
             # After updating all clients, balance across harmlessness and helpfulness
@@ -975,24 +957,16 @@ class LLMMultiLoRAServer(Server):
             harmless_clients = [cid for cid, label in self.client_orthogonal_labels_dict.items() if label == 0]
             helpful_clients = [cid for cid, label in self.client_orthogonal_labels_dict.items() if label == 1]
             
-            # For each label group, limit samples per client
-            for client_id in harmless_clients:
-                if client_id in self.client_z_values_dict:
-                    z_list = self.client_z_values_dict[client_id]
-                    if len(z_list) > samples_per_label:
-                        self.client_z_values_dict[client_id] = z_list[-samples_per_label:]
-            
-            for client_id in helpful_clients:
-                if client_id in self.client_z_values_dict:
-                    z_list = self.client_z_values_dict[client_id]
-                    if len(z_list) > samples_per_label:
-                        self.client_z_values_dict[client_id] = z_list[-samples_per_label:]
+            # Store only latest round's z values per client (no accumulation across rounds)
         
         # Check all clients (1 to client_num) to ensure we have z for all
         all_client_ids = set(range(1, self.client_num + 1))
         missing_clients = all_client_ids - set(self.client_z_values_dict.keys())
+        non_participating_with_z = set(self.client_z_values_dict.keys()) - participating_clients
         if missing_clients:
-            logger.debug(f"Round {self.state}: Clients without z values: {sorted(missing_clients)} (will not appear in t-SNE)")
+            logger.debug(f"Round {self.state}: Clients without any z values (never participated): {sorted(missing_clients)} (will not appear in t-SNE)")
+        if non_participating_with_z:
+            logger.debug(f"Round {self.state}: Non-participating clients using previous round z values: {sorted(non_participating_with_z)} (will appear in t-SNE)")
         
         # Visualize every 10 rounds (or every round if configured)
         visualize_freq = getattr(self._cfg.llm, 'vpl_tsne_visualize_freq', 10)  # Default: every 10 rounds
@@ -1001,8 +975,10 @@ class LLMMultiLoRAServer(Server):
         
         total_points = sum(len(v) for v in self.client_z_values_dict.values())
         unique_clients = len(self.client_z_values_dict)
+        non_participating_count = len(set(self.client_z_values_dict.keys()) - participating_clients)
         logger.info(f"Round {self.state}: Collected z values from {len(participating_clients)} participating clients "
-                   f"(new_z={has_new_z}). Total stored: {total_points} points across {unique_clients} clients. "
+                   f"(new_z={has_new_z}). Total stored: {total_points} points across {unique_clients} clients "
+                   f"({non_participating_count} non-participating using previous z). "
                    f"Orthogonal labels stored for {len(self.client_orthogonal_labels_dict)} clients.")
     
     def _visualize_cross_client_z(self):
@@ -1017,16 +993,14 @@ class LLMMultiLoRAServer(Server):
             client_labels_list = []
             orthogonal_labels_list = []
             
-            # Collect z values with balanced sampling: 10 from harmlessness, 10 from helpfulness per client
-            samples_per_label_per_client = 10  # 10 samples per label per client (harmlessness or helpfulness)
-            
+            # Collect z values without sampling limit (use all available z values)
             # Group clients by label
             harmless_client_ids = [cid for cid in self.client_z_values_dict.keys() 
                                  if self.client_orthogonal_labels_dict.get(cid, None) == 0]
             helpful_client_ids = [cid for cid in self.client_z_values_dict.keys() 
                                 if self.client_orthogonal_labels_dict.get(cid, None) == 1]
             
-            # Process harmlessness clients (label 0): sample 10 per client
+            # Process harmlessness clients (label 0): use only latest round's z values
             for client_id in harmless_client_ids:
                 if client_id not in self.client_z_values_dict:
                     continue
@@ -1036,18 +1010,13 @@ class LLMMultiLoRAServer(Server):
                     continue
                 
                 client_z = np.array(z_list)
-                
-                # Sample up to 10 from harmlessness clients
-                if len(client_z) > samples_per_label_per_client:
-                    # Random sample to get diverse representation
-                    indices = np.random.choice(len(client_z), samples_per_label_per_client, replace=False)
-                    client_z = client_z[indices]
+                # Use only latest round's z values (already stored per round, not accumulated)
                 
                 z_values_list.append(client_z)
                 client_labels_list.extend([client_id] * len(client_z))
                 orthogonal_labels_list.extend([0] * len(client_z))  # Label 0 for harmlessness
             
-            # Process helpfulness clients (label 1): sample 10 per client
+            # Process helpfulness clients (label 1): use only latest round's z values
             for client_id in helpful_client_ids:
                 if client_id not in self.client_z_values_dict:
                     continue
@@ -1057,12 +1026,7 @@ class LLMMultiLoRAServer(Server):
                     continue
                 
                 client_z = np.array(z_list)
-                
-                # Sample up to 10 from helpfulness clients
-                if len(client_z) > samples_per_label_per_client:
-                    # Random sample to get diverse representation
-                    indices = np.random.choice(len(client_z), samples_per_label_per_client, replace=False)
-                    client_z = client_z[indices]
+                # Use only latest round's z values (already stored per round, not accumulated)
                 
                 z_values_list.append(client_z)
                 client_labels_list.extend([client_id] * len(client_z))

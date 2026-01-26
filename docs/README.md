@@ -35,6 +35,10 @@
 
 - **[OPTIMIZATION_PARTS.md](./OPTIMIZATION_PARTS.md)**: 최적화를 위한 주요 파츠 구분 및 최적화 포인트
 
+### 실험 및 하이퍼파라미터 탐색
+
+- **[HYPERPARAMETER_SEARCH.md](./HYPERPARAMETER_SEARCH.md)**: VPL-GP 하이퍼파라미터 서치 실험 계획, 진행 상황, 결과 분석 가이드
+
 ## 문서 구조
 
 ```

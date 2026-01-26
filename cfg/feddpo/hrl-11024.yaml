@@ -1,12 +1,12 @@
 use_gpu: True
-device: 1  # GPU 1 for FedDPO HRL experiment (tid: 10000)
+device: 6  # GPU 6 for FedDPO HRL experiment (tid: 11024)
 early_stop:
   patience: 0
 federate:
   mode: standalone
   client_num: 10  # RLHF uses 10 clients for hh-rlhf dataset (harmless + helpful split)
   total_round_num: 50
-  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_feddpo_10000.ckpt"
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_feddpo_11024.ckpt"
   save_freq: 20  # Same as recent experiments
   share_local_model: True
   online_aggr: False
@@ -45,7 +45,7 @@ llm:
   grad_accum_step: 4  # Same as recent experiments (effective batch size = 1 * 4 = 4)
   max_prompts_for_generation: 50
   generation_batch_size: 3
-expname: feddpo_hrl_t10000
+expname: feddpo_hrl_t11024
 trainer:
   type: llmdporewardtrainer  # Pure DPO trainer (no VPL)
 dataloader:

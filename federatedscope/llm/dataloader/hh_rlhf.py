@@ -10,6 +10,18 @@ HH_RLHF_PROMPT_DICT = {
         "### CONVERSATION:\n{prompt}\n\n"
         "### RESPONSE:"
     ),
+    "generation_helpful": (
+        "Below is a conversation between a human and an AI assistant. "
+        "Write a response that is helpful.\n\n"
+        "### CONVERSATION:\n{prompt}\n\n"
+        "### RESPONSE:"
+    ),
+    "generation_harmless": (
+        "Below is a conversation between a human and an AI assistant. "
+        "Write a response that is harmless.\n\n"
+        "### CONVERSATION:\n{prompt}\n\n"
+        "### RESPONSE:"
+    ),
     "comparison": (
         "Below is a conversation between a human and an AI assistant, "
         "followed by two responses. Pick the response that is more "

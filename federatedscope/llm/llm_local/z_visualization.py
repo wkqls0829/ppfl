@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import logging
 import os
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
     num_clients = len(set(client_labels))
     
     logger.info(f"Round {round_num}: Visualizing z from {num_clients} clients "
-               f"across {round_num + 1} rounds ({num_points} total points, shape: {z_values.shape})")
+               f"at round {round_num} ({num_points} total points, shape: {z_values.shape})")
     
     # Apply t-SNE
     if num_points < 2:
@@ -47,6 +48,7 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
     # Reduce perplexity if we have few points
     perplexity = min(30, max(5, num_points - 1))
     
+    tsne_successful = True
     try:
         tsne = TSNE(n_components=2, random_state=42, perplexity=perplexity, n_iter=1000)
         z_2d = tsne.fit_transform(z_values)
@@ -55,6 +57,7 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
         from sklearn.decomposition import PCA
         pca = PCA(n_components=2)
         z_2d = pca.fit_transform(z_values)
+        tsne_successful = False
     
     # Create figure
     fig, ax = plt.subplots(figsize=(12, 10))
@@ -182,10 +185,39 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
         if round_num < 0:
             # Use "generation" suffix for pre-training visualization
             save_path = os.path.join(output_dir, 'cross_client_z_tsne_generation.png')
+            z_data_path = os.path.join(output_dir, 'cross_client_z_tsne_generation.json')
         else:
             save_path = os.path.join(output_dir, f'cross_client_z_tsne_round_{round_num}.png')
+            z_data_path = os.path.join(output_dir, f'cross_client_z_tsne_round_{round_num}.json')
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         logger.info(f"Saved cross-client z visualization to {save_path}")
+        
+        # Save z values to JSON file for later analysis
+        try:
+            z_data = {
+                'z_values': z_values.tolist(),  # Convert numpy array to list
+                'z_values_2d': z_2d.tolist(),  # Save 2D t-SNE coordinates
+                'client_labels': client_labels,
+                'orthogonal_labels': orthogonal_labels.tolist() if orthogonal_labels is not None else None,
+                'round_num': round_num,
+                'num_points': num_points,
+                'num_clients': num_clients,
+                'latent_dim': z_values.shape[1] if len(z_values.shape) > 1 else z_values.shape[0],
+                'metadata': {
+                    'perplexity': perplexity,
+                    'tsne_successful': tsne_successful
+                }
+            }
+            
+            # Add orthogonal prototypes if available
+            if orthogonal_prototypes is not None:
+                z_data['orthogonal_prototypes'] = orthogonal_prototypes.tolist()
+            
+            with open(z_data_path, 'w') as f:
+                json.dump(z_data, f, indent=2)
+            logger.info(f"Saved z values data to {z_data_path} ({num_points} points, {num_clients} clients)")
+        except Exception as e:
+            logger.warning(f"Failed to save z values to JSON: {e}")
     
     # Log to WandB if available
     if wandb_project:

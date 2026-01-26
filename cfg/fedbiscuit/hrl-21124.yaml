@@ -1,12 +1,12 @@
 use_gpu: True
-device: 0  # GPU 0 for HRL experiment (tid: 51024) - using 50024 selector checkpoint
+device: 0  # GPU 0 for FedBiscuit HRL experiment (tid: 21124) - using 20124 selector checkpoint
 early_stop:
   patience: 0
 federate:
   mode: standalone
   client_num: 1  # RL training uses single client (standalone RLHF)
   total_round_num: 50  # RL training rounds
-  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_vplgp_ortho_51024.ckpt"
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_fedbiscuit_21124.ckpt"
   ignore_weight: True
   save_freq: 20  # Checkpoint 저장 빈도 줄여서 I/O 시간 감소
   share_local_model: True  # Single GPU mode
@@ -16,6 +16,8 @@ data:
   type: 'hh-rlhf@llm'  # Using hh-rlhf dataset for RL training
   splits: [0.9,0.09,0.01]
   splitter: 'iid'  # RL training uses iid splitter
+model:
+  type: 'google/gemma-2b@huggingface_llm'
 llm:
   use: True
   rlhf: True  # Enable RLHF training (DPO)
@@ -36,16 +38,11 @@ llm:
       use: False
       round: 2
     args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
-  # VPL parameters for z-dependent generation (loaded from selector checkpoint 50024)
-  vpl_latent_dim: 32  # Should match selector's vpl_latent_dim
-  vpl_feature_method: 'choice_logits'  # Should match selector's vpl_feature_method
-  vpl_use_feature_difference: True  # Should match selector (50024 uses feature difference)
-  vpl_use_difference_only: True  # Should match selector (50024 uses vpl_use_difference_only=True)
-  vpl_gp_temperature: 1.0  # Should match selector's vpl_gp_temperature
-  # RLHF with z-dependent generation
-  rlhf_use_variational_generation: True  # Use z-dependent generation for RL training
-  rlhf_use_variational_selection: True  # Use variational selection for preference data generation
-  rlhf_selector_checkpoint: "/hdd/hdd3/kjb/checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50024.ckpt"  # Selector checkpoint path (will be overridden by selector_cfg_file)
+  # FedBiscuit baseline: no VPL, standard reward model
+  # No VPL parameters needed (baseline)
+  rlhf_use_variational_selection: False  # FedBiscuit does not use VPL (baseline)
+  rlhf_use_variational_generation: False  # FedBiscuit does not use z-dependent generation (baseline)
+  rlhf_selector_checkpoint: "/hdd/hdd3/kjb/checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_20124.ckpt"  # Selector checkpoint path (will be overridden by selector_cfg_file)
   reward_coeff: 0.1  # DPO beta coefficient
   grad_accum_step: 4  # Gradient accumulation steps
   max_prompts_for_generation: 50  # Number of prompts to generate per round
@@ -54,15 +51,13 @@ dataloader:
   batch_size: 1  # Small batch size for RL training (effective batch size = batch_size * grad_accum_step = 1 * 4 = 4)
   num_workers: 4  # DataLoader 병렬화로 데이터 로딩 속도 향상
   pin_memory: True  # GPU 전송 속도 향상
-model:
-  type: 'google/gemma-2b@huggingface_llm'
 train:
   local_update_steps: 30  # RL training steps per round
   batch_or_epoch: batch
   optimizer:
     type: AdamW
     betas: (0.9, 0.95)
-    lr: 0.0001  # Same as 51000
+    lr: 0.0001  # Same as 20124
   is_enable_half: True
 criterion:
   type: CrossEntropyLoss
@@ -79,7 +74,7 @@ eval:
   use_gpt_api_for_winrate: True  # Use GPT API for winrate evaluation (more accurate than internal model)
   openai_model: 'gpt-4o-mini'  # GPT model to use for evaluation (default: gpt-4o-mini for cost efficiency)
   # openai_api_key: set via environment variable OPENAI_API_KEY
-expname: vplgp_hrl_ortho_t51024
+expname: fedbiscuit_hrl_t21124
 wandb:
   use: True
   name_user: ''

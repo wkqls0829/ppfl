@@ -206,11 +206,13 @@ def load_vpl_components_from_checkpoint(checkpoint_path, config, device='cuda:0'
                 except Exception as e:
                     logger.warning(f"Failed to load latent projection: {e}")
 
-            if 'z_to_embedding' in key:
+        # Load z_to_embedding weights (only once, not in loop)
+        if not z_to_embedding_loaded:
+            z_to_embedding_state = {k.replace('z_to_embedding.', ''): v
+                                   for k, v in model_state_dict.items()
+                                   if 'z_to_embedding' in k}
+            if z_to_embedding_state:
                 try:
-                    z_to_embedding_state = {k.replace('z_to_embedding.', ''): v
-                                           for k, v in model_state_dict.items()
-                                           if 'z_to_embedding' in k}
                     # Check if loaded weight has correct shape
                     if 'weight' in z_to_embedding_state:
                         loaded_weight = z_to_embedding_state['weight']
