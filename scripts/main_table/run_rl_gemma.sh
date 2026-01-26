@@ -37,6 +37,12 @@ export PYTHONPATH="$WORK_DIR:$PYTHONPATH"
 # Set CUDA settings
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+# Load environment variables from .env file if it exists
+if [ -f "$WORK_DIR/.env" ]; then
+    export $(cat $WORK_DIR/.env | grep -v '^#' | xargs)
+    echo "Loaded environment variables from .env file"
+fi
+
 # Set checkpoint path (local repo instead of /hdd/hdd3)
 CHECKPOINT_DIR="$WORK_DIR/checkpoints"
 mkdir -p $CHECKPOINT_DIR
@@ -146,6 +152,15 @@ config['llm']['max_samples_for_reward'] = 30
 config['llm']['use_gpt_api_for_winrate'] = True
 config['llm']['use_baseline_model_for_winrate'] = True
 config['llm']['openai_model'] = 'gpt-4o-mini'
+
+# OpenAI API key from environment variable (loaded from .env file)
+# The API key should be set in .env file (gitignored)
+# If not set, the code will try to read from eval.openai_api_key in config
+import os
+if 'OPENAI_API_KEY' in os.environ:
+    if 'eval' not in config:
+        config['eval'] = {}
+    config['eval']['openai_api_key'] = os.environ['OPENAI_API_KEY']
 
 # Save config
 with open(config_file, 'w') as f:

@@ -35,6 +35,12 @@ export PYTHONPATH="$WORK_DIR:$PYTHONPATH"
 # Set CUDA settings
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+# Load environment variables from .env file if it exists
+if [ -f "$WORK_DIR/.env" ]; then
+    export $(cat $WORK_DIR/.env | grep -v '^#' | xargs)
+    echo "Loaded environment variables from .env file"
+fi
+
 # Determine sample_client_num (always 10 clients per round)
 SAMPLE_CLIENT_NUM=10
 
