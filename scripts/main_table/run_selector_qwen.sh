@@ -76,8 +76,21 @@ esac
 CONFIG_FILE="cfg/main_table/${MODEL}/${METHOD}/hhst_n${CLIENT_COUNT}_${TID}.yaml"
 mkdir -p $(dirname $CONFIG_FILE)
 
+# Check if base config exists
+if [ ! -f "$CONFIG_BASE" ]; then
+    echo "ERROR: Base config file not found: $CONFIG_BASE"
+    echo "Please ensure the base config file exists."
+    exit 1
+fi
+
 # Copy base config and modify
 cp $CONFIG_BASE $CONFIG_FILE
+
+# Verify config file was created
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "ERROR: Failed to create config file: $CONFIG_FILE"
+    exit 1
+fi
 
 # Update config with experiment-specific settings
 python3 << EOF
