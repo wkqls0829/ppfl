@@ -87,13 +87,20 @@ if [ "$USE_SELECTOR" == "true" ]; then
         # Try regular checkpoint
         SELECTOR_CKPT="$CHECKPOINT_DIR/hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
         if [ ! -f "$SELECTOR_CKPT" ]; then
-            echo "ERROR: Selector checkpoint not found:"
-            echo "  Tried: $CHECKPOINT_DIR/final_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
-            echo "  Tried: $CHECKPOINT_DIR/hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
-            echo ""
-            echo "Available checkpoints in $CHECKPOINT_DIR:"
-            ls -lh "$CHECKPOINT_DIR"/*${METHOD}* 2>/dev/null | head -20 || echo "  No checkpoints found for method ${METHOD}"
-            exit 1
+            # Try 40_ checkpoint (fallback for intermediate checkpoint)
+            SELECTOR_CKPT="$CHECKPOINT_DIR/40_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
+            if [ ! -f "$SELECTOR_CKPT" ]; then
+                echo "ERROR: Selector checkpoint not found:"
+                echo "  Tried: $CHECKPOINT_DIR/final_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
+                echo "  Tried: $CHECKPOINT_DIR/hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
+                echo "  Tried: $CHECKPOINT_DIR/40_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
+                echo ""
+                echo "Available checkpoints in $CHECKPOINT_DIR:"
+                ls -lh "$CHECKPOINT_DIR"/*${METHOD}* 2>/dev/null | head -20 || echo "  No checkpoints found for method ${METHOD}"
+                exit 1
+            else
+                echo "  Using 40_ checkpoint as fallback (final checkpoint not found)"
+            fi
         fi
     fi
     echo "✓ Using selector checkpoint: $SELECTOR_CKPT"

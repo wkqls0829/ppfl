@@ -53,7 +53,12 @@ for method in "${METHODS[@]}"; do
             CHECKPOINT_DIR="$WORK_DIR/checkpoints"
             SELECTOR_CKPT="$CHECKPOINT_DIR/final_hhrl_choice_gemma-2b_fedbiscuit_u3_${method}_t${selector_tid}.ckpt"
             if [ ! -f "$SELECTOR_CKPT" ]; then
+                # Try regular checkpoint
                 SELECTOR_CKPT="$CHECKPOINT_DIR/hhrl_choice_gemma-2b_fedbiscuit_u3_${method}_t${selector_tid}.ckpt"
+                if [ ! -f "$SELECTOR_CKPT" ]; then
+                    # Try 40_ checkpoint (fallback for intermediate checkpoint)
+                    SELECTOR_CKPT="$CHECKPOINT_DIR/40_hhrl_choice_gemma-2b_fedbiscuit_u3_${method}_t${selector_tid}.ckpt"
+                fi
             fi
             
             if [ ! -f "$SELECTOR_CKPT" ]; then
