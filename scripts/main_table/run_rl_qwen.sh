@@ -75,6 +75,13 @@ esac
 # Check if selector checkpoint exists (only for methods that use selector)
 SELECTOR_CKPT=""
 if [ "$USE_SELECTOR" == "true" ]; then
+    # Debug: List available checkpoints
+    echo "Checking for selector checkpoint in: $CHECKPOINT_DIR"
+    echo "Looking for: MODEL=${MODEL}, METHOD=${METHOD}, SELECTOR_TID=${SELECTOR_TID}"
+    echo "Available checkpoints matching pattern:"
+    ls -lh "$CHECKPOINT_DIR"/*${METHOD}*${SELECTOR_TID}* 2>/dev/null | head -10 || echo "  No matching checkpoints found"
+    
+    # Try final_ prefix first
     SELECTOR_CKPT="$CHECKPOINT_DIR/final_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
     if [ ! -f "$SELECTOR_CKPT" ]; then
         # Try regular checkpoint
@@ -83,10 +90,13 @@ if [ "$USE_SELECTOR" == "true" ]; then
             echo "ERROR: Selector checkpoint not found:"
             echo "  Tried: $CHECKPOINT_DIR/final_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
             echo "  Tried: $CHECKPOINT_DIR/hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${SELECTOR_TID}.ckpt"
+            echo ""
+            echo "Available checkpoints in $CHECKPOINT_DIR:"
+            ls -lh "$CHECKPOINT_DIR"/*${METHOD}* 2>/dev/null | head -20 || echo "  No checkpoints found for method ${METHOD}"
             exit 1
         fi
     fi
-    echo "Using selector checkpoint: $SELECTOR_CKPT"
+    echo "✓ Using selector checkpoint: $SELECTOR_CKPT"
 else
     echo "Method $METHOD does not require selector checkpoint (USE_SELECTOR=false)"
 fi
