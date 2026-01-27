@@ -154,36 +154,31 @@ def load_hh_rlhf_for_rlhf(data_root,
     random.seed(seed)
     np.random.seed(seed)
     
-    logger.info("Loading hh-rlhf prompts from local data for RLHF (same as selector training)...")
+    logger.info("Loading and processing hh-rlhf dataset from Hugging Face for RLHF (same as selector training)...")
 
-    # Load from local data (same as selector training)
-    from federatedscope.src.data.load_hh_rlhf import _load_and_process_subset
-    
-    # Load both "harmless" and "helpful" test sets from local data
+    # Load from Hugging Face (same as selector training)
     try:
-        _, harmless_test_data = _load_and_process_subset('harmless-base')
-        _, helpful_test_data = _load_and_process_subset('helpful-base')
+        # Load both subsets from Hugging Face
+        harmless_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="harmless-base")
+        helpful_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base")
     except Exception as e:
-        logger.error(
-            f"Failed to load dataset from local data. Error: {e}")
+        logger.error(f"Failed to load dataset from Hugging Face. Error: {e}")
         raise e
-
-    def get_prompt(example):
-        # The prompt is the same for 'chosen' and 'rejected'
+    
+    # Process test splits only (for RLHF, we only need test prompts)
+    def preprocess(example):
+        """Preprocesses a single example to extract prompt."""
         prompt, _ = parse_dialogue(example['chosen'])
-        if prompt:
-            return {'prompt': prompt}
-        else:
-            # Return a key with a None value to allow for filtering
-            return {'prompt': None}
-
-    # Extract prompts and filter out any that failed parsing
-    harmless_prompts = harmless_test_data.map(get_prompt, batched=False, num_proc=4).filter(
-        lambda x: x['prompt'] is not None
-    )
-    helpful_prompts = helpful_test_data.map(get_prompt, batched=False, num_proc=4).filter(
-        lambda x: x['prompt'] is not None
-    )
+        if prompt is None:
+            return None
+        return {"prompt": prompt}
+    
+    harmless_test_data = harmless_raw['test'].map(preprocess, batched=False).filter(lambda x: x is not None)
+    helpful_test_data = helpful_raw['test'].map(preprocess, batched=False).filter(lambda x: x is not None)
+    
+    # harmless_test_data and helpful_test_data already have 'prompt' field from preprocess
+    harmless_prompts = harmless_test_data
+    helpful_prompts = helpful_test_data
 
     if split_by_client and client_num is not None:
         # Split by client using shard() method (same as selector training)

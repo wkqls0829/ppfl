@@ -54,11 +54,12 @@ if __name__ == '__main__':
     update_logger(init_cfg, clear_before_add=True)
     setup_seed(init_cfg.seed)
 
-    # Load the selector config (selector_cfg)
-    selector_cfg = global_cfg.clone()
+    # Load the selector config (selector_cfg) - only if selector config file is provided
+    selector_cfg = None
     if selector_args.selector_cfg_file:
+        selector_cfg = global_cfg.clone()
         selector_cfg.merge_from_file(selector_args.selector_cfg_file)
-    selector_cfg.freeze(save=False)
+        selector_cfg.freeze(save=False)
 
     init_cfg.freeze()
 
@@ -67,15 +68,26 @@ if __name__ == '__main__':
                              specified_device=init_cfg.device)
     _server_device = gpu_manager.auto_choice()
     
-    # load selector - use specified device instead of 'auto'
-    selector_backbone_name, _ = selector_cfg.model.type.split('@')
-    selector_model = get_llm(selector_cfg,
-                             load_from_prev_ckpt=True,
-                             device_map=None)  # Use None to load on CPU first, then move to device
-    selector_model = selector_model.to(_server_device)
-    selector_tokenizer, _ = get_tokenizer(selector_backbone_name,
-                                          selector_cfg.data.root,
-                                          selector_cfg.llm.tok_len)
+    # load selector - only if selector config file is provided (e.g., for VPL methods)
+    # FedDPO and other non-VPL methods don't need a selector
+    selector_model = None
+    selector_tokenizer = None
+    if selector_args.selector_cfg_file:
+        # Check if selector_cfg has valid model.type with @ format
+        if hasattr(selector_cfg, 'model') and hasattr(selector_cfg.model, 'type'):
+            if '@' in selector_cfg.model.type:
+                selector_backbone_name, _ = selector_cfg.model.type.split('@')
+                selector_model = get_llm(selector_cfg,
+                                         load_from_prev_ckpt=True,
+                                         device_map=None)  # Use None to load on CPU first, then move to device
+                selector_model = selector_model.to(_server_device)
+                selector_tokenizer, _ = get_tokenizer(selector_backbone_name,
+                                                      selector_cfg.data.root,
+                                                      selector_cfg.llm.tok_len)
+            else:
+                raise ValueError(f"Selector config model.type must be in format 'model_name@backend', got: {selector_cfg.model.type}")
+        else:
+            raise ValueError("Selector config file provided but model.type is missing")
 
     # load llm - use specified device instead of 'auto'
     model_name, _ = init_cfg.model.type.split('@')

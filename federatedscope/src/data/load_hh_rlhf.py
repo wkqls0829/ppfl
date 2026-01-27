@@ -24,16 +24,21 @@ def parse_dialogue(text):
         return prompt, response
     return None, None
 
-def _load_and_process_subset(base_dir):
+def _load_and_process_subset(base_dir, data_root=None):
     """
     Loads train and test splits from a specific base directory (e.g., 'harmless-base').
 
     Args:
-        base_dir (str): The subdirectory within 'data/hh-rlhf' to load from.
+        base_dir (str): The subdirectory within 'hh-rlhf' to load from.
+        data_root (str, optional): Root directory for data. If None, uses 'data/hh-rlhf'.
     """
-    # --- THIS IS THE KEY CHANGE ---
-    # Construct the full, absolute paths to the data files inside their subdirectories
-    data_path = os.path.join("data/hh-rlhf", base_dir)
+    # Construct the full path to the data files
+    if data_root is None:
+        # Default: use relative path (for backward compatibility)
+        data_path = os.path.join("data/hh-rlhf", base_dir)
+    else:
+        # Use provided data_root
+        data_path = os.path.join(data_root, "hh-rlhf", base_dir)
     
     if not os.path.isdir(data_path):
         raise FileNotFoundError(
@@ -44,7 +49,6 @@ def _load_and_process_subset(base_dir):
     # The `datasets` library can automatically find train/test splits
     # and handle the .gz compression.
     dataset = datasets.load_dataset(data_path)
-    # --- END OF CHANGE ---
 
     def preprocess(example):
         prompt_chosen, chosen_response = parse_dialogue(example['chosen'])
@@ -75,11 +79,14 @@ def load_hh_rlhf_data(config, client_cfgs=None):
     harmless_dir = 'harmless-base'
     helpful_dir = 'helpful-base'
     
+    # Get data_root from config if available
+    data_root = getattr(config.data, 'root', None)
+    
     logger.info(f"Loading and processing data from '{harmless_dir}'...")
-    harmless_train_data, harmless_test_data = _load_and_process_subset(harmless_dir)
+    harmless_train_data, harmless_test_data = _load_and_process_subset(harmless_dir, data_root=data_root)
 
     logger.info(f"Loading and processing data from '{helpful_dir}'...")
-    helpful_train_data, helpful_test_data = _load_and_process_subset(helpful_dir)
+    helpful_train_data, helpful_test_data = _load_and_process_subset(helpful_dir, data_root=data_root)
     
     data_dict = {}
     
