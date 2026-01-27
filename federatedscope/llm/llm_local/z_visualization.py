@@ -59,8 +59,10 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
         z_2d = pca.fit_transform(z_values)
         tsne_successful = False
     
-    # Create figure
-    fig, ax = plt.subplots(figsize=(12, 10))
+    # Create figure with better styling
+    plt.style.use('seaborn-v0_8-darkgrid' if 'seaborn-v0_8-darkgrid' in plt.style.available else 'default')
+    fig, ax = plt.subplots(figsize=(14, 11))
+    fig.patch.set_facecolor('white')
     
     # Plot z values colored by client
     unique_clients = sorted(set(client_labels))
@@ -125,7 +127,8 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
             ax.scatter(z_2d[mask, 0], z_2d[mask, 1], 
                       c=[client_color_map[client_id]], 
                       label=label,
-                      alpha=0.8, s=60, edgecolors='white', linewidths=0.5)  # Increased alpha and size, added edge
+                      alpha=0.85, s=80, edgecolors='white', linewidths=1.0, 
+                      marker='o', zorder=3)  # Enhanced styling for better visibility
     
     # Plot orthogonal prototypes if available
     if orthogonal_prototypes is not None:
@@ -168,14 +171,22 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
                                  edgecolors='black', linewidths=1,
                                  alpha=0.3, s=60, zorder=5)
     
-    ax.set_xlabel('t-SNE Dimension 1', fontsize=12)
-    ax.set_ylabel('t-SNE Dimension 2', fontsize=12)
+    ax.set_xlabel('t-SNE Dimension 1', fontsize=14, fontweight='bold')
+    ax.set_ylabel('t-SNE Dimension 2', fontsize=14, fontweight='bold')
     if round_num < 0:
-        ax.set_title('Cross-Client Z Visualization (Generation Phase)', fontsize=14)
+        title = 'Cross-Client Z Visualization (Generation Phase)'
     else:
-        ax.set_title(f'Cross-Client Z Visualization (Round {round_num})', fontsize=14)
-    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-    ax.grid(True, alpha=0.3)
+        title = f'Cross-Client Z Visualization (Round {round_num})'
+        # Add statistics to title
+        if orthogonal_labels is not None:
+            harmless_count = sum(1 for l in orthogonal_labels if l == 0)
+            helpful_count = sum(1 for l in orthogonal_labels if l == 1)
+            title += f'\n({harmless_count} Harmlessness, {helpful_count} Helpfulness clients)'
+    ax.set_title(title, fontsize=16, fontweight='bold', pad=20)
+    ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=9, 
+              framealpha=0.9, fancybox=True, shadow=True)
+    ax.grid(True, alpha=0.4, linestyle='--', linewidth=0.5)
+    ax.set_facecolor('#FAFAFA')  # Light gray background for better contrast
     
     plt.tight_layout()
     
@@ -189,7 +200,7 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
         else:
             save_path = os.path.join(output_dir, f'cross_client_z_tsne_round_{round_num}.png')
             z_data_path = os.path.join(output_dir, f'cross_client_z_tsne_round_{round_num}.json')
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=200, bbox_inches='tight', facecolor='white', edgecolor='none')
         logger.info(f"Saved cross-client z visualization to {save_path}")
         
         # Save z values to JSON file for later analysis
@@ -219,14 +230,90 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
         except Exception as e:
             logger.warning(f"Failed to save z values to JSON: {e}")
     
-    # Log to WandB if available
+    # Log to WandB if available with enhanced visualization
     if wandb_project:
         try:
             import wandb
-            wandb.log({
-                f'visualization/cross_client_z_tsne_round_{round_num}': wandb.Image(fig)
-            }, step=round_num)
-            logger.info(f"Logged cross-client z t-SNE visualization to wandb at round {round_num}")
+            
+            # Calculate statistics for each client
+            client_stats = []
+            for client_id in unique_clients:
+                mask = np.array(client_labels) == client_id
+                if mask.sum() > 0:
+                    client_z_2d = z_2d[mask]
+                    client_z_original = z_values[mask]
+                    
+                    # Calculate statistics
+                    mean_x = float(np.mean(client_z_2d[:, 0]))
+                    mean_y = float(np.mean(client_z_2d[:, 1]))
+                    std_x = float(np.std(client_z_2d[:, 0]))
+                    std_y = float(np.std(client_z_2d[:, 1]))
+                    
+                    # Get orthogonal label
+                    if orthogonal_labels is not None and len(orthogonal_labels) == len(client_labels):
+                        orth_label = orthogonal_labels[np.where(mask)[0][0]]
+                        orth_type = "Harmlessness" if orth_label == 0 else "Helpfulness"
+                    else:
+                        max_client_id = max(unique_clients) if unique_clients else 0
+                        split_point = max_client_id // 2 if max_client_id > 0 else 0
+                        orth_type = "Harmlessness" if client_id <= split_point else "Helpfulness"
+                    
+                    client_stats.append({
+                        "Client ID": int(client_id),
+                        "Type": orth_type,
+                        "Num Points": int(mask.sum()),
+                        "Mean X": round(mean_x, 4),
+                        "Mean Y": round(mean_y, 4),
+                        "Std X": round(std_x, 4),
+                        "Std Y": round(std_y, 4),
+                        "Color": client_color_map[client_id]
+                    })
+            
+            # Create WandB Table
+            table_columns = ["Client ID", "Type", "Num Points", "Mean X", "Mean Y", "Std X", "Std Y", "Color"]
+            table_data = [[row[col] for col in table_columns] for row in client_stats]
+            table = wandb.Table(columns=table_columns, data=table_data)
+            
+            # Calculate separation metrics
+            harmless_mask = np.array([l == 0 for l in orthogonal_labels]) if orthogonal_labels is not None else np.array([cid <= max(unique_clients) // 2 for cid in client_labels])
+            helpful_mask = np.array([l == 1 for l in orthogonal_labels]) if orthogonal_labels is not None else np.array([cid > max(unique_clients) // 2 for cid in client_labels])
+            
+            separation_metrics = {}
+            if harmless_mask.sum() > 0 and helpful_mask.sum() > 0:
+                harmless_center = np.mean(z_2d[harmless_mask], axis=0)
+                helpful_center = np.mean(z_2d[helpful_mask], axis=0)
+                separation_distance = float(np.linalg.norm(harmless_center - helpful_center))
+                
+                harmless_std = float(np.mean(np.std(z_2d[harmless_mask], axis=0)))
+                helpful_std = float(np.mean(np.std(z_2d[helpful_mask], axis=0)))
+                avg_std = (harmless_std + helpful_std) / 2
+                
+                # Separation ratio (higher is better)
+                separation_ratio = separation_distance / (avg_std + 1e-8) if avg_std > 0 else 0
+                
+                separation_metrics = {
+                    "z_separation/distance": separation_distance,
+                    "z_separation/ratio": separation_ratio,
+                    "z_separation/harmless_std": harmless_std,
+                    "z_separation/helpful_std": helpful_std
+                }
+            
+            # Enhanced logging with multiple visualizations
+            log_dict = {
+                f'z_visualization/t-SNE_round_{round_num}': wandb.Image(fig),
+                f'z_visualization/client_stats': table,
+                f'z_visualization/num_clients': num_clients,
+                f'z_visualization/num_points': num_points,
+                f'z_visualization/latent_dim': z_values.shape[1] if len(z_values.shape) > 1 else z_values.shape[0]
+            }
+            
+            # Add separation metrics
+            log_dict.update(separation_metrics)
+            
+            # Log to WandB
+            wandb.log(log_dict, step=round_num)
+            logger.info(f"Logged enhanced cross-client z visualization to wandb at round {round_num} "
+                       f"({num_clients} clients, {num_points} points, separation_ratio={separation_metrics.get('z_separation/ratio', 0):.3f})")
         except ImportError:
             logger.warning("wandb not installed, skipping visualization logging")
         except Exception as e:

@@ -31,6 +31,22 @@ fi
 WORK_DIR="/home2/jbkoo/ppfl"
 cd $WORK_DIR
 
+# Determine data root and checkpoint directory based on environment
+# Cluster: use /hdd/hdd3/kjb/
+# Local server: use WORK_DIR
+if [ -d "/hdd/hdd3/kjb" ]; then
+    # Cluster environment
+    DATA_ROOT="/hdd/hdd3/kjb"
+    CHECKPOINT_BASE="/hdd/hdd3/kjb/checkpoints"
+    echo "Cluster environment detected. Using data root: $DATA_ROOT"
+else
+    # Local server environment
+    DATA_ROOT="$WORK_DIR/data"
+    CHECKPOINT_BASE="$WORK_DIR/checkpoints"
+    echo "Local server environment. Using data root: $DATA_ROOT"
+fi
+mkdir -p "$DATA_ROOT" "$CHECKPOINT_BASE"
+
 # Set PYTHONPATH
 export PYTHONPATH="$WORK_DIR:$PYTHONPATH"
 
@@ -48,9 +64,8 @@ export HF_HOME="$WORK_DIR/.cache/huggingface"
 export TRANSFORMERS_CACHE="$WORK_DIR/.cache/huggingface/transformers"
 mkdir -p "$HF_HOME" "$TRANSFORMERS_CACHE"
 
-# Set checkpoint path (local repo instead of /hdd/hdd3)
-CHECKPOINT_DIR="$WORK_DIR/checkpoints"
-mkdir -p $CHECKPOINT_DIR
+# Use environment-specific checkpoint directory (already set above)
+CHECKPOINT_DIR="$CHECKPOINT_BASE"
 
 # Method-specific settings (check early to determine if selector is needed)
 case $METHOD in
@@ -182,8 +197,8 @@ config['dataloader']['num_workers'] = 0
 config['federate']['client_num'] = 1  # RL uses single client
 config['federate']['save_to'] = "$CHECKPOINT_DIR/hhrl_rlhf_${MODEL}_choice_${METHOD}_t${RL_TID}.ckpt"
 
-# Update data root (local repo)
-config['data']['root'] = "$WORK_DIR/data"
+# Update data root (environment-specific)
+config['data']['root'] = "$DATA_ROOT"
 
 # Update model type for Qwen 2
 config['model']['type'] = 'Qwen/Qwen2-0.5B@huggingface_llm'

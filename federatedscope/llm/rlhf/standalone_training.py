@@ -51,7 +51,15 @@ def cal_acc(logits, labels, choices):
 
 
 def get_rlhf_prompts_dataset(config):
+    """
+    Get RLHF prompts dataset.
+    Uses config.data.root directly (should be set appropriately by scripts for cluster vs local server).
+    """
     dataset_name, _ = config.data.type.split("@")
+    
+    # Use config.data.root directly (set by scripts based on environment)
+    base_data_root = config.data.root
+    logger.info(f"Using data root from config: {base_data_root}")
 
     if dataset_name.lower() == "reddit-tldr-rlhf":
         from federatedscope.llm.dataloader.reddit_tldr import (
@@ -59,7 +67,7 @@ def get_rlhf_prompts_dataset(config):
             TLDR_PROMPT_DICT,
         )
 
-        data_root = os.path.join(config.data.root, "reddit-tldr-comparison")
+        data_root = os.path.join(base_data_root, "reddit-tldr-comparison")
         list_train_prompts, _, _ = load_human_finetuning_dataset(
             data_root,
             tokenizer=None,
@@ -74,7 +82,9 @@ def get_rlhf_prompts_dataset(config):
             load_hh_rlhf_for_rlhf,
             HH_RLHF_PROMPT_DICT,
         )
-        data_root = os.path.join(config.data.root, "hh-rlhf")
+        data_root = os.path.join(base_data_root, "hh-rlhf")
+        # Ensure directory exists for saving generated data
+        os.makedirs(data_root, exist_ok=True)
 
         list_train_prompts, _, _ = load_hh_rlhf_for_rlhf(
             data_root,
@@ -90,7 +100,8 @@ def get_rlhf_prompts_dataset(config):
         from federatedscope.llm.dataloader.shp import \
             load_rlhf_dataset, SHP_PROMPT_DICT
 
-        data_root = os.path.join(config.data.root, 'shp')
+        data_root = os.path.join(base_data_root, 'shp')
+        os.makedirs(data_root, exist_ok=True)
         list_train_prompts, _, _ = load_rlhf_dataset(data_root,
                                                      tokenizer=None,
                                                      max_num_test=1000)
@@ -101,11 +112,13 @@ def get_rlhf_prompts_dataset(config):
         from federatedscope.llm.dataloader.shp import \
             load_safe_dataset, SHP_PROMPT_DICT
 
-        data_root = os.path.join(config.data.root, 'shp')
+        data_root = os.path.join(base_data_root, 'shp')
+        os.makedirs(data_root, exist_ok=True)
         list_train_prompts, _, _ = load_safe_dataset()
         generation_prompt = SHP_PROMPT_DICT["shp"]
         selector_prompt = SHP_PROMPT_DICT["shp_cmp"]
 
+    logger.info(f"Using data root for RLHF: {data_root}")
     return (data_root, list_train_prompts, generation_prompt, selector_prompt)
 
 
