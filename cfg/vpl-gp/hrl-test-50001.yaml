@@ -85,11 +85,7 @@ eval:
   metrics:
   - loss
   - acc
-  - avg_helpfulness
-  - avg_harmlessness
-  - helpfulness_winrate
-  - harmlessness_winrate
-  - avg_winlose_rate
+  # Reward model evaluation disabled
   best_res_update_round_wise_key: test_loss
   count_flops: false
 expname: vplgp_hrl_ortho_t50001_test

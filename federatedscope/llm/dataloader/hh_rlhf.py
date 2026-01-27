@@ -134,30 +134,38 @@ def load_hh_rlhf_for_rlhf(data_root,
                           split_by_client=False,
                           client_num=None):
     """
-    Loads and processes the hh-rlhf dataset from Hugging Face for the
+    Loads and processes the hh-rlhf dataset from local files for the
     standalone RLHF script. It combines both helpful and harmless datasets.
+    Uses the same data source and shard() method as selector training for consistency.
     
     Args:
         data_root: Root directory for data
         config: Configuration object
         max_num_test: Maximum number of test samples per client (if split_by_client=True) or total (if False)
         raw_no_prompt: If True, return raw prompts without processing
-        split_by_client: If True, split test data by client (harmless: 1 to client_num//2, helpful: client_num//2+1 to client_num)
+        split_by_client: If True, split test data by client using shard() (harmless: 1 to client_num//2, helpful: client_num//2+1 to client_num)
         client_num: Number of clients (required if split_by_client=True)
     """
-    logger.info("Loading hh-rlhf prompts from Hugging Face for RLHF...")
+    import random
+    import numpy as np
+    
+    # Fix seed for reproducibility (same as selector training)
+    seed = 42
+    random.seed(seed)
+    np.random.seed(seed)
+    
+    logger.info("Loading hh-rlhf prompts from local data for RLHF (same as selector training)...")
 
-    # Load both "harmless" and "helpful" test sets for prompts
+    # Load from local data (same as selector training)
+    from federatedscope.src.data.load_hh_rlhf import _load_and_process_subset
+    
+    # Load both "harmless" and "helpful" test sets from local data
     try:
-        harmless_test = datasets.load_dataset("Anthropic/hh-rlhf",
-                                              data_dir="harmless-base",
-                                              split='test')
-        helpful_test = datasets.load_dataset("Anthropic/hh-rlhf",
-                                             data_dir="helpful-base",
-                                             split='test')
+        _, harmless_test_data = _load_and_process_subset('harmless-base')
+        _, helpful_test_data = _load_and_process_subset('helpful-base')
     except Exception as e:
         logger.error(
-            f"Failed to load dataset from Hugging Face. Error: {e}")
+            f"Failed to load dataset from local data. Error: {e}")
         raise e
 
     def get_prompt(example):
@@ -170,56 +178,119 @@ def load_hh_rlhf_for_rlhf(data_root,
             return {'prompt': None}
 
     # Extract prompts and filter out any that failed parsing
-    harmless_prompts = harmless_test.map(get_prompt).filter(
+    harmless_prompts = harmless_test_data.map(get_prompt, batched=False, num_proc=4).filter(
         lambda x: x['prompt'] is not None
     )
-    helpful_prompts = helpful_test.map(get_prompt).filter(
+    helpful_prompts = helpful_test_data.map(get_prompt, batched=False, num_proc=4).filter(
         lambda x: x['prompt'] is not None
     )
 
     if split_by_client and client_num is not None:
-        # Split by client: harmless -> clients 1 to client_num//2, helpful -> clients client_num//2+1 to client_num
-        harmless_clients_num = client_num // 2
-        helpful_clients_num = client_num - harmless_clients_num
+        # Split by client using shard() method (same as selector training)
+        # For unseen experiments: harmless and helpful each split into training and unseen
+        #   - harmless: client_id 1-5 (training), 11-15 (unseen)
+        #   - helpful: client_id 6-10 (training), 16-20 (unseen)
+        # For normal experiments: harmless -> clients 1 to client_num//2, helpful -> clients client_num//2+1 to client_num
         
-        # Convert to list format
-        harmless_prompts_list = list(harmless_prompts)
-        helpful_prompts_list = list(helpful_prompts)
+        # Check if this is an unseen experiment (unseen_clients_id specified)
+        unseen_clients_id = getattr(config.federate, 'unseen_clients_id', None) if hasattr(config, 'federate') else None
+        is_unseen_experiment = unseen_clients_id is not None and len(unseen_clients_id) > 0
         
-        # Split harmless prompts by client
-        harmless_per_client = len(harmless_prompts_list) // harmless_clients_num if harmless_clients_num > 0 else 0
-        helpful_per_client = len(helpful_prompts_list) // helpful_clients_num if helpful_clients_num > 0 else 0
+        total_clients_per_type = client_num // 2  # 10 harmless, 10 helpful
         
-        # Create client-specific test data
+        # Create client-specific test data using shard() (same as selector training)
         client_test_data = {}
         
-        # Assign harmless data to clients 1 to harmless_clients_num
-        for i in range(harmless_clients_num):
-            client_id = i + 1
-            start_idx = i * harmless_per_client
-            end_idx = (i + 1) * harmless_per_client if i < harmless_clients_num - 1 else len(harmless_prompts_list)
-            client_prompts = harmless_prompts_list[start_idx:end_idx]
+        if is_unseen_experiment:
+            # Unseen experiment: distribute so that half of each type are unseen
+            unseen_clients_id_set = set(unseen_clients_id)
+            training_clients = sorted([c for c in range(1, client_num + 1) if c not in unseen_clients_id_set])
+            unseen_clients = sorted(list(unseen_clients_id_set))
             
-            # Limit per client if max_num_test is specified
-            if max_num_test > 0:
-                client_prompts = client_prompts[:max_num_test]
+            training_harmless_num = len(training_clients) // 2  # 5
+            training_helpful_num = len(training_clients) - training_harmless_num  # 5
+            unseen_harmless_num = len(unseen_clients) // 2  # 5
+            unseen_helpful_num = len(unseen_clients) - unseen_harmless_num  # 5
             
-            client_test_data[client_id] = client_prompts
+            # Assign harmless data: first to training clients, then to unseen clients
+            harmless_shard_idx = 0
+            # Training harmless clients (client_id 1-5)
+            for i in range(training_harmless_num):
+                client_id = training_clients[i]
+                client_test_shard = harmless_prompts.shard(num_shards=total_clients_per_type, index=harmless_shard_idx)
+                client_prompts = list(client_test_shard)
+                if max_num_test > 0:
+                    client_prompts = client_prompts[:max_num_test]
+                client_test_data[client_id] = client_prompts
+                harmless_shard_idx += 1
+            # Unseen harmless clients (client_id 11-15)
+            for i in range(unseen_harmless_num):
+                client_id = unseen_clients[i]
+                client_test_shard = harmless_prompts.shard(num_shards=total_clients_per_type, index=harmless_shard_idx)
+                client_prompts = list(client_test_shard)
+                if max_num_test > 0:
+                    client_prompts = client_prompts[:max_num_test]
+                client_test_data[client_id] = client_prompts
+                harmless_shard_idx += 1
+            
+            # Assign helpful data: first to training clients, then to unseen clients
+            helpful_shard_idx = 0
+            # Training helpful clients (client_id 6-10)
+            for i in range(training_helpful_num):
+                client_id = training_clients[training_harmless_num + i]
+                client_test_shard = helpful_prompts.shard(num_shards=total_clients_per_type, index=helpful_shard_idx)
+                client_prompts = list(client_test_shard)
+                if max_num_test > 0:
+                    client_prompts = client_prompts[:max_num_test]
+                client_test_data[client_id] = client_prompts
+                helpful_shard_idx += 1
+            # Unseen helpful clients (client_id 16-20)
+            for i in range(unseen_helpful_num):
+                client_id = unseen_clients[unseen_harmless_num + i]
+                client_test_shard = helpful_prompts.shard(num_shards=total_clients_per_type, index=helpful_shard_idx)
+                client_prompts = list(client_test_shard)
+                if max_num_test > 0:
+                    client_prompts = client_prompts[:max_num_test]
+                client_test_data[client_id] = client_prompts
+                helpful_shard_idx += 1
+        else:
+            # Normal experiment: first half harmless, second half helpful
+            harmless_clients_num = client_num // 2
+            helpful_clients_num = client_num - harmless_clients_num
+            
+            # Assign harmless data to clients 1 to harmless_clients_num using shard()
+            if harmless_clients_num > 0:
+                for i in range(harmless_clients_num):
+                    client_id = i + 1
+                    # Use shard() method (same as selector training)
+                    client_test_shard = harmless_prompts.shard(num_shards=harmless_clients_num, index=i)
+                    
+                    # Convert to list format
+                    client_prompts = list(client_test_shard)
+                    
+                    # Limit per client if max_num_test is specified
+                    if max_num_test > 0:
+                        client_prompts = client_prompts[:max_num_test]
+                    
+                    client_test_data[client_id] = client_prompts
+            
+            # Assign helpful data to clients harmless_clients_num+1 to client_num using shard()
+            if helpful_clients_num > 0:
+                for i in range(helpful_clients_num):
+                    client_id = harmless_clients_num + i + 1
+                    # Use shard() method (same as selector training)
+                    client_test_shard = helpful_prompts.shard(num_shards=helpful_clients_num, index=i)
+                    
+                    # Convert to list format
+                    client_prompts = list(client_test_shard)
+                    
+                    # Limit per client if max_num_test is specified
+                    if max_num_test > 0:
+                        client_prompts = client_prompts[:max_num_test]
+                    
+                    client_test_data[client_id] = client_prompts
         
-        # Assign helpful data to clients harmless_clients_num+1 to client_num
-        for i in range(helpful_clients_num):
-            client_id = harmless_clients_num + i + 1
-            start_idx = i * helpful_per_client
-            end_idx = (i + 1) * helpful_per_client if i < helpful_clients_num - 1 else len(helpful_prompts_list)
-            client_prompts = helpful_prompts_list[start_idx:end_idx]
-            
-            # Limit per client if max_num_test is specified
-            if max_num_test > 0:
-                client_prompts = client_prompts[:max_num_test]
-            
-            client_test_data[client_id] = client_prompts
-        
-        logger.info(f"Split test data by client: {len(client_test_data)} clients, "
+        logger.info(f"Split test data by client using shard() (same as selector training): {len(client_test_data)} clients, "
                    f"harmless clients: 1-{harmless_clients_num}, helpful clients: {harmless_clients_num+1}-{client_num}")
         for client_id, prompts in client_test_data.items():
             logger.info(f"  Client {client_id}: {len(prompts)} test prompts")

@@ -69,7 +69,15 @@ class BaseRunner(object):
         self.unseen_clients_id = []
         self.feat_engr_wrapper_client, self.feat_engr_wrapper_server = \
             get_feat_engr_wrapper(config)
-        if self.cfg.federate.unseen_clients_rate > 0:
+        # Check if unseen_clients_id is directly specified in config
+        if hasattr(self.cfg.federate, 'unseen_clients_id') and \
+           self.cfg.federate.unseen_clients_id is not None and \
+           len(self.cfg.federate.unseen_clients_id) > 0:
+            # Use directly specified unseen client IDs
+            self.unseen_clients_id = self.cfg.federate.unseen_clients_id
+            logger.info(f"Using directly specified unseen_clients_id: {self.unseen_clients_id}")
+        elif self.cfg.federate.unseen_clients_rate > 0:
+            # Random selection (original behavior)
             self.unseen_clients_id = np.random.choice(
                 np.arange(1, self.cfg.federate.client_num + 1),
                 size=max(
@@ -606,7 +614,15 @@ class FedRunner(object):
                                       specified_device=self.cfg.device)
 
         self.unseen_clients_id = []
-        if self.cfg.federate.unseen_clients_rate > 0:
+        # Check if unseen_clients_id is directly specified in config
+        if hasattr(self.cfg.federate, 'unseen_clients_id') and \
+           self.cfg.federate.unseen_clients_id is not None and \
+           len(self.cfg.federate.unseen_clients_id) > 0:
+            # Use directly specified unseen client IDs
+            self.unseen_clients_id = self.cfg.federate.unseen_clients_id
+            logger.info(f"Using directly specified unseen_clients_id: {self.unseen_clients_id}")
+        elif self.cfg.federate.unseen_clients_rate > 0:
+            # Random selection (original behavior)
             self.unseen_clients_id = np.random.choice(
                 np.arange(1, self.cfg.federate.client_num + 1),
                 size=max(

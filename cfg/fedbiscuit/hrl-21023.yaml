@@ -68,15 +68,10 @@ trainer:
   type: llmdporewardtrainer  # FedBiscuit RLHF trainer (no VPL)
 eval:
   freq: 10
-  metrics: ['loss', 'acc', 'avg_helpfulness', 'avg_harmlessness', 'helpfulness_winrate', 'harmlessness_winrate', 'avg_winlose_rate']
+  metrics: ['loss', 'acc']  # Reward model evaluation disabled
   best_res_update_round_wise_key: train_avg_loss
   count_flops: False
-  max_samples_for_reward: 30
   split: ['test', 'val']
-  use_baseline_model_for_winrate: True
-  use_gpt_api_for_winrate: True  # Use GPT API for winrate evaluation (more accurate than internal model)
-  openai_model: 'gpt-4o-mini'  # GPT model to use for evaluation (default: gpt-4o-mini for cost efficiency)
-  # openai_api_key: set via environment variable OPENAI_API_KEY
 expname: fedbiscuit_hrl_t21023
 wandb:
   use: True

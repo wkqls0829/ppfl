@@ -78,20 +78,9 @@ trainer:
   type: llmdporewardtrainer
 eval:
   freq: 5
-  metrics:
-  - loss
-  - acc
-  - avg_helpfulness
-  - avg_harmlessness
-  - helpfulness_winrate
-  - harmlessness_winrate
-  - avg_winlose_rate
+  metrics: ['loss', 'acc']  # Reward model evaluation disabled
   best_res_update_round_wise_key: train_avg_loss
   count_flops: false
-  max_samples_for_reward: 30
-  use_baseline_model_for_winrate: true
-  use_gpt_api_for_winrate: true
-  openai_model: gpt-4o-mini
 expname: vplgp_hrl_ortho_t53014
 wandb:
   use: true

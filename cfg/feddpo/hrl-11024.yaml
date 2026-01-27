@@ -64,15 +64,9 @@ criterion:
   type: CrossEntropyLoss
 eval:
   freq: 5  # Same as recent experiments
-  metrics: ['loss', 'acc', 'avg_helpfulness', 'avg_harmlessness',
-            'helpfulness_winrate', 'harmlessness_winrate', 'avg_winlose_rate']
+  metrics: ['loss', 'acc']  # Reward model evaluation disabled
   best_res_update_round_wise_key: train_avg_loss
   count_flops: False
-  max_samples_for_reward: 30  # Reduced from 100 to speed up training evaluation
-  use_baseline_model_for_winrate: True  # Use base Gemma-2b model for win rate comparison
-  use_gpt_api_for_winrate: True  # Use GPT API for winrate evaluation (faster than internal model generation)
-  openai_model: 'gpt-4o-mini'  # GPT model to use for evaluation (default: gpt-4o-mini for cost efficiency)
-  # openai_api_key: set via environment variable OPENAI_API_KEY
 wandb:
   use: True
   name_user: ''

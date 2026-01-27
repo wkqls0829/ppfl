@@ -18,6 +18,7 @@ def extend_fl_setting_cfg(cfg):
     cfg.federate.sample_client_num = -1
     cfg.federate.sample_client_rate = -1.0
     cfg.federate.unseen_clients_rate = 0.0
+    cfg.federate.unseen_clients_id = []  # Directly specify unseen client IDs (e.g., [11, 12, ..., 20])
     cfg.federate.total_round_num = 50
     cfg.federate.mode = 'standalone'
     cfg.federate.share_local_model = False

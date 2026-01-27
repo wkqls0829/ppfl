@@ -83,11 +83,9 @@ criterion:
   type: CrossEntropyLoss
 eval:
   freq: 5  # Same as recent experiments
-  metrics: ['loss', 'acc', 'avg_helpfulness', 'avg_harmlessness',
-            'helpfulness_winrate', 'harmlessness_winrate', 'avg_winlose_rate']
+  metrics: ['loss', 'acc']  # Reward model evaluation disabled
   best_res_update_round_wise_key: train_avg_loss
   count_flops: False
-  max_samples_for_reward: 100
 wandb:
   use: True
   name_user: ''

@@ -203,17 +203,20 @@ if "$USE_SELECTOR" == "true":
 config['llm']['reward_coeff'] = 0.1
 config['llm']['max_prompts_for_generation'] = 50
 config['llm']['generation_batch_size'] = 3
-config['llm']['max_samples_for_reward'] = 30
-config['llm']['use_gpt_api_for_winrate'] = True
-config['llm']['use_baseline_model_for_winrate'] = True
-config['llm']['openai_model'] = 'gpt-4o-mini'
 
-# OpenAI API key from environment variable (loaded from .env file)
-# The API key should be set in .env file (gitignored)
-# If not set, the code will try to read from eval.openai_api_key in config
-import os
-if 'OPENAI_API_KEY' in os.environ:
-    config['eval']['openai_api_key'] = os.environ['OPENAI_API_KEY']
+# Disable reward model evaluation
+if 'eval' not in config:
+    config['eval'] = {}
+config['eval']['metrics'] = ['loss', 'acc']  # Reward model evaluation disabled
+# Remove reward evaluation related settings
+if 'max_samples_for_reward' in config['eval']:
+    del config['eval']['max_samples_for_reward']
+if 'use_baseline_model_for_winrate' in config['eval']:
+    del config['eval']['use_baseline_model_for_winrate']
+if 'use_gpt_api_for_winrate' in config['eval']:
+    del config['eval']['use_gpt_api_for_winrate']
+if 'openai_model' in config['eval']:
+    del config['eval']['openai_model']
 
 # Save config
 with open(config_file, 'w') as f:

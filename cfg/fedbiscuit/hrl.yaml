@@ -44,12 +44,8 @@ train:
   is_enable_half: True
 eval:
   freq: 1  # Evaluate every round
-  metrics: ['loss', 'acc', 'avg_harmlessness', 'avg_helpfulness']
+  metrics: ['loss', 'acc']  # Reward model evaluation disabled
   count_flops: False
-  # Limit the number of samples for reward model evaluation to speed up
-  # Set to -1 to evaluate on all samples (slower but more accurate)
-  # Reduced from 100 to 20 to speed up evaluation (24 iterations -> ~5 iterations)
-  max_samples_for_reward: 20
 wandb:
   use: True  # Enable wandb tracking
   name_user: ''  # Your wandb username (leave empty for default)

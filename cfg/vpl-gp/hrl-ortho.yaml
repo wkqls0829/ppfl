@@ -69,14 +69,9 @@ trainer:
   type: llmdporewardtrainer
 eval:
   freq: 5
-  metrics: ['loss', 'acc', 'avg_helpfulness', 'avg_harmlessness',
-            'helpfulness_winrate', 'harmlessness_winrate', 'avg_winlose_rate']
+  metrics: ['loss', 'acc']  # Reward model evaluation disabled
   best_res_update_round_wise_key: train_avg_loss
   count_flops: False
-  max_samples_for_reward: 100
-  use_baseline_model_for_winrate: True  # Use base Gemma-2b model for win rate comparison
-  use_gpt_api_for_winrate: True  # Use GPT API for winrate evaluation (more accurate than internal model)
-  openai_model: 'gpt-4o-mini'  # GPT model to use for evaluation (default: gpt-4o-mini for cost efficiency)
   # openai_api_key: set via environment variable OPENAI_API_KEY
 expname: vplgp_hrl_ortho_t60000  # Override in script
 wandb:
