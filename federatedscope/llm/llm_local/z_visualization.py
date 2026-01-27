@@ -336,3 +336,112 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
             logger.warning(f"Failed to log visualization to wandb: {e}")
     
     plt.close(fig)
+
+
+def compare_algorithms_tsne(json_path1, json_path2, algorithm_name1, algorithm_name2, 
+                            output_path=None):
+    """
+    Compare two algorithms by loading their t-SNE results and plotting side by side.
+    
+    Args:
+        json_path1: Path to first algorithm's JSON file (round 30)
+        json_path2: Path to second algorithm's JSON file (round 30)
+        algorithm_name1: Name of first algorithm (e.g., "FedVPL")
+        algorithm_name2: Name of second algorithm (e.g., "FedVPL-GP")
+        output_path: Path to save the comparison plot
+    """
+    # Load JSON files
+    with open(json_path1, 'r') as f:
+        data1 = json.load(f)
+    with open(json_path2, 'r') as f:
+        data2 = json.load(f)
+    
+    # Extract data
+    z_values_2d_1 = np.array(data1['z_values_2d'])
+    client_labels_1 = np.array(data1['client_labels'])
+    orthogonal_labels_1 = np.array(data1['orthogonal_labels']) if data1.get('orthogonal_labels') is not None else None
+    
+    z_values_2d_2 = np.array(data2['z_values_2d'])
+    client_labels_2 = np.array(data2['client_labels'])
+    orthogonal_labels_2 = np.array(data2['orthogonal_labels']) if data2.get('orthogonal_labels') is not None else None
+    
+    # Create figure with two subplots side by side
+    plt.style.use('seaborn-v0_8-darkgrid' if 'seaborn-v0_8-darkgrid' in plt.style.available else 'default')
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 9))
+    fig.patch.set_facecolor('white')
+    
+    # Helper function to plot on an axis
+    def plot_tsne_on_axis(ax, z_2d, client_labels, orthogonal_labels, algorithm_name):
+        unique_clients = sorted(set(client_labels))
+        
+        # Color mapping based on orthogonal labels
+        client_color_map = {}
+        if orthogonal_labels is not None and len(orthogonal_labels) == len(client_labels):
+            for client_id in unique_clients:
+                client_mask = np.array(client_labels) == client_id
+                if client_mask.sum() > 0:
+                    orth_label = orthogonal_labels[np.where(client_mask)[0][0]]
+                    if orth_label == 0:  # Harmlessness -> red
+                        client_color_map[client_id] = '#DC143C'  # Crimson red
+                    elif orth_label == 1:  # Helpfulness -> blue
+                        client_color_map[client_id] = '#00BFFF'  # Deep sky blue
+                    else:
+                        client_color_map[client_id] = '#808080'  # Gray
+        else:
+            # Infer from client_id
+            max_client_id = max(unique_clients) if unique_clients else 0
+            split_point = max_client_id // 2 if max_client_id > 0 else 0
+            for client_id in unique_clients:
+                if client_id <= split_point:
+                    client_color_map[client_id] = '#DC143C'  # Crimson red
+                else:
+                    client_color_map[client_id] = '#00BFFF'  # Deep sky blue
+        
+        # Plot each client
+        for client_id in unique_clients:
+            mask = np.array(client_labels) == client_id
+            if mask.sum() > 0:
+                # Get label for legend (only show first few to avoid clutter)
+                if orthogonal_labels is not None and len(orthogonal_labels) == len(client_labels):
+                    orth_label = orthogonal_labels[np.where(mask)[0][0]]
+                    if orth_label == 0:
+                        label = f'Client {client_id} (Harmlessness)' if client_id <= 2 else None
+                    elif orth_label == 1:
+                        label = f'Client {client_id} (Helpfulness)' if client_id <= 2 else None
+                    else:
+                        label = f'Client {client_id}' if client_id <= 2 else None
+                else:
+                    max_client_id = max(unique_clients) if unique_clients else 0
+                    split_point = max_client_id // 2 if max_client_id > 0 else 0
+                    if client_id <= split_point:
+                        label = f'Client {client_id} (Harmlessness)' if client_id <= 2 else None
+                    else:
+                        label = f'Client {client_id} (Helpfulness)' if client_id <= 2 else None
+                
+                ax.scatter(z_2d[mask, 0], z_2d[mask, 1],
+                          c=[client_color_map[client_id]],
+                          label=label,
+                          alpha=0.85, s=80, edgecolors='white', linewidths=1.0,
+                          marker='o', zorder=3)
+        
+        ax.set_xlabel('t-SNE Dimension 1', fontsize=14, fontweight='bold')
+        ax.set_ylabel('t-SNE Dimension 2', fontsize=14, fontweight='bold')
+        ax.set_title(algorithm_name, fontsize=18, fontweight='bold', pad=15)
+        ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=10,
+                  framealpha=0.9, fancybox=True, shadow=True)
+        ax.grid(True, alpha=0.4, linestyle='--', linewidth=0.5)
+        ax.set_facecolor('#FAFAFA')
+    
+    # Plot both algorithms
+    plot_tsne_on_axis(ax1, z_values_2d_1, client_labels_1, orthogonal_labels_1, algorithm_name1)
+    plot_tsne_on_axis(ax2, z_values_2d_2, client_labels_2, orthogonal_labels_2, algorithm_name2)
+    
+    plt.tight_layout()
+    
+    # Save plot
+    if output_path:
+        os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
+        plt.savefig(output_path, dpi=200, bbox_inches='tight', facecolor='white', edgecolor='none')
+        logger.info(f"Saved comparison plot to {output_path}")
+    
+    plt.close(fig)

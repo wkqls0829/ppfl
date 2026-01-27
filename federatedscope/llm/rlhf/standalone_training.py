@@ -518,7 +518,11 @@ class RLHF_finetuning:
             if use_variational_selection and self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0:
                 # For each pairwise data, perform binary selection with assigned client z values
                 # Each pair has harmless_client_id and helpful_client_id assigned during generation
-                choices = [self.selector_tokenizer(f": {c}")["input_ids"][-1] for c in ["A", "B"]]
+                # Use selector_tokenizer if available, otherwise use generator_tokenizer
+                tokenizer_for_choices = self.selector_tokenizer if self.selector_tokenizer is not None else self.generator_tokenizer
+                if tokenizer_for_choices is None:
+                    raise ValueError("Both selector_tokenizer and generator_tokenizer are None. Cannot perform selection.")
+                choices = [tokenizer_for_choices(f": {c}")["input_ids"][-1] for c in ["A", "B"]]
                 
                 # Group pairwise data by client assignment
                 # Each pair will be conditioned with both its harmless_client_id and helpful_client_id
@@ -686,7 +690,11 @@ class RLHF_finetuning:
                 logger.info(f"  - Total: {len(list_preference_data)} samples (2x original pairwise data)")
             elif use_variational_selection:
                 # Fallback: use all data with client-specific z
-                choices = [self.selector_tokenizer(f": {c}")["input_ids"][-1] for c in ["A", "B"]]
+                # Use selector_tokenizer if available, otherwise use generator_tokenizer
+                tokenizer_for_choices = self.selector_tokenizer if self.selector_tokenizer is not None else self.generator_tokenizer
+                if tokenizer_for_choices is None:
+                    raise ValueError("Both selector_tokenizer and generator_tokenizer are None. Cannot perform selection.")
+                choices = [tokenizer_for_choices(f": {c}")["input_ids"][-1] for c in ["A", "B"]]
                 use_provided_z = any('z' in sample for sample in list_pairwise_data)
                 
                 list_preference_data = variational_better_response(
@@ -707,12 +715,27 @@ class RLHF_finetuning:
                 )
             else:
                 # Use standard selection
+                # For FedDPO or other methods without selector, use generator_tokenizer and model
+                if self.selector_tokenizer is None or self.selector_model is None:
+                    if self.generator_tokenizer is None:
+                        raise ValueError("Both selector_tokenizer and generator_tokenizer are None. Cannot perform selection.")
+                    if self.model is None:
+                        raise ValueError("Both selector_model and model are None. Cannot perform selection.")
+                    logger.info("Selector tokenizer/model is None. Using generator_tokenizer and model for selection.")
+                    selection_tokenizer = self.generator_tokenizer
+                    selection_model = self.model
+                    selection_prompt = "Below is a conversation between a human and an AI assistant, followed by two responses. Pick the response that is more helpful and harmless. State your choice with a single capital letter, i.e., \"A\" if RESPONSE A is better, \"B\" if RESPONSE B is better.\n\n### CONVERSATION:\n{prompt}\n\n### RESPONSE A: {output_A}\n### RESPONSE B: {output_B}\n### YOUR CHOICE:"
+                else:
+                    selection_tokenizer = self.selector_tokenizer
+                    selection_model = self.selector_model
+                    selection_prompt = self.selector_prompt
+                
                 list_preference_data = self._choose_better_response(
                     list_pairwise_data,
-                    self.selector_model,
-                    self.selector_tokenizer,
-                self.selector_prompt,
-            )
+                    selection_model,
+                    selection_tokenizer,
+                    selection_prompt,
+                )
             logger.info(list_preference_data[0])
             
             # Find conflicting selections: same response pair, different choices for harmlessness vs helpfulness
@@ -2414,6 +2437,13 @@ class RLHF_finetuning:
     @torch.no_grad()
     def _choose_better_response(self, list_data_dict, model, tokenizer,
                                 prompt):
+        # Check if tokenizer is None and use generator_tokenizer as fallback
+        if tokenizer is None:
+            if self.generator_tokenizer is None:
+                raise ValueError("tokenizer is None and generator_tokenizer is also None. Cannot perform selection.")
+            logger.warning("tokenizer is None in _choose_better_response. Using generator_tokenizer as fallback.")
+            tokenizer = self.generator_tokenizer
+        
         choices = [tokenizer(f": {c}")["input_ids"][-1] for c in ["A", "B"]]
         logger.info(f'Choice indices: {choices}')
 
