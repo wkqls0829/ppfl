@@ -1198,9 +1198,12 @@ class LLMMultiLoRAServer(Server):
             path = add_prefix_to_path(f'{self.state}_',
                                       self._cfg.federate.save_to)
             if self.ds_rank == 0:
-                # Compute and save client average z before saving checkpoint
-                self._compute_client_average_z_for_checkpoint()
-                self.aggregator.save_model(path, self.state, client_average_z_dict=self.client_average_z_dict)
+                # Compute and save client average z before saving checkpoint (only for VPL)
+                client_average_z_dict = None
+                if hasattr(self._cfg.llm, 'vpl_latent_dim'):  # VPL is enabled
+                    self._compute_client_average_z_for_checkpoint()
+                    client_average_z_dict = self.client_average_z_dict
+                self.aggregator.save_model(path, self.state, client_average_z_dict=client_average_z_dict)
 
         if should_stop or self.state == self.total_round_num:
             logger.info('Server: Final evaluation is finished! Starting '
@@ -1210,13 +1213,16 @@ class LLMMultiLoRAServer(Server):
             if not self._cfg.federate.make_global_eval:
                 self.save_client_eval_results()
             
-            # Save final checkpoint with client average z
+            # Save final checkpoint with client average z (only for VPL)
             if self._cfg.federate.save_to != '':
                 path = add_prefix_to_path('final_', self._cfg.federate.save_to)
                 if self.ds_rank == 0:
-                    # Compute and save client average z before saving final checkpoint
-                    self._compute_client_average_z_for_checkpoint()
-                    self.aggregator.save_model(path, self.state, client_average_z_dict=self.client_average_z_dict)
+                    # Compute and save client average z before saving final checkpoint (only for VPL)
+                    client_average_z_dict = None
+                    if hasattr(self._cfg.llm, 'vpl_latent_dim'):  # VPL is enabled
+                        self._compute_client_average_z_for_checkpoint()
+                        client_average_z_dict = self.client_average_z_dict
+                    self.aggregator.save_model(path, self.state, client_average_z_dict=client_average_z_dict)
             
             self.terminate(msg_type='finish')
 

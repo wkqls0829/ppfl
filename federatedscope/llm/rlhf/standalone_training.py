@@ -1254,8 +1254,9 @@ class RLHF_finetuning:
         list_train_dict = self.load_selector_preference_data(
             saveto, early_exiting)
 
-        # move selector model to cpu
-        self.selector_model.cpu()
+        # move selector model to cpu (if it exists)
+        if self.selector_model is not None:
+            self.selector_model.cpu()
         gc.collect()
         torch.cuda.empty_cache()
 
