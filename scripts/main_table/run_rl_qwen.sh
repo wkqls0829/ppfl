@@ -236,19 +236,13 @@ config['llm']['reward_coeff'] = 0.1
 config['llm']['max_prompts_for_generation'] = 50
 config['llm']['generation_batch_size'] = 3
 
-# Disable reward model evaluation
+# New RL eval settings: eval every 10 rounds, GPT API winrate
 if 'eval' not in config:
     config['eval'] = {}
-config['eval']['metrics'] = ['loss', 'acc']  # Reward model evaluation disabled
-# Remove reward evaluation related settings
-if 'max_samples_for_reward' in config['eval']:
-    del config['eval']['max_samples_for_reward']
-if 'use_baseline_model_for_winrate' in config['eval']:
-    del config['eval']['use_baseline_model_for_winrate']
-if 'use_gpt_api_for_winrate' in config['eval']:
-    del config['eval']['use_gpt_api_for_winrate']
-if 'openai_model' in config['eval']:
-    del config['eval']['openai_model']
+config['eval']['freq'] = 10
+config['eval']['use_gpt_api_for_winrate'] = True
+config['eval']['use_baseline_model_for_winrate'] = True
+config['eval']['metrics'] = ['loss', 'acc', 'helpfulness_winrate', 'harmlessness_winrate']
 
 # Save config
 with open(config_file, 'w') as f:

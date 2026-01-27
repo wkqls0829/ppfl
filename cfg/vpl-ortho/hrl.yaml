@@ -54,7 +54,9 @@ train:
     lr: 0.0001
   is_enable_half: True
 eval:
-  freq: 1
+  freq: 10
+  use_gpt_api_for_winrate: true
+  use_baseline_model_for_winrate: true
   metrics: ['loss', 'acc', 'helpfulness_winrate', 'harmlessness_winrate']
   best_res_update_round_wise_key: test_loss
   count_flops: False

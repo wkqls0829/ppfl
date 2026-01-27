@@ -903,9 +903,11 @@ def _get_winrate_scores(ctx, prompt_template, metric_name="winrate"):
     Returns:
         Dictionary with winrate scores
     """
-    # Check if GPT API should be used
-    use_gpt_api = getattr(ctx.cfg.eval, 'use_gpt_api_for_winrate', False)
-    
+    # Check if GPT API should be used (default True for HRL/hh-rlhf for faster eval)
+    use_gpt_api = getattr(ctx.cfg.eval, 'use_gpt_api_for_winrate', None)
+    if use_gpt_api is None:
+        dataset_type = getattr(getattr(ctx.cfg, 'data', None), 'type', '') or ''
+        use_gpt_api = ('hh-rlhf' in str(dataset_type).lower() or 'hrl' in str(dataset_type).lower())
     if use_gpt_api:
         return _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name)
     else:

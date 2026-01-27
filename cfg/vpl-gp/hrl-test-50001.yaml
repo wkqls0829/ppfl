@@ -59,8 +59,6 @@ llm:
   max_prompts_for_generation: 20  # Reduced for fast testing (baseline uses 50)
   generation_batch_size: 2  # Reduced for test (baseline uses 3)
   max_samples_for_reward: 30  # Reduced for fast testing
-  use_gpt_api_for_winrate: true  # Use GPT API for winrate evaluation (faster)
-  use_baseline_model_for_winrate: true  # Compare with baseline model
   openai_model: gpt-4o-mini  # Use cheaper model for test
 dataloader:
   batch_size: 1
@@ -81,7 +79,9 @@ criterion:
 trainer:
   type: llmdporewardtrainer  # DPO trainer for RLHF
 eval:
-  freq: 1  # Evaluate every round for test
+  freq: 10
+  use_gpt_api_for_winrate: true
+  use_baseline_model_for_winrate: true
   metrics:
   - loss
   - acc
