@@ -1,0 +1,92 @@
+We propose \textbf{Federated Variational Preference Alignment with Gumbel-Softmax Prior (FedVPA-GP)}, a framework designed to learn personalized reward models in a privacy-preserving manner. Unlike previous approaches that aggregate gradients into a single global model \citep{wu2024towards}, FedVPA treats user personalization as a continuous latent variable inference problem. By modeling user preferences as continuous latent vectors and leveraging a federated mixture prior with Gumbel-Softmax relaxation, we achieve stable and efficient federated training while enabling knowledge sharing across clients.
+
+\subsection{Two-Stage Training Strategy}
+Following the design principle of \citet{wu2024towards}, we adopt a two-stage training strategy to address preference heterogeneity while reducing computational complexity.
+
+\textbf{Stage 1: Federated Binary Selector Training.} We train a variational binary preference selector in a federated manner, where each client learns personalized preference representations through variational inference. This federated stage captures preference heterogeneity across clients without sharing raw preference data. The selector learns to predict binary preferences (e.g., helpful vs. harmless) conditioned on latent preference vectors $z_i$ inferred from each client's local data. The federated training process enables knowledge sharing through the mixture prior while maintaining privacy.
+
+\textbf{Stage 2: Centralized RL Training.} After the selector training converges, we perform reinforcement learning from human feedback (RLHF) in a centralized manner on the server using the learned selector as a reward model. This design choice significantly reduces computational complexity compared to federated RL training, as RLHF requires memory-intensive generation and multiple forward passes. The centralized RL stage leverages the personalized preference knowledge encoded in the federated selector, enabling the final policy model to generate responses that respect diverse user preferences inferred from the selector's latent space. Specifically, the selector's preference predictions serve as rewards in the DPO loss \citep{rafailov2023direct}, allowing the policy to learn from the personalized preference signals captured during federated training.
+
+\subsection{Latent Conditional Preference Model}
+We assume that user preferences can be encoded as continuous latent vectors in a low-dimensional space. For each client $i$, we introduce a continuous latent variable $z_i \in \mathbb{R}^d$, where $d$ is the latent dimension (typically $d=32$). This latent vector captures the client's personalized preference characteristics.
+
+The probability that a user $i$ prefers response $s_A$ over $s_B$ is conditioned on this latent code $z_i$ via a Latent Conditional Reward Model. For binary choice tasks, we condition the model's logits on $z_i$ through a learned projection network:
+\begin{equation}
+    \text{logits}(s_A, s_B \mid z_i) = \text{logits}_{\text{base}}(s_A, s_B) + f_\theta(z_i),
+\end{equation}
+where $f_\theta: \mathbb{R}^d \to \mathbb{R}^{|\mathcal{C}|}$ is a learned linear projection (latent projection) that maps the latent vector to logit adjustments, and $\mathcal{C}$ is the set of choice tokens (typically $\{A, B\}$). The choice probability is then computed via softmax over the conditioned logits.
+
+\subsection{Variational Inference with Federated Mixture Prior}
+\label{sec:variational}
+
+\textbf{Inference Network:} Each client maintains a local variational encoder $q_\phi(z \mid \mathcal{D}_i)$ parameterized by $\phi$. Given a preference comparison $(s_A, s_B, y)$, we extract hidden representations $h_A, h_B$ from the base LLM, compute the embedding difference $\Delta h = h_{\text{chosen}} - h_{\text{rejected}}$, process it through a feature extractor $f = \text{FeatureExtractor}(\Delta h)$ (or use choice logits), and encode to posterior parameters $(\mu_i, \sigma_i^2) = \text{Encoder}(f)$. The posterior distribution is:
+\begin{equation}
+    q_\phi(z \mid \mathcal{D}_i) = \mathcal{N}(z; \mu_i, \sigma_i^2 I),
+\end{equation}
+where $\mu_i \in \mathbb{R}^d$ and $\log \sigma_i^2 \in \mathbb{R}^d$ are learned via a neural network. The latent vector $z_i$ is sampled using the reparameterization trick:
+\begin{equation}
+    z_i = \mu_i + \sigma_i \odot \epsilon, \quad \epsilon \sim \mathcal{N}(0, I),
+\end{equation}
+where $\sigma_i = \exp(0.5 \cdot \log\sigma_i^2)$ and $\odot$ denotes element-wise multiplication. This ensures that gradients can flow through the sampling operation.
+
+\textbf{Preference Feature Difference:} To emphasize preference signals and suppress general response-specific information, we compute the embedding difference $\Delta h = h_{\text{chosen}} - h_{\text{rejected}}$ (by splitting prompts at response markers). This difference embedding encourages $z_i$ to capture preference-specific directions rather than general response characteristics. The feature extractor processes $\Delta h$ through a multi-layer perceptron before encoding.
+
+\textbf{Baseline VPL:} In the ablation baseline, we replace the federated mixture prior with a standard Gaussian prior $p(z) = \mathcal{N}(0, I)$, leading to the KL divergence term:
+\begin{equation}
+    \mathbb{D}_{KL}(q_\phi(z \mid \mathcal{D}_i) \,\|\, \mathcal{N}(0, I)) = \frac{1}{2} \sum_{j=1}^d \left( \mu_{i,j}^2 + \sigma_{i,j}^2 - \log \sigma_{i,j}^2 - 1 \right).
+\end{equation}
+
+\textbf{Federated Mixture Prior with Gumbel-Softmax:} Our default setting uses other clients' learned preference distributions as a mixture prior. Specifically, the server collects the posterior parameters $(\mu_j, \sigma_j^2)$ from all participating clients in the previous round and constructs a mixture prior:
+\begin{equation}
+    p_{\text{mixture}}(z) = \sum_{j=1}^{|\mathcal{S}|} w_j \cdot \mathcal{N}(z; \mu_j, \sigma_j^2 I),
+\end{equation}
+where $\mathcal{S}$ is the set of participating clients from the previous round and $w_j$ are normalized weights (typically sample-size weighted: $w_j = n_j / \sum_{k \in \mathcal{S}} n_k$). This mixture prior enables clients to leverage global knowledge about preference distributions without sharing raw data, stabilizing variational inference in the presence of local data sparsity.
+
+Computing the KL divergence with this mixture prior requires evaluating:
+\begin{equation}
+    \mathbb{D}_{KL}(q_\phi(z \mid \mathcal{D}_i) \,\|\, p_{\text{mixture}}(z)) = \mathbb{E}_{z \sim q_\phi} \left[ \log q_\phi(z \mid \mathcal{D}_i) - \log p_{\text{mixture}}(z) \right],
+\end{equation}
+where $\log p_{\text{mixture}}(z) = \log \sum_{j} w_j \cdot \mathcal{N}(z; \mu_j, \sigma_j^2 I)$ is computed using the log-sum-exp trick for numerical stability:
+\begin{equation}
+    \log p_{\text{mixture}}(z) = \max_j a_j + \log\left(\sum_{j=1}^{|\mathcal{S}|} \exp(a_j - \max_k a_k)\right),
+\end{equation}
+where $a_j = \log w_j + \log \mathcal{N}(z; \mu_j, \sigma_j^2 I)$.
+
+\textbf{Gumbel-Softmax for Differentiable Prior Sampling:} For sampling from the mixture prior (used in visualization and generation), we employ Gumbel-Softmax relaxation \citep{jang2016categorical} with temperature $\tau = 1.0$ to enable differentiable sampling. Specifically, we compute component probabilities as $\alpha_j = \exp((\log w_j + g_j) / \tau) / \sum_k \exp((\log w_k + g_k) / \tau)$ where $g_j \sim \text{Gumbel}(0, 1)$, then sample $z_{\text{prior}} = \sum_j \alpha_j \cdot z_j$ with $z_j \sim \mathcal{N}(\mu_j, \sigma_j^2 I)$.
+
+\subsection{Federated Variational Objective (ELBO)}
+The training objective for the \textbf{federated binary selector training stage} is to maximize the Evidence Lower Bound (ELBO) of the log-likelihood of the preference data. This objective is used exclusively during the federated selector training phase (Stage 1), where clients collaboratively learn personalized preference representations. For a client $i$, the local loss function is defined as:
+\begin{align}
+    \mathcal{L}_i(\theta, \phi) &= - \text{ELBO}(\mathcal{D}_i) \nonumber \\
+    &= \underbrace{- \mathbb{E}_{z \sim q_\phi} \left[ \sum_{(s_A, s_B, y) \in \mathcal{D}_i} \log p_\theta(y \mid s_A, s_B, z) \right]}_{\text{Reconstruction Loss (Preference Alignment)}} \nonumber \\
+    &\quad + \beta \cdot \underbrace{\mathbb{D}_{KL}(q_\phi(z \mid \mathcal{D}_i) \,\|\, p_{\text{mixture}}(z))}_{\text{Regularization (Prior Matching)}} \nonumber \\
+    &\quad + \lambda \cdot \underbrace{\mathcal{L}_{\text{orthogonal}}(z)}_{\text{Orthogonal Loss (Preference Separation)}},
+\end{align}
+where $\beta$ and $\lambda$ are hyperparameters controlling the strength of regularization and preference separation, respectively.
+
+The \textbf{Reconstruction Loss} encourages correct choice prediction given $z$ (cross-entropy between conditioned logits and labels). The \textbf{Regularization term} is the KL divergence between $q_\phi$ and $p_{\text{mixture}}(z)$ (VPL ablation uses $p(z) = \mathcal{N}(0, I)$), preventing overfitting and enabling knowledge transfer across clients. The \textbf{Orthogonal Loss} (optional, $\lambda \geq 0$) aligns $z$ with preference-specific prototypes to enforce separation between different preference types. To reduce memory consumption, we freeze the base LLM and only update VPL components (feature extractor, variational encoder, latent projection) during federated selector training.
+
+After the federated selector training converges, the learned selector is used as a reward model in the centralized RL training stage (Stage 2). The RL stage employs standard Direct Preference Optimization (DPO) loss \citep{rafailov2023direct} to fine-tune the policy model, where the selector's preference predictions serve as rewards. This two-stage design separates the computationally intensive RL training from the federated learning process, significantly reducing communication overhead and memory requirements.
+
+\subsection{Orthogonal Loss for Preference Separation}
+To better separate different preference patterns and suppress general features, we introduce an orthogonal loss inspired by CLOP \citep{li2024preventingcollapsecontrastivelearning}. For binary choice tasks, we maintain two orthonormal prototype vectors $\mathbf{p}_0, \mathbf{p}_1 \in \mathbb{R}^d$ in the latent space. These prototypes are learnable parameters initialized randomly and orthonormalized using QR decomposition, then scaled to be at distance $s = 5.0$ from the origin:
+\begin{equation}
+    \mathbf{P} = [\mathbf{p}_0, \mathbf{p}_1]^T, \quad \mathbf{Q}, \mathbf{R} = \text{QR}(\mathbf{P}^T), \quad \mathbf{P} \leftarrow \mathbf{Q}^T \cdot s,
+\end{equation}
+where $s = 5.0$ is a scale parameter that ensures prototypes are sufficiently separated from the origin (where z embeddings typically reside). To maintain orthonormality during training, we re-orthonormalize prototypes using QR decomposition at each forward pass.
+
+\textbf{Server-Side Label Assignment:} The server performs balanced k-means clustering (with $k=2$ for binary preference tasks) on the client z means $\{\bar{\mu}_i\}_{i \in \mathcal{S}^t}$ collected from the previous round. Each client is assigned an orthogonal label $y_i^* \in \{0, 1\}$ based on its cluster membership, which is then broadcast to clients. This server-side assignment ensures balanced grouping and prevents mode collapse.
+
+\textbf{Client-Side Loss Computation:} For each latent representation $z$, we use the server-assigned label $y_i^*$ (or automatically assign to the closest prototype if labels are unavailable) and encourage $z$ to align with its assigned prototype $\mathbf{p}_{y_i^*}$ using the pull loss:
+\begin{equation}
+    \mathcal{L}_{\text{pull}}(z) = \|z - \mathbf{p}_{y_i^*}\|_2^2.
+\end{equation}
+To maintain orthogonality between prototypes, we add an orthonormality constraint:
+\begin{equation}
+    \mathcal{L}_{\text{orthonorm}} = \|\mathbf{P}^T \mathbf{P} - \mathbf{I}\|_F^2,
+\end{equation}
+where $\mathbf{P} = [\mathbf{p}_0, \mathbf{p}_1]^T$ is the prototype matrix and $\|\cdot\|_F$ denotes the Frobenius norm. The combined orthogonal loss is:
+\begin{equation}
+    \mathcal{L}_{\text{orthogonal}}(z) = \mathcal{L}_{\text{pull}}(z) + \gamma \cdot \mathcal{L}_{\text{orthonorm}},
+\end{equation}
+where $\gamma = 0.1$ is a weight parameter. This loss encourages latent representations $z$ to cluster around their assigned prototypes while ensuring that different preference types occupy orthogonal subspaces, thereby suppressing general features that are not preference-specific and preventing neural collapse.

@@ -1,0 +1,29 @@
+\subsection{Experimental Settings}
+
+\subsubsection{Datasets}
+We evaluate our method on the \textbf{HH-RLHF} (Helpful and Harmless from Human Feedback) dataset \citep{bai2022training}, a widely used benchmark for preference alignment that contains pairwise preference comparisons along two axes: helpfulness and harmlessness. We simulate a federated setting by partitioning the dataset across $K$ clients, where each client holds a subset of preference pairs. The dataset is split into train (90\%), validation (9\%), and test (1\%) sets. We vary the number of clients $K \in \{10, 50, 100\}$ to assess scalability and robustness under different federation sizes. For each client count, we use fixed sampling rates per round (e.g., 5 clients per round for $K=10$, 10 clients per round for $K \in \{50, 100\}$).
+
+\subsubsection{Models}
+We conduct experiments using two base language models to demonstrate the scalability of our approach:
+\begin{itemize}
+    \item \textbf{Qwen-2 0.5B}: A compact 0.5 billion parameter model from the Qwen-2 \citep{yang2024qwen2} family, suitable for resource-constrained federated environments.
+    \item \textbf{Gemma-2B}: A 2 billion parameter model from Google's Gemma family \citep{gemma2024gemma}, providing a larger model baseline for comparison.
+\end{itemize}
+Both models are fine-tuned using LoRA (Low-Rank Adaptation) \citep{hu2021lora} to enable parameter-efficient fine-tuning in federated settings. We use LoRA rank $r=8$, LoRA alpha $\alpha=16$, and dropout rate $p=0.05$. During federated selector training, we freeze the base LLM and only update the VPL components (feature extractor, variational encoder, latent projection) along with the LoRA adapters.
+
+\subsubsection{Training Configuration}
+\textbf{Federated selector training (Stage 1):} We train for 50 rounds with 30 local steps per round. The learning rate is set to $10^{-4}$ for Gemma-2B and $10^{-5}$ for Qwen-2 0.5B. Batch size is 8--16 for selector training depending on the model. For FedVPA-GP, we use KL weight $\beta=0.1$, orthogonal loss weight $\lambda=1.0$, Gumbel-Softmax temperature $\tau=1.0$, and prototype scale $s=5.0$.
+
+\textbf{Centralized RL training (Stage 2):} After the federated selector converges, we perform DPO-based RL training centrally for 50 rounds. We use batch size 1 with gradient accumulation (e.g., 32 steps for Qwen-2, 4 for Gemma-2B) to maintain an effective batch size. Reward coefficient is set to 0.1, and we use the learned selector to produce preference labels for the DPO loss.
+
+\subsubsection{Evaluation}
+We evaluate the final policy using \textbf{GPT-4 Win-rate} \citep{bai2022training}: we generate responses from the fine-tuned model and a baseline (frozen) model for the same prompts, and use GPT-4 (or gpt-4o-mini for cost efficiency) as a judge to compare which response is more helpful or more harmless. We report \textbf{Helpful Win-rate} and \textbf{Harmless Win-rate} (\%) as the primary metrics, with up to 30 samples per evaluation for efficiency.
+
+\subsubsection{Baselines}
+We compare our proposed \textbf{FedVPA-GP} with the following baselines:
+\begin{itemize}
+    \item \textbf{FedDPO}: Federated Direct Preference Optimization \citep{ye2024openfedllm}, which aggregates gradients for a single global policy without personalized reward modeling.
+    \item \textbf{FedBiscuit}: Federated learning with multiple LoRA adapters ($U=3$) for coarse-grained personalization \citep{wu2024towards}.
+    \item \textbf{FedVPL}: Our naive adaptation of VPL \citep{poddar2024personalizing} to FL—same latent selector with FedAvg, but using fixed Gaussian prior $\mathcal{N}(0, I)$ and no orthogonal loss.
+    \item \textbf{FedVPA-GP} (ours): Our full method with federated mixture prior, Gumbel-Softmax relaxation, difference embeddings, and orthogonal loss for preference separation.
+\end{itemize}

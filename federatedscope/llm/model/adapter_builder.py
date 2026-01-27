@@ -175,6 +175,7 @@ class AdapterModel(nn.Module):
             self.adapter_names = ['default']
         else:
             self.model = model
+            self.adapter_names = []  # Initialize empty list when not using adapter
 
         # print(type(self.model))
         # merged_model = self.model.merge_and_unload()
@@ -233,10 +234,11 @@ class AdapterModel(nn.Module):
             if param.requires_grad:
                 grad_params.append(name)
             # Special case for multiple adapters
-            for adap_name in self.adapter_names:
-                if (adap_name in name) and (name not in grad_params):
-                    grad_params.append(name)
-                    break
+            if hasattr(self, 'adapter_names') and len(self.adapter_names) > 0:
+                for adap_name in self.adapter_names:
+                    if (adap_name in name) and (name not in grad_params):
+                        grad_params.append(name)
+                        break
         model_state_dict = self.model.state_dict()
         new_state_dict = OrderedDict()
         for k, v in model_state_dict.items():

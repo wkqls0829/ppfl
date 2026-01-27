@@ -1,0 +1,65 @@
+% Algorithm 1: Server-side
+\begin{algorithm}[!t]
+\caption{Server-Side: Federated Aggregation and Prior Management}
+\label{alg:server}
+\begin{small}
+\begin{algorithmic}[1]
+\REQUIRE Clients $K$, rounds $T$, KL weight $\beta$, orthogonal weight $\lambda$
+\ENSURE Global parameters $\theta^T$, $\phi^T$, client average z distributions $\{\bar{\mu}_i^T, \bar{\sigma}_i^2\}_{i=1}^K$
+\STATE Initialize $\theta^0$, $\phi^0$ (base model frozen, only VPL components trainable)
+\FOR{round $t = 1, 2, \ldots, T$}
+    \STATE Sample clients $\mathcal{S}^t \subseteq \{1, \ldots, K\}$ (typically $|\mathcal{S}^t| = 10$)
+    \STATE Broadcast $\theta^t$, $\phi^t$ to $\mathcal{S}^t$
+    \IF{$t > 1$}
+        \STATE Broadcast mixture prior $\{(\mu_j, \sigma_j^2), w_j\}_{j \in \mathcal{S}^{t-1}}$ to $\mathcal{S}^t$
+    \ENDIF
+    \STATE \textbf{Wait for client updates}
+    \STATE Receive $(\theta_i^t, \phi_i^t, \bar{\mu}_i, \bar{\sigma}_i^2, n_i)$ from each client $i \in \mathcal{S}^t$
+    \STATE Aggregate: $\theta^{t+1} \leftarrow \frac{1}{|\mathcal{S}^t|} \sum_{i \in \mathcal{S}^t} \theta_i^t$
+    \STATE Aggregate: $\phi^{t+1} \leftarrow \frac{1}{|\mathcal{S}^t|} \sum_{i \in \mathcal{S}^t} \phi_i^t$
+    \STATE Collect z-distributions: $\{(\bar{\mu}_i, \bar{\sigma}_i^2, n_i)\}_{i \in \mathcal{S}^t}$
+    \STATE Compute weights: $w_i \leftarrow n_i / \sum_{j \in \mathcal{S}^t} n_j$ for all $i \in \mathcal{S}^t$
+    \STATE Store mixture prior: $\{(\bar{\mu}_i, \bar{\sigma}_i^2), w_i\}_{i \in \mathcal{S}^t}$ for next round
+\ENDFOR
+\end{algorithmic}
+\end{small}
+\end{algorithm}
+
+% Algorithm 2: Client-side
+\begin{algorithm}[!t]
+\caption{Client-Side: Local Variational Training}
+\label{alg:client}
+\begin{small}
+\begin{algorithmic}[1]
+\REQUIRE Local dataset $\mathcal{D}_i$, global parameters $\theta^t$, $\phi^t$, mixture prior $p_{\text{mixture}}(z)$ (if $t > 1$), local steps $E$, learning rate $\eta$, KL weight $\beta$, orthogonal weight $\lambda$
+\ENSURE Updated parameters $\theta_i^t$, $\phi_i^t$, average z distribution $(\bar{\mu}_i, \bar{\sigma}_i^2)$, sample size $n_i$
+\STATE Receive $\theta^t$, $\phi^t$ from server
+\IF{mixture prior received}
+    \STATE Update local prior: $p_{\text{mixture}}(z) \leftarrow \{(\mu_j, \sigma_j^2), w_j\}_{j \in \mathcal{S}^{t-1}}$
+\ELSE
+    \STATE Use standard prior: $p_{\text{mixture}}(z) = \mathcal{N}(0, I)$
+\ENDIF
+\STATE Initialize: $\theta_i^t \leftarrow \theta^t$, $\phi_i^t \leftarrow \phi^t$
+\STATE Initialize: $\mathcal{Z}_{\text{batch}} \leftarrow \emptyset$ (for collecting z values)
+\FOR{local step $e = 1, \ldots, E$}
+    \FOR{batch $(s_A, s_B, y) \in \mathcal{D}_i$}
+        \STATE Extract features: $h_{\text{chosen}}, h_{\text{rejected}} \leftarrow \text{LLM}(s_A, s_B)$
+        \STATE Compute difference: $\Delta h = h_{\text{chosen}} - h_{\text{rejected}}$ (or use choice logits)
+        \STATE Process: $f_i \leftarrow \text{FeatureExtractor}(\Delta h)$
+        \STATE Encode: $(\mu_i, \sigma_i^2) \leftarrow q_{\phi_i^t}(f_i)$
+        \STATE Sample: $z_i \sim \mathcal{N}(\mu_i, \sigma_i^2 I)$ via reparameterization trick
+        \STATE Collect: $\mathcal{Z}_{\text{batch}} \leftarrow \mathcal{Z}_{\text{batch}} \cup \{z_i\}$
+        \STATE Project: $\Delta \text{logits} \leftarrow \text{LatentProjection}(z_i)$
+        \STATE Condition: $\text{logits} \leftarrow \text{logits}_{\text{base}} + \Delta \text{logits}$
+        \STATE Compute reconstruction loss: $\mathcal{L}_{\text{recon}} \leftarrow -\log p_{\theta_i^t}(y \mid s_A, s_B, z_i)$
+        \STATE Compute KL divergence: $\mathcal{L}_{\text{KL}} \leftarrow \beta \cdot \mathbb{D}_{KL}(q_{\phi_i^t}(z \mid \cdot) \| p_{\text{mixture}}(z))$
+        \STATE Compute orthogonal loss: $\mathcal{L}_{\text{ortho}} \leftarrow \lambda \cdot \mathcal{L}_{\text{orthogonal}}(z_i)$
+        \STATE Total loss: $\mathcal{L}_i \leftarrow \mathcal{L}_{\text{recon}} + \mathcal{L}_{\text{KL}} + \mathcal{L}_{\text{ortho}}$
+        \STATE Update: $\theta_i^t$, $\phi_i^t$ via SGD on $\mathcal{L}_i$ (only VPL components, base model frozen)
+    \ENDFOR
+\ENDFOR
+\STATE Compute average z distribution: $\bar{\mu}_i \leftarrow \text{mean}(\{\mu_i\})$, $\bar{\sigma}_i^2 \leftarrow \text{var}(\{z_i \in \mathcal{Z}_{\text{batch}}\})$
+\STATE Send $(\theta_i^t, \phi_i^t, \bar{\mu}_i, \bar{\sigma}_i^2, |\mathcal{D}_i|)$ to server
+\end{algorithmic}
+\end{small}
+\end{algorithm}
