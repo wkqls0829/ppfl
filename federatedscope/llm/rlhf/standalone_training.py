@@ -165,6 +165,10 @@ class RLHF_finetuning:
         # {client_id: z_mu_tensor}
         self.client_average_z_dict = None
         
+        # Client-specific test data (for seen/unseen evaluation)
+        # {client_id: [prompt_dict, ...]}
+        self.client_test_data = None
+        
         # Try to get client_num from checkpoint first (for standalone mode where config.client_num=1)
         # Priority: checkpoint > selector_cfg > config
         self.num_clients = None
@@ -265,6 +269,18 @@ class RLHF_finetuning:
                                          f"This will cause issues for {'generation' if use_variational_generation else ''} "
                                          f"{'and ' if use_variational_generation and use_variational_selection else ''}"
                                          f"{'selection' if use_variational_selection else ''}.")
+                    
+                    # Compute z for unseen clients if this is an unseen experiment
+                    if self.selector_cfg is not None:
+                        unseen_clients_id = getattr(self.selector_cfg.federate, 'unseen_clients_id', [])
+                        if len(unseen_clients_id) > 0:
+                            logger.info(f"Unseen experiment detected. Computing z for unseen clients: {unseen_clients_id}")
+                            self._compute_unseen_client_z_from_training_data(
+                                selector_ckpt_path, 
+                                variational_encoder, 
+                                feature_extractor,
+                                unseen_clients_id
+                            )
                 except Exception as e:
                     logger.debug(f"Could not load VPL components: {e}. Using standard generation.")
         
@@ -936,6 +952,278 @@ class RLHF_finetuning:
             logger.error(f"Failed to compute client average z from training data: {e}")
             self.client_average_z_dict = None
 
+    def _compute_unseen_client_z_from_training_data(self, selector_ckpt_path, variational_encoder, feature_extractor, unseen_clients_id):
+        """
+        Compute z distribution for unseen clients from their training data.
+        Uses the same method as binary selector training: compute z from training batches and average.
+        
+        Args:
+            selector_ckpt_path: Path to selector checkpoint
+            variational_encoder: Variational encoder from selector checkpoint
+            feature_extractor: Feature extractor from selector checkpoint
+            unseen_clients_id: List of unseen client IDs
+        """
+        try:
+            import torch
+            from torch.utils.data import DataLoader
+            from federatedscope.src.data.load_hh_rlhf import load_hh_rlhf_data
+            from federatedscope.core.data import StandaloneDataDict
+            from federatedscope.llm.dataset.llm_dataset import LLMDataset
+            from federatedscope.llm.dataloader import LLMDataCollator
+            
+            logger.info(f"Computing z distribution for {len(unseen_clients_id)} unseen clients from training data...")
+            
+            if variational_encoder is None or feature_extractor is None:
+                logger.warning("Cannot compute unseen client z: VPL components not available")
+                return
+            
+            if self.selector_cfg is None:
+                logger.warning("Cannot compute unseen client z: selector config not available")
+                return
+            
+            # Create a temporary config for loading unseen client data
+            # Use selector config as base, but set client_num to total (including unseen)
+            temp_config = self.selector_cfg.clone()
+            temp_config.federate.client_num = self.num_clients  # Total clients (including unseen)
+            temp_config.data.root = self.data_root
+            
+            # Load training data for unseen clients (same as selector training)
+            # This will create data_dict with all clients including unseen
+            data_container, _ = load_hh_rlhf_data(temp_config, client_cfgs=None)
+            
+            if not isinstance(data_container, StandaloneDataDict):
+                logger.warning("Data container is not StandaloneDataDict. Cannot compute unseen client z.")
+                return
+            
+            # Initialize client_average_z_dict if not exists
+            if self.client_average_z_dict is None:
+                self.client_average_z_dict = {}
+            
+            # Set models to eval mode
+            variational_encoder.eval()
+            feature_extractor.eval()
+            if self.selector_model is not None:
+                self.selector_model.eval()
+            
+            vpl_latent_dim = getattr(self.config.llm, 'vpl_latent_dim', 32)
+            vpl_use_feature_difference = getattr(self.config.llm, 'vpl_use_feature_difference', True)
+            vpl_use_difference_only = getattr(self.config.llm, 'vpl_use_difference_only', False)
+            
+            # Get selector prompt format
+            selector_prompt = self.selector_prompt
+            
+            # Get choice tokens
+            choices = getattr(self.config.trainer, 'choices', ['A', 'B'])
+            choice_tokens = []
+            for choice in choices:
+                choice_token = self.selector_tokenizer.encode(f" {choice}", add_special_tokens=False)
+                if len(choice_token) > 0:
+                    choice_tokens.append(choice_token[0])
+                else:
+                    choice_token = self.selector_tokenizer.encode(choice, add_special_tokens=False)
+                    if len(choice_token) > 0:
+                        choice_tokens.append(choice_token[0])
+            
+            if len(choice_tokens) < 2:
+                logger.warning(f"Could not find choice tokens. Using fallback.")
+                choice_tokens = [
+                    self.selector_tokenizer.encode('A', add_special_tokens=False)[0] if len(self.selector_tokenizer.encode('A', add_special_tokens=False)) > 0 else 65,
+                    self.selector_tokenizer.encode('B', add_special_tokens=False)[0] if len(self.selector_tokenizer.encode('B', add_special_tokens=False)) > 0 else 66
+                ]
+            
+            # Process each unseen client
+            with torch.no_grad():
+                for client_id in unseen_clients_id:
+                    if client_id not in data_container:
+                        logger.warning(f"Client {client_id} not found in data container. Skipping.")
+                        continue
+                    
+                    client_data = data_container[client_id]
+                    train_data = client_data.train_data
+                    
+                    if len(train_data) == 0:
+                        logger.warning(f"Client {client_id} has no training data. Skipping.")
+                        continue
+                    
+                    logger.info(f"Computing z for unseen client {client_id} from {len(train_data)} training samples...")
+                    
+                    # Create dataset and dataloader for this client's training data
+                    # Convert to list of dicts with prompt, output_A, output_B, choice
+                    list_train_dict = []
+                    for sample in train_data:
+                        # train_data should have 'prompt', 'chosen_response', 'rejected_response'
+                        if hasattr(sample, 'keys'):
+                            sample_dict = dict(sample)
+                        else:
+                            sample_dict = sample
+                        
+                        # Format for binary choice: prompt, output_A (chosen), output_B (rejected), choice=" A"
+                        list_train_dict.append({
+                            'prompt': sample_dict.get('prompt', ''),
+                            'output_A': sample_dict.get('chosen_response', ''),
+                            'output_B': sample_dict.get('rejected_response', ''),
+                            'choice': ' A'  # Chosen is A
+                        })
+                    
+                    # Create LLMDataset for binary choice
+                    train_dataset = LLMDataset(
+                        list_train_dict,
+                        self.selector_tokenizer,
+                        prompt_input=selector_prompt,
+                        prompt_no_input=selector_prompt,
+                        output_tag='choice'
+                    )
+                    
+                    # Create DataLoader
+                    train_dataloader = DataLoader(
+                        train_dataset,
+                        batch_size=8,  # Small batch size for memory efficiency
+                        shuffle=False,
+                        num_workers=0,
+                        collate_fn=LLMDataCollator(tokenizer=self.selector_tokenizer),
+                        pin_memory=False
+                    )
+                    
+                    # Collect z values from all batches
+                    z_mu_list = []
+                    
+                    for batch_idx, batch in enumerate(train_dataloader):
+                        try:
+                            input_ids = batch['input_ids'].to(self.device)
+                            labels = batch['labels'].to(self.device)
+                            attention_mask = batch.get('attention_mask', None)
+                            if attention_mask is not None:
+                                attention_mask = attention_mask.to(self.device)
+                            
+                            # Forward pass through selector model to get logits and hidden states
+                            if self.selector_model is not None:
+                                outputs = self.selector_model(
+                                    input_ids=input_ids,
+                                    labels=labels,
+                                    attention_mask=attention_mask,
+                                    output_hidden_states=vpl_use_feature_difference
+                                )
+                            else:
+                                logger.warning("Selector model not available. Cannot compute z.")
+                                break
+                            
+                            logits = outputs.logits
+                            
+                            # Get hidden states if needed
+                            hidden_states = None
+                            if vpl_use_feature_difference:
+                                if hasattr(outputs, 'hidden_states') and outputs.hidden_states is not None:
+                                    hidden_states = outputs.hidden_states[-1]
+                                elif hasattr(outputs, 'last_hidden_state'):
+                                    hidden_states = outputs.last_hidden_state
+                            
+                            # Extract preference features (same as VPL trainer)
+                            # Use embedding difference method if available
+                            if vpl_use_feature_difference and hidden_states is not None:
+                                # Use embedding difference method
+                                batch_size, seq_len, hidden_dim = hidden_states.shape
+                                shift_labels = labels[..., 1:].contiguous()
+                                shift_hidden = hidden_states[..., :-1, :].contiguous()
+                                
+                                A_token, B_token = choice_tokens[0], choice_tokens[1]
+                                A_positions = (shift_labels == A_token)
+                                B_positions = (shift_labels == B_token)
+                                
+                                features_list = []
+                                for b in range(batch_size):
+                                    A_pos = A_positions[b]
+                                    B_pos = B_positions[b]
+                                    
+                                    if A_pos.any() and B_pos.any():
+                                        chosen_emb = shift_hidden[b, A_pos].mean(dim=0)
+                                        rejected_emb = shift_hidden[b, B_pos].mean(dim=0)
+                                    elif A_pos.any():
+                                        chosen_emb = shift_hidden[b, A_pos].mean(dim=0)
+                                        rejected_emb = shift_hidden[b].mean(dim=0)
+                                    elif B_pos.any():
+                                        chosen_emb = shift_hidden[b, B_pos].mean(dim=0)
+                                        rejected_emb = shift_hidden[b].mean(dim=0)
+                                    else:
+                                        chosen_emb = shift_hidden[b].mean(dim=0)
+                                        rejected_emb = shift_hidden[b].mean(dim=0)
+                                    
+                                    feature_diff = chosen_emb - rejected_emb
+                                    
+                                    if vpl_use_difference_only:
+                                        feature_combined = feature_diff
+                                    else:
+                                        feature_combined = torch.cat([chosen_emb, rejected_emb, feature_diff], dim=0)
+                                    
+                                    features_list.append(feature_combined)
+                                
+                                preference_features = torch.stack(features_list, dim=0)
+                            else:
+                                # Fallback: use logits-based features
+                                shift_logits = logits[..., :-1, :].contiguous()
+                                shift_labels = labels[..., 1:].contiguous()
+                                
+                                batch_size = logits.shape[0]
+                                choice_logits_per_token = shift_logits[..., choice_tokens]
+                                
+                                features_list = []
+                                for choice_idx in range(len(choice_tokens)):
+                                    choice_token = choice_tokens[choice_idx]
+                                    choice_positions = (shift_labels == choice_token)
+                                    
+                                    if choice_positions.any():
+                                        batch_features = []
+                                        for b in range(batch_size):
+                                            sample_positions = choice_positions[b]
+                                            if sample_positions.any():
+                                                sample_choice_logits = choice_logits_per_token[b, sample_positions, choice_idx]
+                                                avg_logit = sample_choice_logits.mean()
+                                            else:
+                                                avg_logit = choice_logits_per_token[b, :, choice_idx].mean()
+                                            batch_features.append(avg_logit)
+                                        features_list.append(torch.stack(batch_features))
+                                    else:
+                                        features_list.append(choice_logits_per_token[:, :, choice_idx].mean(dim=1))
+                                
+                                features = torch.stack(features_list, dim=1)
+                                preference_features = torch.cat([features, features], dim=1)
+                            
+                            # Ensure float32
+                            if preference_features.dtype != torch.float32:
+                                preference_features = preference_features.float()
+                            
+                            # Extract features and encode to z
+                            extracted_features = feature_extractor(preference_features)
+                            z_mu, z_logvar = variational_encoder.encode(extracted_features)
+                            
+                            # Store z_mu (mean) for averaging
+                            z_mu_list.append(z_mu.detach().cpu())
+                            
+                        except Exception as e:
+                            logger.warning(f"Error processing batch {batch_idx} for client {client_id}: {e}")
+                            continue
+                    
+                    if len(z_mu_list) > 0:
+                        # Average z_mu across all batches
+                        z_mu_stack = torch.cat(z_mu_list, dim=0)  # (total_samples, latent_dim)
+                        avg_z_mu = z_mu_stack.mean(dim=0)  # (latent_dim,)
+                        
+                        # Ensure avg_z_mu is 1D
+                        avg_z_mu = avg_z_mu.view(-1)
+                        
+                        # Store in client_average_z_dict
+                        self.client_average_z_dict[client_id] = avg_z_mu.to(self.device)
+                        logger.info(f"Computed average z for unseen client {client_id}: shape {avg_z_mu.shape}, "
+                                   f"from {len(z_mu_list)} batches ({z_mu_stack.shape[0]} total samples)")
+                    else:
+                        logger.warning(f"No z values computed for unseen client {client_id}")
+            
+            logger.info(f"Computed z for {len([cid for cid in unseen_clients_id if cid in self.client_average_z_dict])} unseen clients")
+            
+        except Exception as e:
+            logger.error(f"Failed to compute unseen client z from training data: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+
     def train(self, saveto=None, early_exiting=False):
         if saveto is None:
             _, saveto = os.path.split(self.config.federate.save_to)
@@ -1045,6 +1333,9 @@ class RLHF_finetuning:
                     split_by_client=True,
                     client_num=num_clients,
                 )
+                
+                # Store client_test_data as instance variable for seen/unseen evaluation
+                self.client_test_data = client_test_data
                 
                 if client_test_data is None or len(client_test_data) == 0:
                     logger.warning("No test prompts loaded. Test evaluation will be skipped.")
@@ -1276,69 +1567,235 @@ class RLHF_finetuning:
             test_available = (data.get('test') is not None) or (hasattr(self.trainer, 'data') and self.trainer.data.get('test') is not None)
             if test_available and (r + 1) % self.config.eval.freq == 0:
                 logger.info("----------- Evaluating on test split -------------")
-                # Ensure test_loader is set in ctx
-                if hasattr(self.trainer, 'data') and 'test' in self.trainer.data:
-                    self.trainer.ctx.test_loader = self.trainer.data['test']
-                elif 'test' in data:
-                    self.trainer.ctx.test_loader = data['test']
                 
-                test_results = self.trainer.evaluate(target_data_split_name="test")
-                if test_results is None:
-                    # If evaluate returns None, try to get eval_metrics from ctx
-                    test_results = getattr(self.trainer.ctx, 'eval_metrics', {})
+                # Check if this is an unseen experiment (has unseen_clients_id in selector config)
+                unseen_clients_id = []
+                if self.selector_cfg is not None:
+                    unseen_clients_id = getattr(self.selector_cfg.federate, 'unseen_clients_id', [])
                 
-                if test_results:
-                    test_log_res = self._monitor.format_eval_res(test_results,
-                                                                 rnd=r,
-                                                                 role="Server",
-                                                                 return_raw=True)
-                    # Log test results with detailed metrics
-                    logger.info(f"Round {r}: Test evaluation results:")
-                    if 'Results_raw' in test_log_res:
-                        for key, value in test_log_res['Results_raw'].items():
-                            if isinstance(value, (int, float)):
-                                logger.info(f"  {key}: {value:.4f}")
-                            elif isinstance(value, (list, tuple)) and len(value) > 0:
-                                if isinstance(value[0], (int, float)):
-                                    avg_value = float(sum(value) / len(value))
-                                    logger.info(f"  {key}: {avg_value:.4f} (from {len(value)} samples)")
-                    logger.info(f"Full test log: {test_log_res}")
-                else:
-                    logger.warning(f"Round {r+1}: Test evaluation returned no results.")
-                    test_log_res = None
-                
-                # Save test results to WandB with explicit step
-                # For RL training: log all test metrics including winrate and reward model scores
-                if test_log_res and self.config.wandb.use and self.config.wandb.online_track:
-                    try:
-                        import wandb
-                        # Directly log metrics from Results_raw to avoid logline_2_wandb_dict removing Results_raw
-                        wandb_metrics = {}
-                        if 'Results_raw' in test_log_res:
-                            test_results = test_log_res['Results_raw']
-                            # Log all test metrics including winrate and reward model scores
-                            # These are the important metrics for RL evaluation
-                            for key, value in test_results.items():
+                # If we have client-specific test data and unseen_clients_id, evaluate separately
+                if hasattr(self, 'client_test_data') and self.client_test_data is not None and len(unseen_clients_id) > 0:
+                    # Evaluate separately for seen and unseen clients
+                    seen_client_ids = [cid for cid in range(1, self.num_clients + 1) if cid not in unseen_clients_id]
+                    unseen_client_ids = unseen_clients_id
+                    
+                    logger.info(f"Unseen experiment detected. Evaluating separately:")
+                    logger.info(f"  Seen clients: {seen_client_ids}")
+                    logger.info(f"  Unseen clients: {unseen_client_ids}")
+                    
+                    # Evaluate seen clients
+                    seen_test_dict = []
+                    for client_id in seen_client_ids:
+                        if client_id in self.client_test_data:
+                            for prompt_dict in self.client_test_data[client_id]:
+                                if prompt_dict.get('prompt'):
+                                    seen_test_dict.append({
+                                        'prompt': prompt_dict['prompt'],
+                                        'client_id': client_id,
+                                        'output': '',
+                                    })
+                    
+                    # Evaluate unseen clients
+                    unseen_test_dict = []
+                    for client_id in unseen_client_ids:
+                        if client_id in self.client_test_data:
+                            for prompt_dict in self.client_test_data[client_id]:
+                                if prompt_dict.get('prompt'):
+                                    unseen_test_dict.append({
+                                        'prompt': prompt_dict['prompt'],
+                                        'client_id': client_id,
+                                        'output': '',
+                                    })
+                    
+                    # Evaluate seen clients
+                    seen_results = None
+                    if len(seen_test_dict) > 0:
+                        from federatedscope.llm.dataset.llm_dataset import LLMDataset
+                        from federatedscope.llm.dataloader import LLMDataCollator
+                        seen_test_dataset = LLMDataset(
+                            seen_test_dict,
+                            self.tokenizer,
+                            prompt_input=self.generation_prompt,
+                            prompt_no_input=self.generation_prompt,
+                        )
+                        seen_test_dataloader = DataLoader(
+                            seen_test_dataset,
+                            batch_size=self.config.dataloader.batch_size,
+                            shuffle=False,
+                            num_workers=self.config.dataloader.num_workers,
+                            collate_fn=LLMDataCollator(tokenizer=self.tokenizer),
+                            pin_memory=self.config.dataloader.pin_memory,
+                        )
+                        self.trainer.ctx.test_loader = seen_test_dataloader
+                        seen_results = self.trainer.evaluate(target_data_split_name="test")
+                        if seen_results is None:
+                            seen_results = getattr(self.trainer.ctx, 'eval_metrics', {})
+                    
+                    # Evaluate unseen clients
+                    unseen_results = None
+                    if len(unseen_test_dict) > 0:
+                        from federatedscope.llm.dataset.llm_dataset import LLMDataset
+                        from federatedscope.llm.dataloader import LLMDataCollator
+                        unseen_test_dataset = LLMDataset(
+                            unseen_test_dict,
+                            self.tokenizer,
+                            prompt_input=self.generation_prompt,
+                            prompt_no_input=self.generation_prompt,
+                        )
+                        unseen_test_dataloader = DataLoader(
+                            unseen_test_dataset,
+                            batch_size=self.config.dataloader.batch_size,
+                            shuffle=False,
+                            num_workers=self.config.dataloader.num_workers,
+                            collate_fn=LLMDataCollator(tokenizer=self.tokenizer),
+                            pin_memory=self.config.dataloader.pin_memory,
+                        )
+                        self.trainer.ctx.test_loader = unseen_test_dataloader
+                        unseen_results = self.trainer.evaluate(target_data_split_name="test")
+                        if unseen_results is None:
+                            unseen_results = getattr(self.trainer.ctx, 'eval_metrics', {})
+                    
+                    # Format and log results separately
+                    seen_log_res = None
+                    unseen_log_res = None
+                    
+                    if seen_results:
+                        seen_log_res = self._monitor.format_eval_res(seen_results, rnd=r, role="Server (Seen)", return_raw=True)
+                        logger.info(f"Round {r}: Seen clients ({len(seen_client_ids)} clients) test evaluation results:")
+                        if 'Results_raw' in seen_log_res:
+                            for key, value in seen_log_res['Results_raw'].items():
                                 if isinstance(value, (int, float)):
-                                    wandb_metrics[f"Server, {key}"] = value
+                                    logger.info(f"  Seen_{key}: {value:.4f}")
                                 elif isinstance(value, (list, tuple)) and len(value) > 0:
-                                    # Handle list/tuple values (take first element or mean)
                                     if isinstance(value[0], (int, float)):
-                                        wandb_metrics[f"Server, {key}"] = float(sum(value) / len(value))
-                        
-                        # Also log Round for reference
-                        wandb_metrics["Server, Round"] = r
-                        
-                        # Log to WandB with explicit step
-                        if wandb_metrics:
-                            wandb.log(wandb_metrics, step=r)
-                            logger.info(f"Round {r}: Logged {len(wandb_metrics)} test metrics to WandB (including winrate and reward scores)")
-                        else:
-                            logger.warning(f"Round {r}: No test metrics to log to WandB")
-                    except Exception as e:
-                        logger.warning(f"Failed to log test metrics to WandB: {e}")
-                        # Fallback to original method
-                        self._monitor.save_formatted_results(test_log_res, save_file_name="")
+                                        avg_value = float(sum(value) / len(value))
+                                        logger.info(f"  Seen_{key}: {avg_value:.4f} (from {len(value)} samples)")
+                    
+                    if unseen_results:
+                        unseen_log_res = self._monitor.format_eval_res(unseen_results, rnd=r, role="Server (Unseen)", return_raw=True)
+                        logger.info(f"Round {r}: Unseen clients ({len(unseen_client_ids)} clients) test evaluation results:")
+                        if 'Results_raw' in unseen_log_res:
+                            for key, value in unseen_log_res['Results_raw'].items():
+                                if isinstance(value, (int, float)):
+                                    logger.info(f"  Unseen_{key}: {value:.4f}")
+                                elif isinstance(value, (list, tuple)) and len(value) > 0:
+                                    if isinstance(value[0], (int, float)):
+                                        avg_value = float(sum(value) / len(value))
+                                        logger.info(f"  Unseen_{key}: {avg_value:.4f} (from {len(value)} samples)")
+                    
+                    # Log to WandB separately
+                    if (seen_log_res or unseen_log_res) and self.config.wandb.use and self.config.wandb.online_track:
+                        try:
+                            import wandb
+                            wandb_metrics = {}
+                            
+                            # Log seen clients with BOTH formats:
+                            # 1. Standard format (for compatibility with existing plots): "Server, {key}"
+                            # 2. Seen-specific format: "Server_Seen, {key}"
+                            if seen_log_res and 'Results_raw' in seen_log_res:
+                                for key, value in seen_log_res['Results_raw'].items():
+                                    if isinstance(value, (int, float)):
+                                        # Standard format (for existing WandB plots like test_harmless, test_helpful)
+                                        wandb_metrics[f"Server, {key}"] = value
+                                        # Seen-specific format (for seen/unseen comparison)
+                                        wandb_metrics[f"Server_Seen, {key}"] = value
+                                    elif isinstance(value, (list, tuple)) and len(value) > 0:
+                                        if isinstance(value[0], (int, float)):
+                                            avg_value = float(sum(value) / len(value))
+                                            # Standard format
+                                            wandb_metrics[f"Server, {key}"] = avg_value
+                                            # Seen-specific format
+                                            wandb_metrics[f"Server_Seen, {key}"] = avg_value
+                            
+                            # Log unseen clients with Unseen-specific format: "Server_Unseen, {key}"
+                            if unseen_log_res and 'Results_raw' in unseen_log_res:
+                                for key, value in unseen_log_res['Results_raw'].items():
+                                    if isinstance(value, (int, float)):
+                                        wandb_metrics[f"Server_Unseen, {key}"] = value
+                                    elif isinstance(value, (list, tuple)) and len(value) > 0:
+                                        if isinstance(value[0], (int, float)):
+                                            wandb_metrics[f"Server_Unseen, {key}"] = float(sum(value) / len(value))
+                            
+                            wandb_metrics["Server, Round"] = r
+                            
+                            if wandb_metrics:
+                                wandb.log(wandb_metrics, step=r)
+                                logger.info(f"Round {r}: Logged seen/unseen test metrics to WandB")
+                                logger.info(f"  - Seen clients: Standard format (Server, {{key}}) + Seen format (Server_Seen, {{key}})")
+                                logger.info(f"  - Unseen clients: Unseen format (Server_Unseen, {{key}})")
+                        except Exception as e:
+                            logger.warning(f"Failed to log seen/unseen test metrics to WandB: {e}")
+                    
+                    # Restore original test loader for compatibility
+                    if 'test' in data:
+                        self.trainer.ctx.test_loader = data['test']
+                    elif hasattr(self.trainer, 'data') and 'test' in self.trainer.data:
+                        self.trainer.ctx.test_loader = self.trainer.data['test']
+                else:
+                    # Standard evaluation (no unseen experiment or no client-specific data)
+                    # Ensure test_loader is set in ctx
+                    if hasattr(self.trainer, 'data') and 'test' in self.trainer.data:
+                        self.trainer.ctx.test_loader = self.trainer.data['test']
+                    elif 'test' in data:
+                        self.trainer.ctx.test_loader = data['test']
+                    
+                    test_results = self.trainer.evaluate(target_data_split_name="test")
+                    if test_results is None:
+                        # If evaluate returns None, try to get eval_metrics from ctx
+                        test_results = getattr(self.trainer.ctx, 'eval_metrics', {})
+                    
+                    if test_results:
+                        test_log_res = self._monitor.format_eval_res(test_results,
+                                                                     rnd=r,
+                                                                     role="Server",
+                                                                     return_raw=True)
+                        # Log test results with detailed metrics
+                        logger.info(f"Round {r}: Test evaluation results:")
+                        if 'Results_raw' in test_log_res:
+                            for key, value in test_log_res['Results_raw'].items():
+                                if isinstance(value, (int, float)):
+                                    logger.info(f"  {key}: {value:.4f}")
+                                elif isinstance(value, (list, tuple)) and len(value) > 0:
+                                    if isinstance(value[0], (int, float)):
+                                        avg_value = float(sum(value) / len(value))
+                                        logger.info(f"  {key}: {avg_value:.4f} (from {len(value)} samples)")
+                        logger.info(f"Full test log: {test_log_res}")
+                    else:
+                        logger.warning(f"Round {r+1}: Test evaluation returned no results.")
+                        test_log_res = None
+                    
+                    # Save test results to WandB with explicit step
+                    # For RL training: log all test metrics including winrate and reward model scores
+                    if test_log_res and self.config.wandb.use and self.config.wandb.online_track:
+                        try:
+                            import wandb
+                            # Directly log metrics from Results_raw to avoid logline_2_wandb_dict removing Results_raw
+                            wandb_metrics = {}
+                            if 'Results_raw' in test_log_res:
+                                test_results = test_log_res['Results_raw']
+                                # Log all test metrics including winrate and reward model scores
+                                # These are the important metrics for RL evaluation
+                                for key, value in test_results.items():
+                                    if isinstance(value, (int, float)):
+                                        wandb_metrics[f"Server, {key}"] = value
+                                    elif isinstance(value, (list, tuple)) and len(value) > 0:
+                                        # Handle list/tuple values (take first element or mean)
+                                        if isinstance(value[0], (int, float)):
+                                            wandb_metrics[f"Server, {key}"] = float(sum(value) / len(value))
+                            
+                            # Also log Round for reference
+                            wandb_metrics["Server, Round"] = r
+                            
+                            # Log to WandB with explicit step
+                            if wandb_metrics:
+                                wandb.log(wandb_metrics, step=r)
+                                logger.info(f"Round {r}: Logged {len(wandb_metrics)} test metrics to WandB (including winrate and reward scores)")
+                            else:
+                                logger.warning(f"Round {r}: No test metrics to log to WandB")
+                        except Exception as e:
+                            logger.warning(f"Failed to log test metrics to WandB: {e}")
+                            # Fallback to original method
+                            self._monitor.save_formatted_results(test_log_res, save_file_name="")
             elif (r + 1) % self.config.eval.freq == 0:
                 logger.warning(f"Round {r+1}: Test data not available for evaluation. Skipping test evaluation.")
             

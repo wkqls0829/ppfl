@@ -111,7 +111,8 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                 if 'gemma' in model_type.lower():
                     embedding_dim = 2048  # Gemma-2B
                 elif 'qwen' in model_type.lower():
-                    embedding_dim = 896  # Qwen2-0.5B
+                    # Qwen2 models: default to 0.5B (896) for main table experiments
+                    embedding_dim = 896  # Qwen2-0.5B (default for main table)
                 else:
                     embedding_dim = 2048  # Default fallback
                 logger.info(f"Using inferred embedding_dim={embedding_dim} for model type: {model_type}")

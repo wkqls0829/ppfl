@@ -205,11 +205,22 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
         
         # Save z values to JSON file for later analysis
         try:
+            # Helper function to safely convert to list
+            def to_list_safe(arr):
+                if arr is None:
+                    return None
+                if isinstance(arr, np.ndarray):
+                    return arr.tolist()
+                elif isinstance(arr, list):
+                    return arr
+                else:
+                    return list(arr)
+            
             z_data = {
-                'z_values': z_values.tolist(),  # Convert numpy array to list
-                'z_values_2d': z_2d.tolist(),  # Save 2D t-SNE coordinates
-                'client_labels': client_labels,
-                'orthogonal_labels': orthogonal_labels.tolist() if orthogonal_labels is not None else None,
+                'z_values': to_list_safe(z_values),  # Convert numpy array to list
+                'z_values_2d': to_list_safe(z_2d),  # Save 2D t-SNE coordinates
+                'client_labels': client_labels if isinstance(client_labels, list) else list(client_labels),
+                'orthogonal_labels': to_list_safe(orthogonal_labels),
                 'round_num': round_num,
                 'num_points': num_points,
                 'num_clients': num_clients,
@@ -222,7 +233,7 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
             
             # Add orthogonal prototypes if available
             if orthogonal_prototypes is not None:
-                z_data['orthogonal_prototypes'] = orthogonal_prototypes.tolist()
+                z_data['orthogonal_prototypes'] = to_list_safe(orthogonal_prototypes)
             
             # Ensure output directory exists
             os.makedirs(output_dir, exist_ok=True)
