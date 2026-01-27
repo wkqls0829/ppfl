@@ -240,10 +240,14 @@ class LLMMultiLoRAServer(Server):
                 self._cfg.llm.vpl_orthogonal_weight > 0):
                 self._compute_balanced_orthogonal_labels()
         
-        # Always collect z values for visualization (even if GP prior is disabled)
+        # Collect z values for visualization (even if GP prior is disabled)
         # This allows t-SNE visualization for all VPL experiments
+        # OPTIMIZATION: Only collect z values when needed for visualization to reduce overhead
         if hasattr(self._cfg.llm, 'vpl_latent_dim'):  # VPL is enabled
-            self._collect_z_values_for_visualization()
+            visualize_freq = getattr(self._cfg.llm, 'vpl_tsne_visualize_freq', 10)  # Default: every 10 rounds
+            # Only collect z values when we need to visualize (or every round if freq=1)
+            if visualize_freq <= 1 or self.state % visualize_freq == 0:
+                self._collect_z_values_for_visualization()
         
         return aggregated_num
     

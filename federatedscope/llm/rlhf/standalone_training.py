@@ -1592,10 +1592,14 @@ class RLHF_finetuning:
             if test_available and (r + 1) % self.config.eval.freq == 0:
                 logger.info("----------- Evaluating on test split -------------")
                 
-                # Check if this is an unseen experiment (has unseen_clients_id in selector config)
+                # Check if this is an unseen experiment (has unseen_clients_id in config)
+                # Try to get from selector_cfg first (for VPL models), then from main config (for FedDPO)
                 unseen_clients_id = []
                 if self.selector_cfg is not None:
                     unseen_clients_id = getattr(self.selector_cfg.federate, 'unseen_clients_id', [])
+                # Fallback to main config if selector_cfg is None (e.g., FedDPO)
+                if len(unseen_clients_id) == 0:
+                    unseen_clients_id = getattr(self.config.federate, 'unseen_clients_id', [])
                 
                 # If we have client-specific test data and unseen_clients_id, evaluate separately
                 if hasattr(self, 'client_test_data') and self.client_test_data is not None and len(unseen_clients_id) > 0:
@@ -2000,6 +2004,21 @@ class RLHF_finetuning:
                     logger.warning("Failed to load z_to_embedding. Generation will not use z.")
                     use_variational_generation = False
                 else:
+                    # Verify z_to_embedding output dimension matches model embedding dimension
+                    try:
+                        actual_embedding_dim = self.model.get_input_embeddings().embedding_dim
+                        z_to_embedding_output_dim = z_to_embedding.weight.shape[0]  # (out_features, in_features)
+                        
+                        if z_to_embedding_output_dim != actual_embedding_dim:
+                            logger.warning(f"z_to_embedding output dimension ({z_to_embedding_output_dim}) does not match "
+                                         f"model embedding dimension ({actual_embedding_dim}). Reinitializing z_to_embedding.")
+                            # Reinitialize z_to_embedding with correct output dimension
+                            vpl_latent_dim = z_to_embedding.weight.shape[1]  # in_features
+                            import torch.nn as nn
+                            z_to_embedding = nn.Linear(vpl_latent_dim, actual_embedding_dim).to(self.device)
+                            logger.info(f"Reinitialized z_to_embedding: {vpl_latent_dim} -> {actual_embedding_dim}")
+                    except Exception as e:
+                        logger.warning(f"Could not verify z_to_embedding dimension: {e}. Using loaded z_to_embedding.")
                     # Load client-specific average z values from training data (compute once, reuse)
                     self.client_average_z_dict = load_client_average_z_from_checkpoint(
                         selector_ckpt_path, device=self.device
@@ -2372,6 +2391,25 @@ class RLHF_finetuning:
                         logger.info(f"z_embedding after flattening: {z_embedding.shape}")
                     
                     input_embeddings = model.get_input_embeddings()(input_ids)  # (batch_size, seq_len, embedding_dim)
+                    actual_embedding_dim = input_embeddings.shape[-1]
+                    
+                    # Verify z_embedding dimension matches input_embeddings
+                    if z_embedding.shape[-1] != actual_embedding_dim:
+                        logger.error(f"z_embedding dimension ({z_embedding.shape[-1]}) does not match "
+                                    f"input_embeddings dimension ({actual_embedding_dim}). Cannot inject z.")
+                        # Fall back to standard generation without z
+                        return model.generate(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            max_new_tokens=max_new_tokens,
+                            do_sample=do_sample,
+                            temperature=temperature,
+                            top_p=top_p,
+                            pad_token_id=pad_token_id,
+                            eos_token_id=eos_token_id,
+                            **kwargs
+                        )
+                    
                     # Expand z_embedding to match input_embeddings shape: (batch_size, embedding_dim) -> (batch_size, seq_len, embedding_dim)
                     seq_len = input_embeddings.shape[1]
                     z_embedding = z_embedding.unsqueeze(1).expand(-1, seq_len, -1)  # (batch_size, seq_len, embedding_dim)

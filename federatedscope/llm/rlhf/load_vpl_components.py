@@ -125,6 +125,29 @@ def load_vpl_components_from_checkpoint(checkpoint_path, config, device='cuda:0'
                     embedding_dim = 2048
                 elif 'gemma-7b' in model_type:
                     embedding_dim = 4096
+                elif 'qwen' in model_type:
+                    # Qwen models: try to get from transformers config
+                    try:
+                        from transformers import AutoConfig
+                        model_name = config.model.type.split('@')[0]
+                        model_config = AutoConfig.from_pretrained(model_name)
+                        embedding_dim = getattr(model_config, 'hidden_size', None) or getattr(model_config, 'vocab_size', None)
+                        # Qwen2-0.5B: 896, Qwen2-1.5B: 1536, Qwen2-7B: 3584
+                        if embedding_dim is None:
+                            if '0.5b' in model_type or '0.5B' in model_type:
+                                embedding_dim = 896
+                            elif '1.5b' in model_type or '1.5B' in model_type:
+                                embedding_dim = 1536
+                            elif '7b' in model_type or '7B' in model_type:
+                                embedding_dim = 3584
+                    except Exception:
+                        # Fallback for Qwen
+                        if '0.5b' in model_type or '0.5B' in model_type:
+                            embedding_dim = 896
+                        elif '1.5b' in model_type or '1.5B' in model_type:
+                            embedding_dim = 1536
+                        elif '7b' in model_type or '7B' in model_type:
+                            embedding_dim = 3584
                 elif 'llama' in model_type or 'mistral' in model_type:
                     # Try to get from transformers config
                     try:

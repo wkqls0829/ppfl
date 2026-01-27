@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Replot t-SNE: top row = 39000 (VPL, no prototype), bottom row = 59001 (VPL-GP-Ortho, with prototypes).
-2x4 layout: Round 0, 10, 20, 30 each. No axis numbers, smaller gap. Legend from bottom row.
+Replot t-SNE: top row = 39010 (VPL, no prototype), bottom row = 59011 (VPL-GP-Ortho, with prototypes).
+2x4 layout: Round 0, 2, 4, 8 each. No axis numbers, smaller gap. Legend from bottom row.
 """
 
 import os
@@ -9,17 +9,17 @@ import json
 import numpy as np
 import matplotlib.pyplot as plt
 
-EXP_DIR_39000 = "/home/kjb/ppfl/exp/vpl_hhst_n10_t39000/sub_exp_20260127143603"
-EXP_DIR_59001 = "/home/kjb/ppfl/exp/vplgp_ortho_hhst_n10_t59001/sub_exp_20260127143607"
-ROUNDS = [0, 10, 20, 30]
+EXP_DIR_39010 = "/home/kjb/ppfl/exp/vpl_hhst_n10_t39010"
+EXP_DIR_59011 = "/home/kjb/ppfl/exp/vplgp_ortho_hhst_n10_t59011"
+ROUNDS = [0, 2, 4, 8]
 K_NEAREST_FOR_PROTO = 50
 COLOR_HARMLESS = "#C41E3A"
 COLOR_HELPFUL = "#0066B2"
 
 
-def load_39000(round_num):
-    """39000: no prototype, no rotation. Returns (harmless_pts, helpful_pts_filtered, None, round_num)."""
-    path = os.path.join(EXP_DIR_39000, f"cross_client_z_tsne_round_{round_num}.json")
+def load_39010(round_num):
+    """39010: no prototype, no rotation. Returns (harmless_pts, helpful_pts_filtered, None, round_num)."""
+    path = os.path.join(EXP_DIR_39010, f"cross_client_z_tsne_round_{round_num}.json")
     if not os.path.exists(path):
         return None
     with open(path, "r") as f:
@@ -47,9 +47,9 @@ def load_39000(round_num):
     return harmless_pts, helpful_pts_filtered, None, data["round_num"]
 
 
-def load_59001(round_num):
-    """59001: with prototypes, rotation. Returns (harmless_pts, helpful_pts_filtered, proto_2d, round_num)."""
-    path = os.path.join(EXP_DIR_59001, f"cross_client_z_tsne_round_{round_num}.json")
+def load_59011(round_num):
+    """59011: with prototypes, rotation. Returns (harmless_pts, helpful_pts_filtered, proto_2d, round_num)."""
+    path = os.path.join(EXP_DIR_59011, f"cross_client_z_tsne_round_{round_num}.json")
     if not os.path.exists(path):
         return None
     with open(path, "r") as f:
@@ -81,24 +81,18 @@ def load_59001(round_num):
         helpful_pts_filtered = z_2d[keep_helpful]
     else:
         helpful_pts_filtered = z_2d[mask_helpful]
-    v = proto_2d[1] - proto_2d[0]
-    theta = -np.arctan2(v[0], v[1])
-    c, s = np.cos(theta), np.sin(theta)
-    R = np.array([[c, -s], [s, c]])
-    harmless_pts = (R @ harmless_pts.T).T
-    helpful_pts_filtered = (R @ helpful_pts_filtered.T).T
-    proto_2d = (R @ proto_2d.T).T
-    if proto_2d[0, 1] > proto_2d[1, 1]:
-        R90cw = np.array([[0.0, -1.0], [1.0, 0.0]])
-        harmless_pts = (R90cw @ harmless_pts.T).T
-        helpful_pts_filtered = (R90cw @ helpful_pts_filtered.T).T
-        proto_2d = (R90cw @ proto_2d.T).T
+    # Rotate round 4 counterclockwise 90 degrees
+    if round_num == 4:
+        R90ccw = np.array([[0.0, 1.0], [-1.0, 0.0]])
+        harmless_pts = (R90ccw @ harmless_pts.T).T
+        helpful_pts_filtered = (R90ccw @ helpful_pts_filtered.T).T
+        proto_2d = (R90ccw @ proto_2d.T).T
     return harmless_pts, helpful_pts_filtered, proto_2d, data["round_num"]
 
 
 def main():
-    data_39000 = [load_39000(r) for r in ROUNDS]
-    data_59001 = [load_59001(r) for r in ROUNDS]
+    data_39010 = [load_39010(r) for r in ROUNDS]
+    data_59011 = [load_59011(r) for r in ROUNDS]
 
     n_rows, n_cols = 2, 4
     fig_w, fig_h = 14.0, 6.0
@@ -108,7 +102,7 @@ def main():
     # Left margin for algorithm names (slightly reduced so closer to panels)
     margin_left = 0.14
     margin_right = 0.06
-    margin_bottom = 0.14   # legend below; reduced to shrink legend–panel gap
+    margin_bottom = 0.10   # legend below; reduced to shrink legend–panel gap
     margin_top = 0.06
     gap_h, gap_v = 0.05, 0.04
     usable_w = 1.0 - margin_left - margin_right
@@ -128,21 +122,21 @@ def main():
     dot_sz = 32  # smaller dots
     star_sz = 280  # smaller prototype stars
 
-    def draw_panel(ax, harmless_pts, helpful_pts_filtered, proto_2d, round_num, show_round=True, add_legend_labels=False, add_small_legend=False):
+    def draw_panel(ax, harmless_pts, helpful_pts_filtered, proto_2d, round_num, show_round=True, add_legend_labels=False):
         ax.set_facecolor("white")
         ax.scatter(harmless_pts[:, 0], harmless_pts[:, 1], c=COLOR_HARMLESS,
-                  label="Harmlessness" if (add_legend_labels or add_small_legend) else None,
+                  label="Harmlessness" if add_legend_labels else None,
                   alpha=0.8, s=dot_sz, edgecolors="white", linewidths=0.5, zorder=2)
         ax.scatter(helpful_pts_filtered[:, 0], helpful_pts_filtered[:, 1], c=COLOR_HELPFUL,
-                  label="Helpfulness" if (add_legend_labels or add_small_legend) else None,
+                  label="Helpfulness" if add_legend_labels else None,
                   alpha=0.8, s=dot_sz, edgecolors="white", linewidths=0.5, zorder=2)
         if proto_2d is not None:
             ax.scatter(proto_2d[0, 0], proto_2d[0, 1], marker="*", s=star_sz, c=COLOR_HARMLESS,
                       edgecolors="black", linewidths=1.2,
-                      label="Harmlessness prototype" if (add_legend_labels or add_small_legend) else None, zorder=10)
+                      label="Harmlessness prototype" if add_legend_labels else None, zorder=10)
             ax.scatter(proto_2d[1, 0], proto_2d[1, 1], marker="*", s=star_sz, c=COLOR_HELPFUL,
                       edgecolors="black", linewidths=1.2,
-                      label="Helpfulness prototype" if (add_legend_labels or add_small_legend) else None, zorder=10)
+                      label="Helpfulness prototype" if add_legend_labels else None, zorder=10)
         if show_round:
             ax.set_title(f"Round {round_num}", fontsize=18, fontweight="bold", pad=12)
         ax.set_xlabel("")
@@ -150,37 +144,22 @@ def main():
         ax.set_xticklabels([])
         ax.set_yticklabels([])
         ax.grid(True, alpha=0.3, linestyle="--")
-        
-        # Add small legend in the panel (for last panel only, without prototypes)
-        if add_small_legend:
-            handles, labels = ax.get_legend_handles_labels()
-            # Filter out prototype entries (keep only Harmlessness and Helpfulness)
-            filtered_handles = []
-            filtered_labels = []
-            for handle, label in zip(handles, labels):
-                if "prototype" not in label.lower():
-                    filtered_handles.append(handle)
-                    filtered_labels.append(label)
-            ax.legend(filtered_handles, filtered_labels, loc="upper right", fontsize=7, framealpha=0.9, 
-                     fancybox=True, shadow=False, handlelength=1.0, handletextpad=0.3,
-                     columnspacing=0.5, borderpad=0.3)
 
     for col in range(n_cols):
-        out = data_39000[col]
+        out = data_39010[col]
         if out is not None:
             draw_panel(axes[col], out[0], out[1], out[2], out[3], show_round=True, add_legend_labels=False)
         else:
             axes[col].set_visible(False)
 
     for col in range(n_cols):
-        out = data_59001[col]
+        out = data_59011[col]
         if out is not None:
-            draw_panel(axes[4 + col], out[0], out[1], out[2], out[3], show_round=False, 
-                      add_legend_labels=(col == 0), add_small_legend=False)
+            draw_panel(axes[4 + col], out[0], out[1], out[2], out[3], show_round=False, add_legend_labels=(col == 0))
         else:
             axes[4 + col].set_visible(False)
 
-    # Row labels in left band (center of 0..margin_left) so they don’t overlap panels
+    # Row labels in left band (center of 0..margin_left) so they don't overlap panels
     label_x = margin_left * 0.5
     y_top = margin_bottom + panel_h + gap_v + panel_h / 2
     y_bot = margin_bottom + panel_h / 2
@@ -191,7 +170,7 @@ def main():
     handles, labels = axes[4].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.05), ncol=4, fontsize=13, framealpha=0.95)
 
-    out_path = os.path.join(EXP_DIR_59001, "cross_client_z_tsne_39000_59001_2x4_paper.png")
+    out_path = os.path.join(EXP_DIR_59011, "cross_client_z_tsne_39010_59011_2x4_paper.png")
     plt.savefig(out_path, dpi=300, bbox_inches="tight", facecolor="white", edgecolor="none")
     plt.close()
     print(f"Saved 2x4 paper figure: {out_path}")

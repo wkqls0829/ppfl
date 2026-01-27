@@ -157,7 +157,25 @@ class DPORewardTrainer(LLMTrainer):
                 if variational_encoder is not None and z_to_embedding is not None:
                     self.variational_encoder = variational_encoder
                     self.feature_extractor = feature_extractor
-                    self.z_to_embedding = z_to_embedding
+                    
+                    # Verify z_to_embedding output dimension matches model embedding dimension
+                    try:
+                        actual_embedding_dim = ctx.model.get_input_embeddings().embedding_dim
+                        z_to_embedding_output_dim = z_to_embedding.weight.shape[0]  # (out_features, in_features)
+                        
+                        if z_to_embedding_output_dim != actual_embedding_dim:
+                            logger.warning(f"z_to_embedding output dimension ({z_to_embedding_output_dim}) does not match "
+                                         f"model embedding dimension ({actual_embedding_dim}). Reinitializing z_to_embedding.")
+                            # Reinitialize z_to_embedding with correct output dimension
+                            vpl_latent_dim = z_to_embedding.weight.shape[1]  # in_features
+                            import torch.nn as nn
+                            self.z_to_embedding = nn.Linear(vpl_latent_dim, actual_embedding_dim).to(ctx.device)
+                            logger.info(f"Reinitialized z_to_embedding: {vpl_latent_dim} -> {actual_embedding_dim}")
+                        else:
+                            self.z_to_embedding = z_to_embedding
+                    except Exception as e:
+                        logger.warning(f"Could not verify z_to_embedding dimension: {e}. Using loaded z_to_embedding.")
+                        self.z_to_embedding = z_to_embedding
                     
                     # Match dtype with model
                     model_dtype = next(ctx.model.parameters()).dtype
@@ -401,6 +419,14 @@ class DPORewardTrainer(LLMTrainer):
         
         # Get input embeddings
         input_embeddings = ctx.model.get_input_embeddings()(input_ids)
+        actual_embedding_dim = input_embeddings.shape[-1]
+        
+        # Verify z_to_embedding output dimension matches actual embedding dimension
+        z_to_embedding_output_dim = self.z_to_embedding.weight.shape[0]
+        if z_to_embedding_output_dim != actual_embedding_dim:
+            logger.error(f"z_to_embedding output dimension ({z_to_embedding_output_dim}) does not match "
+                        f"model embedding dimension ({actual_embedding_dim}). Cannot inject z.")
+            return None  # Return None to fall back to standard generation
         
         # Project z to embedding space
         z_embedding = self.z_to_embedding(z)  # (batch_size, embedding_dim)

@@ -6,6 +6,7 @@ federate:
   mode: standalone
   client_num: 20  # All 20 clients participate in evaluation (10 training + 10 unseen)
   total_round_num: 50
+  unseen_clients_id: [11, 12, 13, 14, 15, 16, 17, 18, 19, 20]  # Unseen clients (not in selector training)
   save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_qwen2_fedbiscuit_unseen.ckpt"  # Override in script
   save_freq: 50
   share_local_model: True

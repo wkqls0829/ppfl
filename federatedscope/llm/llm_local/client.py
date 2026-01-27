@@ -169,8 +169,15 @@ class LLMMultiLoRAClient(Client):
                 }
             
             # VPL: Add z distribution and values to model parameters
-            # Always collect z values for visualization (not just for GP prior)
-            if hasattr(self.trainer, 'get_client_z_values'):
+            # OPTIMIZATION: Only collect z values when needed for visualization to reduce overhead
+            # Check if this round needs visualization (same logic as server)
+            should_collect_z = True
+            if hasattr(self._cfg.llm, 'vpl_tsne_visualize_freq'):
+                visualize_freq = self._cfg.llm.vpl_tsne_visualize_freq
+                if visualize_freq > 1 and self.state % visualize_freq != 0:
+                    should_collect_z = False
+            
+            if should_collect_z and hasattr(self.trainer, 'get_client_z_values'):
                 z_values = self.trainer.get_client_z_values()
                 if z_values is not None:
                     model_para_all['client_z_values'] = z_values.cpu() if isinstance(z_values, torch.Tensor) else z_values
