@@ -69,7 +69,7 @@ trainer:
   type: llmdporewardtrainer  # DPO trainer for RL training (not binary selector)
 eval:
   freq: 5  # Evaluation 빈도
-  metrics: ['loss', 'acc']  # Reward model evaluation disabled
+  metrics: ['loss', 'acc', 'helpfulness_winrate', 'harmlessness_winrate']  # Reward model (avg_*) disabled; GPT-4 winrate kept
   best_res_update_round_wise_key: train_avg_loss  # Use train_avg_loss instead of val_avg_loss
   count_flops: False
 expname: vplgp_hrl_ortho_t51022

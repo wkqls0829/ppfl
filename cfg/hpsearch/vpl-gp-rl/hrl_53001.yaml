@@ -78,7 +78,7 @@ trainer:
   type: llmdporewardtrainer
 eval:
   freq: 5
-  metrics: ['loss', 'acc']  # Reward model evaluation disabled
+  metrics: ['loss', 'acc', 'helpfulness_winrate', 'harmlessness_winrate']  # Reward model evaluation disabled
   best_res_update_round_wise_key: train_avg_loss
   count_flops: false
 expname: vplgp_hrl_ortho_t53001

@@ -44,7 +44,7 @@ train:
   is_enable_half: True
 eval:
   freq: 1  # Evaluate every round
-  metrics: ['loss', 'acc']  # Reward model evaluation disabled
+  metrics: ['loss', 'acc', 'helpfulness_winrate', 'harmlessness_winrate']
   count_flops: False
 wandb:
   use: True  # Enable wandb tracking

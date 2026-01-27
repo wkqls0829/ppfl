@@ -69,7 +69,7 @@ trainer:
   type: llmdporewardtrainer
 eval:
   freq: 5
-  metrics: ['loss', 'acc']  # Reward model evaluation disabled
+  metrics: ['loss', 'acc', 'helpfulness_winrate', 'harmlessness_winrate']  # Reward model (avg_*) disabled; GPT-4 winrate kept
   best_res_update_round_wise_key: train_avg_loss
   count_flops: False
   # openai_api_key: set via environment variable OPENAI_API_KEY

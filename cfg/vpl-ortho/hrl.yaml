@@ -23,7 +23,7 @@ llm:
   tok_len: 1024
   max_new_token: 512
   num_completions: 2
-  metrics: ['loss', 'acc']
+  metrics: ['loss', 'acc', 'helpfulness_winrate', 'harmlessness_winrate']
   best_res_update: False
   grad_accum_step: 32
   max_prompts_for_generation: 50
@@ -55,7 +55,7 @@ train:
   is_enable_half: True
 eval:
   freq: 1
-  metrics: ['loss', 'acc']
+  metrics: ['loss', 'acc', 'helpfulness_winrate', 'harmlessness_winrate']
   best_res_update_round_wise_key: test_loss
   count_flops: False
 wandb:

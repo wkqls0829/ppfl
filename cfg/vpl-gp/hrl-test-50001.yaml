@@ -85,6 +85,8 @@ eval:
   metrics:
   - loss
   - acc
+  - helpfulness_winrate
+  - harmlessness_winrate
   # Reward model evaluation disabled
   best_res_update_round_wise_key: test_loss
   count_flops: false
