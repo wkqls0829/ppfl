@@ -1070,6 +1070,7 @@ class LLMMultiLoRAServer(Server):
         Compute average z for each client from stored z_values_dict.
         Uses the most recent z values (latest round) for each client.
         This is used to save client-specific z information in checkpoint for RL training.
+        Ensures ALL clients (1 to client_num) have z values saved, even if they didn't participate in the final round.
         """
         self.client_average_z_dict = {}
         
@@ -1103,6 +1104,7 @@ class LLMMultiLoRAServer(Server):
                     continue
             
             # Priority 2: Fallback to stored z_values_dict (if current round data not available)
+            # This ensures we get z values for clients that didn't participate in the final round
             if client_id in self.client_z_values_dict and len(self.client_z_values_dict[client_id]) > 0:
                 z_list = self.client_z_values_dict[client_id]
                 z_array = np.array(z_list)  # (num_samples, latent_dim)
@@ -1112,9 +1114,46 @@ class LLMMultiLoRAServer(Server):
                 avg_z_tensor = torch.tensor(avg_z, dtype=torch.float32)
                 self.client_average_z_dict[client_id] = avg_z_tensor
                 logger.debug(f"Computed average z for client {client_id} from stored z_values_dict: shape {avg_z_tensor.shape}, from {len(z_list)} z samples")
+            else:
+                # Priority 3: Try to get z from previous rounds' msg_buffer
+                # Search backwards through rounds to find z values for this client
+                found_z = False
+                for round_num in sorted(self.msg_buffer.get('train', {}).keys(), reverse=True):
+                    if round_num == self.state:
+                        continue  # Already checked current round
+                    round_buffer = self.msg_buffer.get('train', {}).get(round_num, {})
+                    if client_id in round_buffer:
+                        if self.model_num == 1:
+                            _, model_para = round_buffer[client_id]
+                        else:
+                            _, model_para_multiple = round_buffer[client_id]
+                            model_para = model_para_multiple[0]
+                        
+                        if 'client_z_values' in model_para:
+                            z_values = model_para['client_z_values']
+                            if isinstance(z_values, torch.Tensor):
+                                z_values = z_values.detach().cpu().numpy()
+                            elif isinstance(z_values, list):
+                                z_values = np.array(z_values)
+                            
+                            if len(z_values.shape) == 1:
+                                z_values = z_values.reshape(1, -1)
+                            
+                            avg_z = np.mean(z_values, axis=0)
+                            avg_z_tensor = torch.tensor(avg_z, dtype=torch.float32)
+                            self.client_average_z_dict[client_id] = avg_z_tensor
+                            logger.debug(f"Computed average z for client {client_id} from round {round_num}: shape {avg_z_tensor.shape}, from {len(z_values)} z samples")
+                            found_z = True
+                            break
+                
+                if not found_z:
+                    logger.warning(f"Could not find z values for client {client_id} in any round or stored z_values_dict. This client will not have z values in checkpoint.")
         
         if len(self.client_average_z_dict) > 0:
-            logger.info(f"Computed average z for {len(self.client_average_z_dict)} clients for checkpoint saving (for RL training)")
+            logger.info(f"Computed average z for {len(self.client_average_z_dict)}/{self.client_num} clients for checkpoint saving (for RL training)")
+            if len(self.client_average_z_dict) < self.client_num:
+                missing = set(range(1, self.client_num + 1)) - set(self.client_average_z_dict.keys())
+                logger.warning(f"Missing z values for clients: {sorted(missing)}")
         else:
             logger.warning("No client average z computed (no z values stored)")
     

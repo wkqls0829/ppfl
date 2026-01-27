@@ -564,7 +564,35 @@ class RLHF_finetuning:
                                 sample['client_id'] = client_id
                             harmless_preference.extend(client_preference)
                         else:
-                            logger.warning(f"Client {client_id} z not found in client_average_z_dict. Skipping {len(client_pairs)} pairs.")
+                            # Fallback: Use overall average z if client-specific z is not available
+                            if self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0:
+                                all_z_mus = torch.stack(list(self.client_average_z_dict.values()))
+                                overall_avg_z = all_z_mus.mean(dim=0)  # (latent_dim,)
+                                fallback_z_dict = {client_id: overall_avg_z}
+                                logger.warning(f"Client {client_id} z not found in client_average_z_dict. Using overall average z for {len(client_pairs)} pairs.")
+                                client_preference = variational_better_response(
+                                    client_pairs,
+                                    self.selector_model,
+                                    self.selector_tokenizer,
+                                    variational_encoder,
+                                    feature_extractor,
+                                    self.selector_prompt,
+                                    choices,
+                                    device=self.device,
+                                    use_feature_difference=getattr(self.config.llm, 'vpl_use_feature_difference', True),
+                                    num_samples=getattr(self.config.llm, 'rlhf_variational_num_samples', 1),
+                                    latent_projection=latent_projection,
+                                    z_to_embedding=z_to_embedding,
+                                    use_provided_z=False,
+                                    client_average_z_dict=fallback_z_dict
+                                )
+                                # Add preference_type and client_id
+                                for sample in client_preference:
+                                    sample['preference_type'] = 'harmlessness'
+                                    sample['client_id'] = client_id
+                                harmless_preference.extend(client_preference)
+                            else:
+                                logger.error(f"Client {client_id} z not found and no fallback available. Skipping {len(client_pairs)} pairs.")
                 
                 # Perform binary selection for helpfulness pairs (using assigned helpful_client_id z)
                 helpful_preference = []
@@ -603,7 +631,35 @@ class RLHF_finetuning:
                                 sample['client_id'] = client_id
                             helpful_preference.extend(client_preference)
                         else:
-                            logger.warning(f"Client {client_id} z not found in client_average_z_dict. Skipping {len(client_pairs)} pairs.")
+                            # Fallback: Use overall average z if client-specific z is not available
+                            if self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0:
+                                all_z_mus = torch.stack(list(self.client_average_z_dict.values()))
+                                overall_avg_z = all_z_mus.mean(dim=0)  # (latent_dim,)
+                                fallback_z_dict = {client_id: overall_avg_z}
+                                logger.warning(f"Client {client_id} z not found in client_average_z_dict. Using overall average z for {len(client_pairs)} pairs.")
+                                client_preference = variational_better_response(
+                                    client_pairs,
+                                    self.selector_model,
+                                    self.selector_tokenizer,
+                                    variational_encoder,
+                                    feature_extractor,
+                                    self.selector_prompt,
+                                    choices,
+                                    device=self.device,
+                                    use_feature_difference=getattr(self.config.llm, 'vpl_use_feature_difference', True),
+                                    num_samples=getattr(self.config.llm, 'rlhf_variational_num_samples', 1),
+                                    latent_projection=latent_projection,
+                                    z_to_embedding=z_to_embedding,
+                                    use_provided_z=False,
+                                    client_average_z_dict=fallback_z_dict
+                                )
+                                # Add preference_type and client_id
+                                for sample in client_preference:
+                                    sample['preference_type'] = 'helpfulness'
+                                    sample['client_id'] = client_id
+                                helpful_preference.extend(client_preference)
+                            else:
+                                logger.error(f"Client {client_id} z not found and no fallback available. Skipping {len(client_pairs)} pairs.")
                 
                 # Combine both preference types
                 list_preference_data = harmless_preference + helpful_preference

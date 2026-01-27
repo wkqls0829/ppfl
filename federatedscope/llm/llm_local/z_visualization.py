@@ -224,11 +224,16 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
             if orthogonal_prototypes is not None:
                 z_data['orthogonal_prototypes'] = orthogonal_prototypes.tolist()
             
+            # Ensure output directory exists
+            os.makedirs(output_dir, exist_ok=True)
+            
             with open(z_data_path, 'w') as f:
                 json.dump(z_data, f, indent=2)
             logger.info(f"Saved z values data to {z_data_path} ({num_points} points, {num_clients} clients)")
         except Exception as e:
-            logger.warning(f"Failed to save z values to JSON: {e}")
+            logger.error(f"Failed to save z values to JSON: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     # Log to WandB if available with enhanced visualization
     if wandb_project:

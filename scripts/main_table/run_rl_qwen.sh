@@ -32,18 +32,18 @@ WORK_DIR="/home2/jbkoo/ppfl"
 cd $WORK_DIR
 
 # Determine data root and checkpoint directory based on environment
-# Cluster: use /hdd/hdd3/kjb/
-# Local server: use WORK_DIR
+# Local server: /hdd/hdd3/kjb exists → use /hdd/hdd3/kjb
+# Cluster (SLURM): /hdd/hdd3/kjb doesn't exist → use WORK_DIR
 if [ -d "/hdd/hdd3/kjb" ]; then
-    # Cluster environment
+    # Local server environment
     DATA_ROOT="/hdd/hdd3/kjb"
     CHECKPOINT_BASE="/hdd/hdd3/kjb/checkpoints"
-    echo "Cluster environment detected. Using data root: $DATA_ROOT"
+    echo "Local server environment detected. Using data root: $DATA_ROOT"
 else
-    # Local server environment
+    # Cluster environment (SLURM job, /hdd/hdd3 doesn't exist)
     DATA_ROOT="$WORK_DIR/data"
     CHECKPOINT_BASE="$WORK_DIR/checkpoints"
-    echo "Local server environment. Using data root: $DATA_ROOT"
+    echo "Cluster environment detected. Using data root: $DATA_ROOT"
 fi
 mkdir -p "$DATA_ROOT" "$CHECKPOINT_BASE"
 
