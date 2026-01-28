@@ -1,0 +1,41 @@
+We consider a Federated Learning (FL) system consisting of $K$ clients. Each client $i \in \{1, \ldots, K\}$ has a private dataset of pairwise preferences $\mathcal{D}_i = \{(s_A, s_B, y)\}$, where $s_A$ and $s_B$ are two candidate responses from a Large Language Model (LLM), and $y \in \{0, 1\}$ indicates the user's preference (with $y=1$ denoting $s_A \succ s_B$).
+
+\subsection{Standard Federated Preference Alignment}
+\label{sec:prelim-standard}
+In standard Federated RLHF settings (e.g., FedDPO or FedBiscuit), the goal is to learn a global reward model $r_\theta(s_A, s_B)$ that maximizes the likelihood of user preferences across all clients \citep{wu2024towards}. The preference probability is typically modeled using the Bradley-Terry-Luce (BTL) model:
+\begin{equation}
+    p_\theta(y=1 \mid s_A, s_B) = \sigma \left( r_\theta(s_A) - r_\theta(s_B) \right),
+\end{equation}
+where $\sigma(\cdot)$ is the sigmoid function. The federated objective minimizes the aggregate negative log-likelihood: $\min_\theta \sum_{i=1}^K \mathbb{E}_{\mathcal{D}_i} [-\log p_\theta(y \mid s_A, s_B)]$.
+
+However, this formulation assumes a single consensus reward function $r_\theta$, which inevitably averages out conflicting preferences (e.g., ``Helpful'' vs.\ ``Harmless'') and fails to capture user-specific nuances \citep{poddar2024personalizing}.
+
+\subsection{Variational Preference Learning}
+\label{sec:prelim-vpl}
+To address heterogeneity, we adopt a latent conditional framework. We assume each user $i$ is governed by a continuous latent preference vector $z_i \in \mathbb{R}^d$ (typically $d=32$) that conditions the reward model. For binary choice tasks, we condition the model's logits on $z_i$ through a learned projection network:
+\begin{equation}
+    \text{logits}(s_A, s_B \mid z_i) = \text{logits}_{\text{base}}(s_A, s_B) + f_\theta(z_i),
+\end{equation}
+where $f_\theta: \mathbb{R}^d \to \mathbb{R}^{|\mathcal{C}|}$ is a learned linear projection (latent projection) that maps the latent vector to logit adjustments, and $\mathcal{C}$ is the set of choice tokens (typically $\{A, B\}$). The choice probability is then computed via softmax over the conditioned logits.
+
+Since $z_i$ is unobserved, we treat it as a latent variable and employ Variational Inference (VI). We introduce a local variational posterior $q_\phi(z \mid \mathcal{D}_i) = \mathcal{N}(z; \mu_i, \sigma_i^2 I)$ parameterized by $\phi$ to approximate the true posterior. The encoder extracts preference features (e.g., embedding difference $\Delta h = h_{\text{chosen}} - h_{\text{rejected}}$) and outputs posterior parameters $(\mu_i, \sigma_i^2)$. The latent vector is sampled using the reparameterization trick: $z_i = \mu_i + \sigma_i \odot \epsilon$, where $\epsilon \sim \mathcal{N}(0, I)$ and $\sigma_i = \exp(0.5 \cdot \log\sigma_i^2)$; $\odot$ denotes element-wise multiplication. For brevity in the method (Sec.~\ref{sec:variational}), we define
+\begin{equation}
+    q_i := q_\phi(z \mid \mathcal{D}_i), \qquad \mathcal{N}_0 := \mathcal{N}(0, I).
+\end{equation}
+Thus $q_i$ denotes client $i$'s variational posterior, and $\mathcal{N}_0$ the standard Gaussian prior.
+
+The objective is to maximize the Evidence Lower Bound (ELBO):
+\begin{equation} \label{eq:elbo-prelim}
+    \mathcal{L}_{\text{ELBO}} = \mathbb{E}_{q_\phi(z \mid \mathcal{D}_i)} \left[ \log p_\theta(\mathcal{D}_i \mid z) \right] - \beta \,\mathbb{D}_{KL}(q_\phi(z \mid \mathcal{D}_i) \,\|\, p(z)),
+\end{equation}
+where $p(z)$ is the prior over latent preferences and $\beta$ is a regularization coefficient. In the baseline VPL ablation we use $p(z) = \mathcal{N}_0$; in our default setting we use a federated mixture prior (Sec.~\ref{sec:variational}).
+
+\subsection{Limitations of Federated Variational Preference Learning}
+\label{sec:prelim-limitations}
+Transposing VPL to Federated Learning raises two main issues: \textit{preference heterogeneity} and \textit{data sparsity}.
+
+\textbf{Heterogeneity:} In centralized VPL the model sees all user data and learns a global latent structure; in FL, clients infer in isolation. The prior $\mathcal{N}_0$ is agnostic to the population, so clients cannot align $z_i$ with a shared manifold, and coherent preference clusters fail to emerge.
+
+\textbf{Sparsity:} Fragmentation leaves each client with small $|\mathcal{D}_i|$, so the posterior $q_i$ is estimated with high variance. Insufficient samples yield unstable variational parameters and gradients, hindering convergence.
+
+A client thus cannot learn a reliable personalized distribution from local data and $\mathcal{N}_0$ alone. We address this with a Federated Mixture Prior (Sec.~\ref{sec:variational}), using other clients' learned distributions as a dynamic prior to stabilize inference and transfer knowledge across clients.

@@ -147,7 +147,7 @@ if "$MODEL" == "qwen2":
 if "$METHOD" == "fedvpagp":
     config['llm']['vpl_use_gp_prior'] = True
     config['llm']['vpl_latent_dim'] = 32
-    config['llm']['vpl_kl_weight'] = 0.02  # Updated from hyperparameter search
+    config['llm']['vpl_kl_weight'] = 0.1  # Updated from hyperparameter search
     config['llm']['vpl_gp_temperature'] = 1.0
     config['llm']['vpl_feature_method'] = 'choice_logits'
     config['llm']['vpl_use_feature_difference'] = True

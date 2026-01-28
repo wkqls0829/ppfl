@@ -1345,8 +1345,16 @@ class RLHF_finetuning:
                     except Exception:
                         pass
             
-            # Load test data: split by client if VPL model, otherwise combine
-            if is_vpl_model and self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0:
+            # Check if this is an unseen experiment (needs client-specific test data)
+            unseen_clients_id = []
+            if self.selector_cfg is not None:
+                unseen_clients_id = getattr(self.selector_cfg.federate, 'unseen_clients_id', [])
+            if len(unseen_clients_id) == 0:
+                unseen_clients_id = getattr(self.config.federate, 'unseen_clients_id', [])
+            
+            # Load test data: split by client if VPL model OR unseen experiment, otherwise combine
+            is_unseen_experiment = len(unseen_clients_id) > 0
+            if (is_vpl_model and self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0) or is_unseen_experiment:
                 # Load test data split by client (harmless: 1 to num_clients//2, helpful: num_clients//2+1 to num_clients)
                 num_clients = self.num_clients
                 client_test_data, _, _ = load_hh_rlhf_for_rlhf(
@@ -1360,6 +1368,9 @@ class RLHF_finetuning:
                 
                 # Store client_test_data as instance variable for seen/unseen evaluation
                 self.client_test_data = client_test_data
+                
+                if is_unseen_experiment:
+                    logger.info(f"Unseen experiment detected. Loaded client-specific test data for {len(unseen_clients_id)} unseen clients")
                 
                 if client_test_data is None or len(client_test_data) == 0:
                     logger.warning("No test prompts loaded. Test evaluation will be skipped.")
