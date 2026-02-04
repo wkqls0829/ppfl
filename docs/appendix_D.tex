@@ -1,0 +1,325 @@
+\section{Mathematical Proofs}
+\label{app:proofs}
+
+This section provides detailed mathematical proofs and derivations for key components of our method.
+
+\subsection{KL Divergence with Mixture Prior}
+
+\subsubsection{Definition and Computation}
+
+\textbf{Theorem 1} (KL Divergence with Mixture Prior): The KL divergence between a posterior distribution $q_i(z) = \mathcal{N}(z; \mu_i, \sigma_i^2 I)$ and a mixture prior $p_{\text{mixture}}(z) = \sum_{j=1}^{|\mathcal{S}|} w_j \cdot \mathcal{N}(z; \mu_j, \sigma_j^2 I)$ is given by:
+
+\begin{equation}
+\mathbb{D}_{KL}(q_i \,\|\, p_{\text{mixture}}) = \mathbb{E}_{z \sim q_i} \left[ \log q_i(z) - \log p_{\text{mixture}}(z) \right],
+\end{equation}
+
+where $\mathcal{S}$ is the set of participating clients from the previous round and $w_j$ are normalized weights (typically sample-size weighted: $w_j = n_j / \sum_{k \in \mathcal{S}} n_k$).
+
+\textbf{Proof:} By definition of KL divergence:
+
+\begin{align}
+\mathbb{D}_{KL}(q_i \,\|\, p_{\text{mixture}}) &= \int q_i(z) \log \frac{q_i(z)}{p_{\text{mixture}}(z)} dz \nonumber \\
+&= \int q_i(z) \left[ \log q_i(z) - \log p_{\text{mixture}}(z) \right] dz \nonumber \\
+&= \mathbb{E}_{z \sim q_i} \left[ \log q_i(z) - \log p_{\text{mixture}}(z) \right].
+\end{align}
+
+For a multivariate Gaussian posterior $q_i(z) = \mathcal{N}(z; \mu_i, \sigma_i^2 I)$ with dimension $d$, we have:
+
+\begin{equation}
+\log q_i(z) = -\frac{d}{2}\log(2\pi) - \frac{1}{2}\sum_{j=1}^{d} \log\sigma_{i,j}^2 - \frac{1}{2}\sum_{j=1}^{d} \frac{(z_j - \mu_{i,j})^2}{\sigma_{i,j}^2}.
+\end{equation}
+
+For the mixture prior, we compute:
+
+\begin{equation}
+\log p_{\text{mixture}}(z) = \log \left[ \sum_{j=1}^{|\mathcal{S}|} w_j \cdot \mathcal{N}(z; \mu_j, \sigma_j^2 I) \right].
+\end{equation}
+
+Using Monte Carlo estimation with batch size $B$:
+
+\begin{equation}
+\mathbb{D}_{KL} \approx \frac{1}{B} \sum_{b=1}^{B} \left[ \log q_i(z^{(b)}) - \log p_{\text{mixture}}(z^{(b)}) \right],
+\end{equation}
+
+where $z^{(b)} \sim q_i$ is sampled using the reparameterization trick:
+
+\begin{equation}
+z^{(b)} = \mu_i + \sigma_i \odot \epsilon^{(b)}, \quad \epsilon^{(b)} \sim \mathcal{N}(0, I),
+\end{equation}
+
+and $\sigma_i = \exp(0.5 \cdot \log\sigma_i^2)$ with $\odot$ denoting element-wise multiplication.
+
+$\square$
+
+\subsubsection{Log-Sum-Exp Trick for Numerical Stability}
+
+\textbf{Theorem 2} (Log-Sum-Exp Trick): For numerical stability when computing $\log p_{\text{mixture}}(z)$, we use the log-sum-exp trick:
+
+\begin{equation}
+\log\left(\sum_{i=1}^{N} \exp(a_i)\right) = \max_i a_i + \log\left(\sum_{i=1}^{N} \exp(a_i - \max_i a_i)\right).
+\end{equation}
+
+\textbf{Proof:} We factor out the maximum term:
+
+\begin{align}
+\sum_{i=1}^{N} \exp(a_i) &= \exp(\max_i a_i) \cdot \sum_{i=1}^{N} \exp(a_i - \max_i a_i).
+\end{align}
+
+Taking the logarithm of both sides:
+
+\begin{equation}
+\log\left(\sum_{i=1}^{N} \exp(a_i)\right) = \max_i a_i + \log\left(\sum_{i=1}^{N} \exp(a_i - \max_i a_i)\right).
+\end{equation}
+
+Since $\exp(a_i - \max_i a_i) \in [0, 1]$ for all $i$, this formulation is numerically stable and prevents overflow/underflow.
+
+For the mixture prior, we apply this trick with:
+
+\begin{equation}
+a_j = \log w_j + \log \mathcal{N}(z; \mu_j, \sigma_j^2 I),
+\end{equation}
+
+where:
+
+\begin{equation}
+\log \mathcal{N}(z; \mu_j, \sigma_j^2 I) = -\frac{d}{2}\log(2\pi) - \frac{1}{2}\sum_{k=1}^{d} \log\sigma_{j,k}^2 - \frac{1}{2}\sum_{k=1}^{d} \frac{(z_k - \mu_{j,k})^2}{\sigma_{j,k}^2}.
+\end{equation}
+
+$\square$
+
+\subsection{Reparameterization Trick and Gradient Flow}
+
+\textbf{Theorem 3} (Reparameterization Trick Gradient Flow): Using the reparameterization trick, gradients with respect to $z$ flow to $\mu$ and $\log\sigma^2$.
+
+\textbf{Proof:} The reparameterization trick expresses the random variable $z$ as a deterministic function of parameters and noise:
+
+\begin{equation}
+z = \mu + \epsilon \odot \exp(0.5 \cdot \log\sigma^2), \quad \epsilon \sim \mathcal{N}(0, I),
+\end{equation}
+
+where $\sigma = \exp(0.5 \cdot \log\sigma^2)$.
+
+The partial derivatives are:
+
+\begin{align}
+\frac{\partial z}{\partial \mu} &= I \quad \text{(identity matrix)}, \\
+\frac{\partial z}{\partial \log\sigma^2} &= \epsilon \odot \exp(0.5 \cdot \log\sigma^2) \odot 0.5.
+\end{align}
+
+By the chain rule, for any function $f(z)$:
+
+\begin{align}
+\frac{\partial f(z)}{\partial \mu} &= \frac{\partial f(z)}{\partial z} \cdot \frac{\partial z}{\partial \mu} = \frac{\partial f(z)}{\partial z}, \\
+\frac{\partial f(z)}{\partial \log\sigma^2} &= \frac{\partial f(z)}{\partial z} \cdot \frac{\partial z}{\partial \log\sigma^2} = \frac{\partial f(z)}{\partial z} \cdot \epsilon \odot \sigma \odot 0.5.
+\end{align}
+
+This ensures that gradients can flow through the sampling operation, enabling end-to-end training of the variational encoder.
+
+$\square$
+
+\subsection{Orthogonal Loss Formulation}
+
+\subsubsection{Pull Loss}
+
+The pull loss encourages latent representations $z$ to align with their assigned prototypes:
+
+\begin{equation}
+\mathcal{L}_{\text{pull}}(z) = \|z - \mathbf{p}_{y_i^*}\|_2^2,
+\end{equation}
+
+where $\mathbf{p}_{y_i^*}$ is the prototype assigned to client $i$ based on the server's orthogonal label $y_i^* \in \{0, 1\}$.
+
+\subsubsection{Orthonormality Constraint}
+
+To maintain orthogonality between prototypes, we enforce an orthonormality constraint:
+
+\begin{equation}
+\mathcal{L}_{\text{orthonorm}} = \|\mathbf{P}^T \mathbf{P} - \mathbf{I}\|_F^2,
+\end{equation}
+
+where $\mathbf{P} = [\mathbf{p}_0, \mathbf{p}_1]^T$ is the prototype matrix and $\|\cdot\|_F$ denotes the Frobenius norm.
+
+This constraint ensures that $\mathbf{p}_0^T \mathbf{p}_1 = 0$ (orthogonality) and $\|\mathbf{p}_0\|_2 = \|\mathbf{p}_1\|_2 = 1$ (normalization).
+
+\subsubsection{Total Orthogonal Loss}
+
+The combined orthogonal loss is:
+
+\begin{equation}
+\mathcal{L}_{\text{orthogonal}}(z) = \lambda \cdot \mathcal{L}_{\text{pull}}(z) + \gamma \cdot \mathcal{L}_{\text{orthonorm}},
+\end{equation}
+
+where $\lambda = 1.0$ (orthogonal weight) and $\gamma = 0.1$ (orthonorm weight) are hyperparameters.
+
+This loss encourages latent representations to cluster around their assigned prototypes while ensuring that different preference types occupy orthogonal subspaces, thereby suppressing general features that are not preference-specific and preventing neural collapse.
+
+\subsection{Evidence Lower Bound (ELBO) Derivation}
+
+\textbf{Theorem 4} (ELBO Derivation): The Evidence Lower Bound (ELBO) for variational inference is:
+
+\begin{equation}
+\mathcal{L}_{\text{ELBO}} = \mathbb{E}_{q_\phi(z \mid \mathcal{D}_i)} \left[ \log p_\theta(\mathcal{D}_i \mid z) \right] - \beta \,\mathbb{D}_{KL}(q_\phi(z \mid \mathcal{D}_i) \,\|\, p(z)),
+\end{equation}
+
+where $\beta$ is a regularization coefficient.
+
+\textbf{Proof:} We start with the log-likelihood of the data:
+
+\begin{equation}
+\log p_\theta(\mathcal{D}_i) = \log \int p_\theta(\mathcal{D}_i \mid z) p(z) dz.
+\end{equation}
+
+Introducing the variational posterior $q_\phi(z \mid \mathcal{D}_i)$:
+
+\begin{align}
+\log p_\theta(\mathcal{D}_i) &= \log \int q_\phi(z \mid \mathcal{D}_i) \cdot \frac{p_\theta(\mathcal{D}_i \mid z) p(z)}{q_\phi(z \mid \mathcal{D}_i)} dz \nonumber \\
+&= \log \mathbb{E}_{q_\phi(z \mid \mathcal{D}_i)} \left[ \frac{p_\theta(\mathcal{D}_i \mid z) p(z)}{q_\phi(z \mid \mathcal{D}_i)} \right].
+\end{align}
+
+Applying Jensen's inequality (since $\log$ is concave):
+
+\begin{align}
+\log p_\theta(\mathcal{D}_i) &\geq \mathbb{E}_{q_\phi(z \mid \mathcal{D}_i)} \left[ \log \frac{p_\theta(\mathcal{D}_i \mid z) p(z)}{q_\phi(z \mid \mathcal{D}_i)} \right] \nonumber \\
+&= \mathbb{E}_{q_\phi(z \mid \mathcal{D}_i)} \left[ \log p_\theta(\mathcal{D}_i \mid z) \right] + \mathbb{E}_{q_\phi(z \mid \mathcal{D}_i)} \left[ \log \frac{p(z)}{q_\phi(z \mid \mathcal{D}_i)} \right] \nonumber \\
+&= \mathbb{E}_{q_\phi(z \mid \mathcal{D}_i)} \left[ \log p_\theta(\mathcal{D}_i \mid z) \right] - \mathbb{D}_{KL}(q_\phi(z \mid \mathcal{D}_i) \,\|\, p(z)).
+\end{align}
+
+Introducing the regularization coefficient $\beta$ to control the strength of the KL regularization:
+
+\begin{equation}
+\mathcal{L}_{\text{ELBO}} = \mathbb{E}_{q_\phi(z \mid \mathcal{D}_i)} \left[ \log p_\theta(\mathcal{D}_i \mid z) \right] - \beta \,\mathbb{D}_{KL}(q_\phi(z \mid \mathcal{D}_i) \,\|\, p(z)).
+\end{equation}
+
+The first term is the reconstruction loss (preference alignment), and the second term is the regularization (prior matching). Maximizing the ELBO is equivalent to minimizing the negative ELBO:
+
+\begin{equation}
+\mathcal{L}_i(\theta, \phi) = - \text{ELBO}(\mathcal{D}_i) = - \mathbb{E}_{q_\phi} \left[ \log p_\theta(\mathcal{D}_i \mid z) \right] + \beta \,\mathbb{D}_{KL}(q_\phi(z \mid \mathcal{D}_i) \,\|\, p(z)).
+\end{equation}
+
+$\square$
+
+\subsection{Standard Gaussian Prior KL Divergence}
+
+For the baseline VPL ablation, we use a standard Gaussian prior $p(z) = \mathcal{N}(0, I)$. The KL divergence has a closed-form expression:
+
+\textbf{Theorem 5} (Standard Gaussian Prior KL): For $q_i(z) = \mathcal{N}(z; \mu_i, \sigma_i^2 I)$ and $p(z) = \mathcal{N}(0, I)$, the KL divergence is:
+
+\begin{equation}
+\mathbb{D}_{KL}(q_i \,\|\, \mathcal{N}_0) = \frac{1}{2} \sum_{j=1}^d \left( \mu_{i,j}^2 + \sigma_{i,j}^2 - \log \sigma_{i,j}^2 - 1 \right).
+\end{equation}
+
+\textbf{Proof:} For two multivariate Gaussians, the KL divergence is:
+
+\begin{align}
+\mathbb{D}_{KL}(\mathcal{N}(\mu_1, \Sigma_1) \,\|\, \mathcal{N}(\mu_2, \Sigma_2)) &= \frac{1}{2} \left[ \text{tr}(\Sigma_2^{-1} \Sigma_1) + (\mu_2 - \mu_1)^T \Sigma_2^{-1} (\mu_2 - \mu_1) - d + \log \frac{|\Sigma_2|}{|\Sigma_1|} \right].
+\end{align}
+
+For $q_i = \mathcal{N}(\mu_i, \sigma_i^2 I)$ and $p = \mathcal{N}(0, I)$:
+
+\begin{align}
+\mathbb{D}_{KL}(q_i \,\|\, \mathcal{N}_0) &= \frac{1}{2} \left[ \text{tr}(I^{-1} \cdot \sigma_i^2 I) + (0 - \mu_i)^T I^{-1} (0 - \mu_i) - d + \log \frac{|I|}{|\sigma_i^2 I|} \right] \nonumber \\
+&= \frac{1}{2} \left[ \text{tr}(\sigma_i^2 I) + \mu_i^T \mu_i - d - \log |\sigma_i^2 I| \right] \nonumber \\
+&= \frac{1}{2} \left[ \sum_{j=1}^d \sigma_{i,j}^2 + \sum_{j=1}^d \mu_{i,j}^2 - d - \sum_{j=1}^d \log \sigma_{i,j}^2 \right] \nonumber \\
+&= \frac{1}{2} \sum_{j=1}^d \left( \mu_{i,j}^2 + \sigma_{i,j}^2 - \log \sigma_{i,j}^2 - 1 \right).
+\end{align}
+
+$\square$
+
+\subsection{Gumbel-Softmax for Differentiable Prior Sampling}
+
+For sampling from the mixture prior (used in visualization and generation), we employ Gumbel-Softmax relaxation \citep{jang2016categorical} with temperature $\tau = 1.0$ to enable differentiable sampling.
+
+\textbf{Component probabilities:}
+
+\begin{equation}
+\alpha_j = \frac{\exp((\log w_j + g_j) / \tau)}{\sum_{k=1}^{|\mathcal{S}|} \exp((\log w_k + g_k) / \tau)},
+\end{equation}
+
+where $g_j \sim \text{Gumbel}(0, 1)$ are independent Gumbel random variables.
+
+\textbf{Sampling:}
+
+\begin{equation}
+z_{\text{prior}} = \sum_{j=1}^{|\mathcal{S}|} \alpha_j \cdot z_j, \quad \text{where } z_j \sim \mathcal{N}(\mu_j, \sigma_j^2 I).
+\end{equation}
+
+As $\tau \to 0$, this approaches categorical sampling (hard assignment), while $\tau > 0$ provides a smooth, differentiable approximation.
+
+\subsection{Gradient Computation for Mixture Prior}
+
+\textbf{Theorem 6} (Gradient of KL with Respect to Posterior Parameters): The gradient of the KL divergence with respect to posterior parameters $\mu_i$ and $\log\sigma_i^2$ is:
+
+\begin{align}
+\frac{\partial \mathbb{D}_{KL}}{\partial \mu_i} &= \frac{1}{B} \cdot \left( \frac{z - \mu_i}{\sigma_i^2} + \sum_{j=1}^{|\mathcal{S}|} \text{softmax}_j \cdot \frac{z - \mu_j}{\sigma_j^2} \right), \\
+\frac{\partial \mathbb{D}_{KL}}{\partial \log\sigma_i^2} &= \frac{1}{B} \cdot \left( -\frac{1}{2} + \frac{(z - \mu_i)^2}{2\sigma_i^2} + \sum_{j=1}^{|\mathcal{S}|} \text{softmax}_j \cdot \frac{z - \mu_j}{\sigma_j^2} \cdot \epsilon \odot \sigma_i \odot 0.5 \right),
+\end{align}
+
+where $\text{softmax}_j = \exp(a_j - \max_k a_k) / \sum_{k=1}^{|\mathcal{S}|} \exp(a_k - \max_k a_k)$ with $a_j = \log w_j + \log \mathcal{N}(z; \mu_j, \sigma_j^2 I)$.
+
+\textbf{Proof:} The KL divergence is $\mathbb{D}_{KL} = \frac{1}{B} \sum_{b=1}^{B} [\log q_i(z^{(b)}) - \log p_{\text{mixture}}(z^{(b)})]$, where $z^{(b)} = \mu_i + \sigma_i \odot \epsilon^{(b)}$.
+
+The gradient has two paths:
+
+\textbf{Path 1:} Through $\log q_i(z)$:
+
+\begin{align}
+\frac{\partial \mathbb{D}_{KL}}{\partial \log q_i(z)} &= \frac{1}{B}, \\
+\frac{\partial \log q_i(z)}{\partial \mu_i} &= \frac{z - \mu_i}{\sigma_i^2}, \\
+\frac{\partial \log q_i(z)}{\partial \log\sigma_i^2} &= -\frac{1}{2} + \frac{(z - \mu_i)^2}{2\sigma_i^2}.
+\end{align}
+
+By chain rule:
+\begin{align}
+\frac{\partial \mathbb{D}_{KL}}{\partial \mu_i} \Big|_{\text{Path 1}} &= \frac{1}{B} \cdot \frac{z - \mu_i}{\sigma_i^2}, \\
+\frac{\partial \mathbb{D}_{KL}}{\partial \log\sigma_i^2} \Big|_{\text{Path 1}} &= \frac{1}{B} \cdot \left( -\frac{1}{2} + \frac{(z - \mu_i)^2}{2\sigma_i^2} \right).
+\end{align}
+
+\textbf{Path 2:} Through $\log p_{\text{mixture}}(z)$:
+
+\begin{align}
+\frac{\partial \mathbb{D}_{KL}}{\partial \log p_{\text{mixture}}(z)} &= -\frac{1}{B}, \\
+\frac{\partial \log p_{\text{mixture}}(z)}{\partial z} &= \sum_{j=1}^{|\mathcal{S}|} \text{softmax}_j \cdot \frac{-(z - \mu_j)}{\sigma_j^2} = -\sum_{j=1}^{|\mathcal{S}|} \text{softmax}_j \cdot \frac{z - \mu_j}{\sigma_j^2}.
+\end{align}
+
+By the reparameterization trick:
+\begin{align}
+\frac{\partial z}{\partial \mu_i} &= I, \\
+\frac{\partial z}{\partial \log\sigma_i^2} &= \epsilon \odot \sigma_i \odot 0.5.
+\end{align}
+
+By chain rule:
+\begin{align}
+\frac{\partial \mathbb{D}_{KL}}{\partial z} &= -\frac{1}{B} \cdot \left( -\sum_{j=1}^{|\mathcal{S}|} \text{softmax}_j \cdot \frac{z - \mu_j}{\sigma_j^2} \right) = \frac{1}{B} \cdot \sum_{j=1}^{|\mathcal{S}|} \text{softmax}_j \cdot \frac{z - \mu_j}{\sigma_j^2}, \\
+\frac{\partial \mathbb{D}_{KL}}{\partial \mu_i} \Big|_{\text{Path 2}} &= \frac{\partial \mathbb{D}_{KL}}{\partial z} \cdot \frac{\partial z}{\partial \mu_i} = \frac{1}{B} \cdot \sum_{j=1}^{|\mathcal{S}|} \text{softmax}_j \cdot \frac{z - \mu_j}{\sigma_j^2}, \\
+\frac{\partial \mathbb{D}_{KL}}{\partial \log\sigma_i^2} \Big|_{\text{Path 2}} &= \frac{\partial \mathbb{D}_{KL}}{\partial z} \cdot \frac{\partial z}{\partial \log\sigma_i^2} = \frac{1}{B} \cdot \sum_{j=1}^{|\mathcal{S}|} \text{softmax}_j \cdot \frac{z - \mu_j}{\sigma_j^2} \cdot \epsilon \odot \sigma_i \odot 0.5.
+\end{align}
+
+Combining both paths:
+\begin{align}
+\frac{\partial \mathbb{D}_{KL}}{\partial \mu_i} &= \frac{1}{B} \cdot \frac{z - \mu_i}{\sigma_i^2} + \frac{1}{B} \cdot \sum_{j=1}^{|\mathcal{S}|} \text{softmax}_j \cdot \frac{z - \mu_j}{\sigma_j^2}, \\
+\frac{\partial \mathbb{D}_{KL}}{\partial \log\sigma_i^2} &= \frac{1}{B} \cdot \left( -\frac{1}{2} + \frac{(z - \mu_i)^2}{2\sigma_i^2} \right) + \frac{1}{B} \cdot \sum_{j=1}^{|\mathcal{S}|} \text{softmax}_j \cdot \frac{z - \mu_j}{\sigma_j^2} \cdot \epsilon \odot \sigma_i \odot 0.5.
+\end{align}
+
+$\square$
+
+\subsection{Prior Parameter Non-Differentiability}
+
+\textbf{Theorem 7} (Prior Parameter Non-Differentiability): The mixture prior parameters $\mu_j, \sigma_j^2, w_j$ from other clients do not receive gradients.
+
+\textbf{Proof:} Prior parameters are fixed values from other clients' distributions, used as constants in the forward pass:
+
+\begin{equation}
+p_{\text{mixture}}(z) = \sum_{j=1}^{|\mathcal{S}|} w_j \cdot \mathcal{N}(z; \mu_j, \sigma_j^2 I),
+\end{equation}
+
+where $\mu_j, \sigma_j^2, w_j$ are fixed (not part of the computation graph for the current client).
+
+In the gradient computation:
+
+\begin{equation}
+\frac{\partial \mathbb{D}_{KL}}{\partial \mu_j} = \frac{\partial}{\partial \mu_j} \mathbb{E}_{z \sim q_i} \left[ \log q_i(z) - \log p_{\text{mixture}}(z) \right] = 0,
+\end{equation}
+
+since $\mu_j$ is not a leaf node in the computation graph and autograd does not compute gradients for it.
+
+$\square$

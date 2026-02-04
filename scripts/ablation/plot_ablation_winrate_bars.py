@@ -25,7 +25,7 @@ VALUES_GEMMA = {
 }
 STD = {"helpfulness_winrate": None, "harmlessness_winrate": None}
 
-METHOD_LABELS = ["FedVPL", "FedVPL+Ortho", "FedVPL+GB Prior", "FedVPA-GP"]
+METHOD_LABELS = ["FedVPL", "FedVPL+Ortho", "FedVPL+GB Prior", "FedVPA-GP (ours)"]
 
 # 출력 경로
 OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "docs", "figures")

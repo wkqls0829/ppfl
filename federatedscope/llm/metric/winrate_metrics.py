@@ -280,11 +280,19 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
             return {}
     
     max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 30)
+    # For winrate evaluation, set a reasonable default limit to prevent infinite loops
+    # Default: 30 samples for quick evaluation, or use config value if set
     if max_eval_samples <= 0:
-        max_eval_samples = float('inf')
+        max_eval_samples = 30  # Default limit instead of infinity to prevent infinite loops
+    
+    # Additional safety: set maximum iteration limit to prevent infinite loops
+    # Even if max_eval_samples is large, limit iterations to prevent runaway processes
+    max_iterations = getattr(ctx.cfg.eval, 'max_iterations_for_winrate', 1000)
+    if max_iterations <= 0:
+        max_iterations = 1000  # Default safety limit
     
     total_samples_evaluated = 0
-    should_limit = max_eval_samples != float('inf')
+    total_iterations = 0
     
     # Generation kwargs
     generation_kwargs = {
@@ -343,7 +351,13 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
     
     # Process test loader to generate responses from both models
     for batch_idx, batch in enumerate(tqdm(eval_loader, desc=f"Evaluating {metric_name} winrate with GPT API")):
-        if should_limit and total_samples_evaluated >= max_eval_samples:
+        # Check iteration limit first to prevent infinite loops
+        total_iterations += 1
+        if total_iterations > max_iterations:
+            logger.warning(f"Reached maximum iteration limit ({max_iterations}). Stopping evaluation to prevent infinite loop.")
+            break
+        
+        if total_samples_evaluated >= max_eval_samples:
             break
         
         # Handle different data formats
@@ -400,6 +414,9 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
             
             if len(valid_indices) == 0:
                 # Skip this batch if no valid samples for this metric
+                # But still check if we should break to avoid infinite loop
+                if total_samples_evaluated >= max_eval_samples or total_iterations >= max_iterations:
+                    break
                 continue
             
             # Filter to only valid samples
@@ -479,14 +496,14 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
         
         # Extract generated responses (remove prompt part)
         batch_size = len(prompts)
-        if should_limit and total_samples_evaluated + batch_size > max_eval_samples:
+        if total_samples_evaluated + batch_size > max_eval_samples:
             batch_size = max_eval_samples - total_samples_evaluated
             prompts = prompts[:batch_size]
             fine_tuned_completions = fine_tuned_completions[:batch_size]
             baseline_completions = baseline_completions[:batch_size]
         
         for i in range(batch_size):
-            if should_limit and total_samples_evaluated >= max_eval_samples:
+            if total_samples_evaluated >= max_eval_samples:
                 break
             
             prompt = prompts[i]
@@ -556,7 +573,7 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
             
             total_samples_evaluated += 1
         
-        if should_limit and total_samples_evaluated >= max_eval_samples:
+        if total_samples_evaluated >= max_eval_samples:
             break
     
     # Restore original tokenizer settings
@@ -569,12 +586,12 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
         num_wins = sum(1 for c in all_choices if c == 0)  # Fine-tuned better than baseline
         winrate = (num_wins / len(all_choices)) * 100.0
         results[f'{metric_name}_winrate'] = winrate
-        if should_limit:
-            logger.info(f"Evaluated {len(all_choices)} samples for {metric_name} winrate using GPT API ({model_name}): {winrate:.2f}% (limited from full dataset)")
-            logger.info(f"  Wins (fine-tuned > baseline): {num_wins}, Losses (baseline > fine-tuned): {len(all_choices) - num_wins}")
-        else:
-            logger.info(f"Evaluated {len(all_choices)} samples for {metric_name} winrate using GPT API ({model_name}): {winrate:.2f}%")
-            logger.info(f"  Wins (fine-tuned > baseline): {num_wins}, Losses (baseline > fine-tuned): {len(all_choices) - num_wins}")
+        logger.info(f"Evaluated {len(all_choices)} samples for {metric_name} winrate using GPT API ({model_name}): {winrate:.2f}%")
+        logger.info(f"  Wins (fine-tuned > baseline): {num_wins}, Losses (baseline > fine-tuned): {len(all_choices) - num_wins}")
+        if total_samples_evaluated >= max_eval_samples:
+            logger.info(f"  Stopped at sample limit ({max_eval_samples})")
+        if total_iterations >= max_iterations:
+            logger.warning(f"  Stopped at iteration limit ({max_iterations})")
     
     setattr(ctx, cache_key, results)
     if hasattr(ctx, 'cur_round'):

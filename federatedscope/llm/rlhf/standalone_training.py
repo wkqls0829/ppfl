@@ -1388,7 +1388,10 @@ class RLHF_finetuning:
                     
                     logger.info(f"Loaded {len(list_test_dict)} test prompts split by {len(client_test_data)} clients "
                                f"for conditional generation (VPL model)")
-                    logger.info(f"Client average z available for {len(self.client_average_z_dict)} clients")
+                    if self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0:
+                        logger.info(f"Client average z available for {len(self.client_average_z_dict)} clients")
+                    else:
+                        logger.info("No client average z available (non-VPL model or z not loaded)")
             else:
                 # Load combined test data (non-VPL or VPL without client z)
                 list_test_prompts, _, _ = load_hh_rlhf_for_rlhf(
@@ -1598,8 +1601,8 @@ class RLHF_finetuning:
                     logger.debug(f"Could not collect z values in round {r}: {e}")
             
             # Evaluate on test split if available
-            # Check both data dict and trainer's data dict
-            test_available = (data.get('test') is not None) or (hasattr(self.trainer, 'data') and self.trainer.data.get('test') is not None)
+            # Check both data dict and trainer's data dict, and client_test_data for unseen experiments
+            test_available = (data.get('test') is not None) or (hasattr(self.trainer, 'data') and self.trainer.data.get('test') is not None) or (hasattr(self, 'client_test_data') and self.client_test_data is not None and len(self.client_test_data) > 0)
             if test_available and (r + 1) % self.config.eval.freq == 0:
                 logger.info("----------- Evaluating on test split -------------")
                 
@@ -1623,28 +1626,46 @@ class RLHF_finetuning:
                     logger.info(f"  Unseen clients: {unseen_client_ids}")
                     
                     # Evaluate seen clients
+                    # Limit to max_samples_for_reward per client type (not per client)
+                    max_eval_samples = getattr(self.config.eval, 'max_samples_for_reward', 30)
                     seen_test_dict = []
+                    seen_samples_count = 0
                     for client_id in seen_client_ids:
                         if client_id in self.client_test_data:
                             for prompt_dict in self.client_test_data[client_id]:
-                                if prompt_dict.get('prompt'):
+                                if prompt_dict.get('prompt') and seen_samples_count < max_eval_samples:
                                     seen_test_dict.append({
                                         'prompt': prompt_dict['prompt'],
                                         'client_id': client_id,
                                         'output': '',
                                     })
+                                    seen_samples_count += 1
+                                if seen_samples_count >= max_eval_samples:
+                                    break
+                        if seen_samples_count >= max_eval_samples:
+                            break
+                    
+                    logger.info(f"Prepared {len(seen_test_dict)} seen test samples (limited to {max_eval_samples})")
                     
                     # Evaluate unseen clients
                     unseen_test_dict = []
+                    unseen_samples_count = 0
                     for client_id in unseen_client_ids:
                         if client_id in self.client_test_data:
                             for prompt_dict in self.client_test_data[client_id]:
-                                if prompt_dict.get('prompt'):
+                                if prompt_dict.get('prompt') and unseen_samples_count < max_eval_samples:
                                     unseen_test_dict.append({
                                         'prompt': prompt_dict['prompt'],
                                         'client_id': client_id,
                                         'output': '',
                                     })
+                                    unseen_samples_count += 1
+                                if unseen_samples_count >= max_eval_samples:
+                                    break
+                        if unseen_samples_count >= max_eval_samples:
+                            break
+                    
+                    logger.info(f"Prepared {len(unseen_test_dict)} unseen test samples (limited to {max_eval_samples})")
                     
                     # Evaluate seen clients
                     seen_results = None

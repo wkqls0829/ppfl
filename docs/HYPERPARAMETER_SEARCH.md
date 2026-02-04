@@ -2,44 +2,82 @@
 
 ## 개요
 
-이 문서는 **Variational Preference Learning with Gumbel-Softmax Prior (VPL-GP)** 모델의 하이퍼파라미터 탐색 실험에 대한 전체 계획, 진행 상황, 그리고 결과 분석 가이드를 제공합니다.
+이 문서는 **Variational Preference Learning with Gumbel-Softmax Prior (VPL-GP)** 모델의 하이퍼파라미터 탐색 실험에 대한 전체 계획, 상세 설정, 진행 상황, 그리고 결과 분석 가이드를 제공합니다.
 
 ## 실험 구조
 
 하이퍼파라미터 서치는 **2단계 구조**로 진행됩니다:
 
 1. **Selector Training (Binary Classification)**: 각 하이퍼파라미터 조합에 대해 selector 모델 학습
-   - Task ID: 52000-52017
+   - Task ID: 54000-54038
    - WandB Project: `fvpl-selector`
-   - Config: `cfg/hpsearch/vpl-gp/phase*_*.yaml`
-   - Scripts: `scripts/hpsearch/vpl-gp/phase*_*.sh`
+   - Config: `cfg/hpsearch/vpl-gp/phase_*.yaml`
+   - Scripts: `scripts/hpsearch/run_selector_hpsearch.sh <tid>`
+   - Submit: `scripts/hpsearch/submit_selector.sh <phase>`
 
 2. **RL Training (RLHF)**: 완료된 selector checkpoint를 사용하여 RLHF 학습
-   - Task ID: 53000-53017
+   - Task ID: 55000-55038
    - WandB Project: `fvpl-rl`
    - Config: `cfg/hpsearch/vpl-gp-rl/hrl_*.yaml`
-   - Scripts: `scripts/hpsearch/vpl-gp-rl/hrl_*.sh`
+   - Scripts: `scripts/hpsearch/run_rl_hpsearch.sh <rl_tid> <selector_tid>`
+   - Submit: `scripts/hpsearch/submit_rl.sh <phase>`
 
-## Phase별 실험 계획
+## 공통 설정 (모든 실험)
 
-### Phase 1: Orthogonal Loss Weight 탐색 (52000-52006)
+| 파라미터 | 값 |
+|---------|-----|
+| Model | `google/gemma-2b@huggingface_llm` |
+| Client Num | 10 |
+| Sample Client Num | 5 |
+| Total Rounds | 50 |
+| Batch Size | 8 |
+| Grad Accum Step | 4 |
+| Local Update Steps | 30 |
+| VPL Latent Dim | 32 |
+| VPL Feature Method | `choice_logits` |
+| VPL Use Feature Difference | `True` |
+| VPL Use Difference Only | `True` |
+| VPL Max Logvar | -3.0 |
+| VPL Use Manual Orthogonal Labels | `True` |
+| VPL Num Prototypes | 2 |
+
+## Phase별 실험 계획 및 상세 설정
+
+### Phase 1: Orthogonal Loss Parameters (54000-54006)
 
 **목적**: Orthogonal loss의 weight와 prototype scale을 탐색하여 클라이언트 간 preference disentanglement를 최적화합니다.
 
-**하이퍼파라미터 공간**:
+**탐색 파라미터**:
 - `vpl_orthogonal_weight`: [0.2, 1.0, 5.0]
+- `vpl_orthogonal_orthonorm_weight`: [0.0, 0.1, 0.5]
 - `vpl_prototype_scale`: [2.0, 5.0, 10.0]
-- 고정값: `vpl_kl_weight=0.1`, `vpl_gp_temperature=1.0`, `lr=0.0001`
 
-| TID | orthogonal_weight | prototype_scale | kl_weight | temperature | lr | Status |
-|-----|-------------------|-----------------|-----------|------------|-----|--------|
-| 52000 | 0.2 | 5.0 | 0.1 | 1.0 | 0.0001 | Running |
-| 52001 | 1.0 | 5.0 | 0.1 | 1.0 | 0.0001 | Completed |
-| 52002 | 5.0 | 5.0 | 0.1 | 1.0 | 0.0001 | Completed |
-| 52003 | 1.0 | 5.0 | 0.1 | 1.0 | 0.0001 | Completed |
-| 52004 | 1.0 | 5.0 | 0.1 | 1.0 | 0.0001 | Completed |
-| 52005 | 1.0 | 2.0 | 0.1 | 1.0 | 0.0001 | Completed |
-| 52006 | 1.0 | 10.0 | 0.1 | 1.0 | 0.0001 | Completed |
+**고정 파라미터**:
+- `vpl_kl_weight`: 0.1
+- `vpl_gp_temperature`: 1.0
+- `lr`: 0.0001
+
+**실험별 상세 설정**:
+
+| TID | orthogonal_weight | orthonorm_weight | prototype_scale | kl_weight | gp_temperature | lr | Status |
+|-----|------------------|------------------|-----------------|-----------|----------------|-----|--------|
+| 54000 | 0.2 | 0.1 | 5.0 | 0.1 | 1.0 | 0.0001 | Running |
+| 54001 | 1.0 | 0.1 | 5.0 | 0.1 | 1.0 | 0.0001 | Completed |
+| 54002 | 5.0 | 0.1 | 5.0 | 0.1 | 1.0 | 0.0001 | Completed |
+| 54003 | 1.0 | 0.0 | 5.0 | 0.1 | 1.0 | 0.0001 | Completed |
+| 54004 | 1.0 | 0.5 | 5.0 | 0.1 | 1.0 | 0.0001 | Completed |
+| 54005 | 1.0 | 0.1 | 2.0 | 0.1 | 1.0 | 0.0001 | Completed |
+| 54006 | 1.0 | 0.1 | 10.0 | 0.1 | 1.0 | 0.0001 | Completed |
+
+**설명**:
+- **54000-54002**: `orthogonal_weight` 탐색 (0.2 → 1.0 → 5.0)
+- **54003-54004**: `orthonorm_weight` 탐색 (0.0 → 0.5, baseline 0.1은 54001)
+- **54005-54006**: `prototype_scale` 탐색 (2.0 → 10.0, baseline 5.0은 54001)
+
+**최적값 (Phase 1 결과 기반)**:
+- `vpl_orthogonal_weight`: 1.0
+- `vpl_orthogonal_orthonorm_weight`: 0.1
+- `vpl_prototype_scale`: 5.0
 
 **평가 지표**:
 - `train_avg_loss`: 주요 최적화 목표
@@ -55,24 +93,39 @@
 
 ---
 
-### Phase 2: VPL Core Parameters 탐색 (52007-52013)
+### Phase 2: VPL Core Parameters (54007-54013)
 
 **목적**: VPL-GP의 핵심 하이퍼파라미터인 KL weight와 Gumbel-Softmax temperature를 탐색합니다.
 
-**하이퍼파라미터 공간**:
-- `vpl_kl_weight`: [0.02, 0.1, 0.5]
-- `vpl_gp_temperature`: [0.5, 1.0, 2.0]
-- Phase 1 최적값 사용: `vpl_orthogonal_weight=1.0`, `vpl_prototype_scale=5.0`
+**탐색 파라미터**:
+- `vpl_kl_weight`: [0.02, 0.05, 0.1, 0.2]
+- `vpl_gp_temperature`: [0.5, 1.0, 2.0, 5.0]
 
-| TID | orthogonal_weight | prototype_scale | kl_weight | temperature | lr | Status |
-|-----|-------------------|-----------------|-----------|------------|-----|--------|
-| 52007 | 1.0 | 5.0 | 0.02 | 1.0 | 0.0001 | Running |
-| 52008 | 1.0 | 5.0 | 0.1 | 1.0 | 0.0001 | Completed |
-| 52009 | 1.0 | 5.0 | 0.5 | 1.0 | 0.0001 | Completed |
-| 52010 | 1.0 | 5.0 | 0.1 | 0.5 | 0.0001 | Completed |
-| 52011 | 1.0 | 5.0 | 0.1 | 2.0 | 0.0001 | Completed |
-| 52012 | 1.0 | 5.0 | 0.1 | 1.0 | 0.0001 | Completed |
-| 52013 | 1.0 | 5.0 | 0.1 | 1.0 | 0.0001 | Completed |
+**Phase 1 최적값 사용**:
+- `vpl_orthogonal_weight`: 1.0
+- `vpl_orthogonal_orthonorm_weight`: 0.1
+- `vpl_prototype_scale`: 5.0
+- `lr`: 0.0001
+
+**실험별 상세 설정**:
+
+| TID | kl_weight | gp_temperature | orthogonal_weight | orthonorm_weight | prototype_scale | lr | Status |
+|-----|-----------|----------------|-------------------|------------------|-----------------|-----|--------|
+| 54007 | 0.02 | 1.0 | 1.0 | 0.1 | 5.0 | 0.0001 | Completed |
+| 54008 | 0.05 | 1.0 | 1.0 | 0.1 | 5.0 | 0.0001 | Completed |
+| 54009 | 0.1 | 1.0 | 1.0 | 0.1 | 5.0 | 0.0001 | Completed |
+| 54010 | 0.2 | 1.0 | 1.0 | 0.1 | 5.0 | 0.0001 | Completed |
+| 54011 | 0.1 | 0.5 | 1.0 | 0.1 | 5.0 | 0.0001 | Completed |
+| 54012 | 0.1 | 2.0 | 1.0 | 0.1 | 5.0 | 0.0001 | Completed |
+| 54013 | 0.1 | 5.0 | 1.0 | 0.1 | 5.0 | 0.0001 | Completed |
+
+**설명**:
+- **54007-54010**: `kl_weight` 탐색 (0.02 → 0.05 → 0.1 → 0.2)
+- **54011-54013**: `gp_temperature` 탐색 (0.5 → 2.0 → 5.0, baseline 1.0은 54009)
+
+**최적값 (Phase 2 결과 기반)**:
+- `vpl_kl_weight`: 0.1
+- `vpl_gp_temperature`: 1.0
 
 **평가 지표**:
 - `train_avg_loss`: 주요 최적화 목표
@@ -87,19 +140,30 @@
 
 ---
 
-### Phase 3: Learning Rate 탐색 (52014-52016)
+### Phase 3: Learning Rate (54014-54016)
 
 **목적**: 최적 learning rate를 탐색합니다. Phase 1-2의 최적 하이퍼파라미터를 사용합니다.
 
-**하이퍼파라미터 공간**:
+**탐색 파라미터**:
 - `lr`: [0.00005, 0.0001, 0.0002]
-- Phase 1-2 최적값 사용
 
-| TID | orthogonal_weight | prototype_scale | kl_weight | temperature | lr | Status |
-|-----|-------------------|-----------------|-----------|------------|-----|--------|
-| 52014 | 1.0 | 5.0 | 0.1 | 1.0 | 0.00005 | Completed |
-| 52015 | 1.0 | 5.0 | 0.1 | 1.0 | 0.0001 | Running |
-| 52016 | 1.0 | 5.0 | 0.1 | 1.0 | 0.0002 | Completed |
+**Phase 1-2 최적값 사용**:
+- `vpl_orthogonal_weight`: 1.0
+- `vpl_orthogonal_orthonorm_weight`: 0.1
+- `vpl_prototype_scale`: 5.0
+- `vpl_kl_weight`: 0.1
+- `vpl_gp_temperature`: 1.0
+
+**실험별 상세 설정**:
+
+| TID | lr | kl_weight | gp_temperature | orthogonal_weight | orthonorm_weight | prototype_scale | Status |
+|-----|----|-----------|----------------|------------------|-----------------|-----------------|--------|
+| 54014 | 0.00005 | 0.1 | 1.0 | 1.0 | 0.1 | 5.0 | Completed |
+| 54015 | 0.0001 | 0.1 | 1.0 | 1.0 | 0.1 | 5.0 | Completed |
+| 54016 | 0.0002 | 0.1 | 1.0 | 1.0 | 0.1 | 5.0 | Completed |
+
+**최적값 (Phase 3 결과 기반)**:
+- `lr`: 0.0001
 
 **평가 지표**:
 - `train_avg_loss`: 수렴 속도와 최종 loss
@@ -112,33 +176,89 @@
 
 ---
 
-### Phase 4: Best Parameters Combination (52017)
+### Phase 4: Combined Best Parameters (54017)
 
-**목적**: Phase 1-3에서 찾은 최적 하이퍼파라미터 조합으로 최종 실험을 수행합니다.
+**목적**: Phase 1-3에서 찾은 최적 하이퍼파라미터 조합으로 최종 검증을 수행합니다.
+
+**최종 하이퍼파라미터**:
+
+| 파라미터 | 값 | 출처 |
+|---------|-----|------|
+| `vpl_orthogonal_weight` | 1.0 | Phase 1 최적값 |
+| `vpl_orthogonal_orthonorm_weight` | 0.1 | Phase 1 최적값 |
+| `vpl_prototype_scale` | 5.0 | Phase 1 최적값 |
+| `vpl_kl_weight` | 0.1 | Phase 2 최적값 |
+| `vpl_gp_temperature` | 1.0 | Phase 2 최적값 |
+| `lr` | 0.0001 | Phase 3 최적값 |
 
 | TID | orthogonal_weight | prototype_scale | kl_weight | temperature | lr | Status |
 |-----|-------------------|-----------------|-----------|------------|-----|--------|
-| 52017 | 1.0 | 5.0 | 0.1 | 1.0 | 0.0001 | Running |
-
-**참고**: Phase 1-3 결과를 바탕으로 하이퍼파라미터를 업데이트해야 합니다.
+| 54017 | 1.0 | 5.0 | 0.1 | 1.0 | 0.0001 | Completed |
 
 ---
 
-## RL Experiments (53000-53017)
+## RL Experiments (55000-55038)
 
-각 selector 실험(52000-52017)에 대응하는 RL 실험이 있습니다. RL 실험은 해당 selector의 checkpoint를 사용하여 RLHF 학습을 수행합니다.
+각 selector 실험(54000-54038)에 대응하는 RL 실험이 있습니다. RL 실험은 해당 selector의 checkpoint를 사용하여 RLHF 학습을 수행합니다.
 
-### RL 실험 설정
+### RL 공통 설정
 
-**공통 설정**:
-- `rlhf_use_variational_selection: true`: Selector에서 학습한 z를 사용하여 conditional selection
-- `rlhf_use_variational_generation: false`: Generation은 z를 사용하지 않음
-- `reward_coeff: 0.1`: Reward coefficient
-- `grad_accum_step: 4`: Gradient accumulation steps
-- `max_samples_for_reward: 30`: Reward 평가 샘플 수 (성능 최적화)
-- `use_gpt_api_for_winrate: true`: GPT API를 사용한 winrate 평가 (성능 최적화)
-- `use_baseline_model_for_winrate: true`: Baseline 모델과 비교
-- `openai_model: gpt-4o-mini`: Winrate 평가용 모델
+| 파라미터 | 값 |
+|---------|-----|
+| `rlhf_use_variational_selection` | `True` |
+| `rlhf_use_variational_generation` | `False` |
+| `reward_coeff` | 0.1 |
+| `grad_accum_step` | 4 |
+| `max_prompts_for_generation` | 50 |
+| `generation_batch_size` | 3 |
+| `max_samples_for_reward` | 30 |
+| `use_gpt_api_for_winrate` | `True` |
+| `use_baseline_model_for_winrate` | `True` |
+| `openai_model` | `gpt-4o-mini` |
+
+### RL 실험 매핑
+
+| RL TID | Selector TID | Selector Phase | Selector 하이퍼파라미터 | Status |
+|--------|-------------|----------------|----------------------|--------|
+| 55000 | 54000 | Phase 1 | orthogonal_weight=0.2, prototype_scale=5.0 | Completed |
+| 55001 | 54001 | Phase 1 | orthogonal_weight=1.0, prototype_scale=5.0 | Completed |
+| 55002 | 54002 | Phase 1 | orthogonal_weight=5.0, prototype_scale=5.0 | Completed |
+| 55003 | 54003 | Phase 1 | orthogonal_weight=1.0, orthonorm_weight=0.0 | Completed |
+| 55004 | 54004 | Phase 1 | orthogonal_weight=1.0, orthonorm_weight=0.5 | Completed |
+| 55005 | 54005 | Phase 1 | orthogonal_weight=1.0, prototype_scale=2.0 | Completed |
+| 55006 | 54006 | Phase 1 | orthogonal_weight=1.0, prototype_scale=10.0 | Completed |
+| 55007 | 54007 | Phase 2 | kl_weight=0.02, gp_temperature=1.0 | Completed |
+| 55008 | 54008 | Phase 2 | kl_weight=0.05, gp_temperature=1.0 | Completed |
+| 55009 | 54009 | Phase 2 | kl_weight=0.1, gp_temperature=1.0 | Completed |
+| 55010 | 54010 | Phase 2 | kl_weight=0.2, gp_temperature=1.0 | Completed |
+| 55011 | 54011 | Phase 2 | kl_weight=0.1, gp_temperature=0.5 | Completed |
+| 55012 | 54012 | Phase 2 | kl_weight=0.1, gp_temperature=2.0 | Completed |
+| 55013 | 54013 | Phase 2 | kl_weight=0.1, gp_temperature=5.0 | Completed |
+| 55014 | 54014 | Phase 3 | lr=0.00005 | Completed |
+| 55015 | 54015 | Phase 3 | lr=0.0001 | Completed |
+| 55016 | 54016 | Phase 3 | lr=0.0002 | Completed |
+| 55017 | 54017 | Phase 4 | 최적 조합 (모든 파라미터) | Completed |
+| 55018 | 54018 | Phase 5.1 | orthogonal_weight=0.1 | Not started |
+| 55019 | 54019 | Phase 5.1 | orthogonal_weight=0.2 | Not started |
+| 55020 | 54020 | Phase 5.1 | orthogonal_weight=0.5 | Not started |
+| 55021 | 54021 | Phase 5.1 | orthogonal_weight=1.0 | Not started |
+| 55022 | 54022 | Phase 5.1 | orthogonal_weight=2.0 | Not started |
+| 55023 | 54023 | Phase 5.1 | orthogonal_weight=5.0 | Not started |
+| 55024 | 54024 | Phase 5.1 | orthogonal_weight=10.0 | Not started |
+| 55025 | 54025 | Phase 5.2 | orthonorm_weight=0.0 | Not started |
+| 55026 | 54026 | Phase 5.2 | orthonorm_weight=0.05 | Not started |
+| 55027 | 54027 | Phase 5.2 | orthonorm_weight=0.1 | Not started |
+| 55028 | 54028 | Phase 5.2 | orthonorm_weight=0.2 | Not started |
+| 55029 | 54029 | Phase 5.2 | orthonorm_weight=0.5 | Not started |
+| 55030 | 54030 | Phase 5.2 | orthonorm_weight=1.0 | Not started |
+| 55031 | 54031 | Phase 5.3 | kl_weight=0.01 | Not started |
+| 55032 | 54032 | Phase 5.3 | kl_weight=0.02 | Not started |
+| 55033 | 54033 | Phase 5.3 | kl_weight=0.05 | Not started |
+| 55034 | 54034 | Phase 5.3 | kl_weight=0.1 | Not started |
+| 55035 | 54035 | Phase 5.3 | kl_weight=0.2 | Not started |
+| 55036 | 54036 | Phase 5.3 | kl_weight=0.5 | Not started |
+| 55037 | 54037 | Phase 5.3 | kl_weight=1.0 | Not started |
+| 55038 | 54038 | Phase 5.4 | 최적 조합 (Phase 5.1-5.3) | Not started |
 
 **평가 지표**:
 - `avg_helpfulness`: Helpfulness score
@@ -147,55 +267,25 @@
 - `harmlessness_winrate`: Harmless response win rate
 - `avg_winlose_rate`: Overall win-lose rate
 
-### RL 실험 매핑
-
-| RL TID | Selector TID | Selector Phase | Status |
-|--------|-------------|----------------|--------|
-| 53000 | 52000 | Phase 1 | Running |
-| 53001 | 52001 | Phase 1 | Running |
-| 53002 | 52002 | Phase 1 | Running |
-| 53003 | 52003 | Phase 1 | Running |
-| 53004 | 52004 | Phase 1 | Running |
-| 53005 | 52005 | Phase 1 | Running |
-| 53006 | 52006 | Phase 1 | Not started |
-| 53007 | 52007 | Phase 2 | Running |
-| 53008 | 52008 | Phase 2 | Not started |
-| 53009 | 52009 | Phase 2 | Not started |
-| 53010 | 52010 | Phase 2 | Not started |
-| 53011 | 52011 | Phase 2 | Not started |
-| 53012 | 52012 | Phase 2 | Not started |
-| 53013 | 52013 | Phase 2 | Not started |
-| 53014 | 52014 | Phase 3 | Not started |
-| 53015 | 52015 | Phase 3 | Not started (selector running) |
-| 53016 | 52016 | Phase 3 | Not started |
-| 53017 | 52017 | Phase 4 | Not started (selector running) |
-
 ---
 
-## 현재 진행 상황 (2026-01-26)
+## 최종 최적 하이퍼파라미터
 
-### Selector Experiments
+Phase 1-4 결과를 종합한 최종 하이퍼파라미터:
 
-- **완료**: 15개 (52001-52006, 52008-52014, 52016)
-- **실행 중**: 3개 (52000, 52015, 52017)
-- **대기 중**: 0개
+```yaml
+llm:
+  vpl_orthogonal_weight: 1.0
+  vpl_orthogonal_orthonorm_weight: 0.1
+  vpl_prototype_scale: 5.0
+  vpl_kl_weight: 0.1
+  vpl_gp_temperature: 1.0
+train:
+  optimizer:
+    lr: 0.0001
+```
 
-### RL Experiments
-
-- **완료**: 0개
-- **실행 중**: 7개 (53000-53005, 53007)
-- **대기 중**: 11개 (53006, 53008-53014, 53016-53017)
-
-### GPU 할당
-
-- **GPU 0**: RL 53000 (거의 완료), Selector 52017 (실행 중)
-- **GPU 1**: Selector 52015 (실행 중)
-- **GPU 2**: RL 53001
-- **GPU 3**: RL 53002
-- **GPU 4**: RL 53007
-- **GPU 5**: RL 53003
-- **GPU 6**: RL 53004
-- **GPU 7**: RL 53005
+이 값들이 main table 실험에서 사용됩니다.
 
 ---
 
@@ -257,73 +347,37 @@
 
 ---
 
-## 추가 실험 계획
-
-### 1. Fine-grained 탐색
-
-Phase 1-3 결과를 바탕으로 더 세밀한 탐색이 필요할 수 있습니다:
-
-- **Phase 1 후보**: `orthogonal_weight` [0.5, 1.5, 2.0] 또는 `prototype_scale` [3.0, 7.0]
-- **Phase 2 후보**: `kl_weight` [0.05, 0.2] 또는 `temperature` [0.8, 1.2]
-- **Phase 3 후보**: `lr` [0.000075, 0.00015]
-
-### 2. Ablation Studies
-
-최적 하이퍼파라미터를 찾은 후, 각 컴포넌트의 기여도를 확인:
-
-- **Orthogonal loss ablation**: `orthogonal_weight=0` (no orthogonal loss)
-- **Gumbel-Softmax prior ablation**: Standard normal prior vs mixture prior
-- **Feature difference ablation**: `vpl_use_feature_difference=false`
-
-### 3. Cross-validation
-
-최적 하이퍼파라미터의 일반화 성능 확인:
-
-- 다른 데이터셋에서 테스트
-- 다른 모델 크기에서 테스트
-- 다른 클라이언트 수에서 테스트
-
-### 4. RL-specific 하이퍼파라미터 탐색
-
-Selector 하이퍼파라미터가 결정된 후, RL 학습의 하이퍼파라미터도 탐색:
-
-- `reward_coeff`: [0.05, 0.1, 0.2]
-- `grad_accum_step`: [2, 4, 8]
-- RL learning rate
-
----
-
 ## 파일 구조
 
 ```
 cfg/hpsearch/vpl-gp/
-├── phase1_orthogonal_52000.yaml
-├── phase1_orthogonal_52001.yaml
+├── phase1_orthogonal_5400.yaml
+├── phase1_orthogonal_5401.yaml
 ├── ...
-├── phase2_vpl_core_52007.yaml
+├── phase2_vpl_core_5407.yaml
 ├── ...
-├── phase3_lr_52014.yaml
+├── phase3_lr_5414.yaml
 ├── ...
-└── phase4_combined_52017.yaml
+└── phase4_combined_5417.yaml
 
 cfg/hpsearch/vpl-gp-rl/
-├── hrl_53000.yaml
-├── hrl_53001.yaml
+├── hrl_55000.yaml
+├── hrl_55001.yaml
 └── ...
 
 scripts/hpsearch/vpl-gp/
-├── phase1_orthogonal_52000.sh
+├── phase1_orthogonal_5400.sh
 ├── ...
 
 scripts/hpsearch/vpl-gp-rl/
-├── hrl_53000.sh
+├── hrl_55000.sh
 ├── ...
 
 outputs/
-├── 52000.log
-├── 52001.log
+├── 54000.log
+├── 54001.log
 ├── ...
-├── 53000.log
+├── 55000.log
 └── ...
 ```
 
@@ -356,7 +410,7 @@ outputs/
 ### 로그 확인
 ```bash
 # 특정 실험 로그 확인
-tail -f outputs/52000.log
+tail -f outputs/54000.log
 
 # 여러 실험 로그 동시 확인
 tail -f outputs/5200*.log
@@ -379,16 +433,6 @@ nvidia-smi
 
 ---
 
-## 다음 단계
-
-1. **Selector 실험 완료 대기**: 52000, 52015, 52017 완료 대기
-2. **RL 실험 실행**: 남은 RL 실험들 순차 실행 (OOM 방지를 위해 하나씩)
-3. **결과 분석**: 모든 실험이 완료되면 WandB에서 결과 분석
-4. **최적 하이퍼파라미터 결정**: 분석 결과를 바탕으로 최적값 결정
-5. **추가 실험 계획**: 필요시 fine-grained 탐색 또는 ablation study 수행
-
----
-
 ## 참고사항
 
 - **OOM 방지**: RL 실험은 메모리 사용량이 크므로 GPU당 하나씩만 실행
@@ -401,3 +445,4 @@ nvidia-smi
 ## 업데이트 이력
 
 - **2026-01-26**: 초기 문서 작성, 현재 진행 상황 기록
+- **2026-01-XX**: 문서 통합 및 정리 완료

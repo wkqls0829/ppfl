@@ -1,0 +1,161 @@
+\section{Hyperparameter Details}
+\label{app:hyperparameters}
+
+\subsection{Hyperparameter Search Results}
+
+We conducted a systematic hyperparameter search across three phases to determine optimal values for our method. Table~\ref{tab:hpsearch} summarizes the search process and results.
+
+\begin{table}[h]
+\centering
+\caption{Hyperparameter search summary. Each phase explores different parameter combinations while fixing others to optimal values from previous phases.}
+\label{tab:hpsearch}
+\small
+\begin{tabular}{llll}
+\toprule
+\textbf{Phase} & \textbf{Search Parameters} & \textbf{Search Space} & \textbf{Optimal Value} \\
+\midrule
+Phase 1 & orthogonal\_weight & $\{0.2, 1.0, 5.0\}$ & $1.0$ \\
+         & orthonorm\_weight & $\{0.0, 0.1, 0.5\}$ & $0.1$ \\
+         & prototype\_scale & $\{2.0, 5.0, 10.0\}$ & $5.0$ \\
+\midrule
+Phase 2 & kl\_weight & $\{0.02, 0.05, 0.1, 0.2\}$ & $0.1$ \\
+         & gp\_temperature & $\{0.5, 1.0, 2.0, 5.0\}$ & $1.0$ \\
+\midrule
+Phase 3 & learning rate & $\{5 \times 10^{-5}, 10^{-4}, 2 \times 10^{-4}\}$ & $10^{-4}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Final Hyperparameter Settings}
+
+Table~\ref{tab:hp_final} provides the final hyperparameter values used in our experiments.
+
+\begin{table}[h]
+\centering
+\caption{Final hyperparameter settings for selector training (Stage 1) and RL training (Stage 2).}
+\label{tab:hp_final}
+\small
+\begin{tabular}{lll}
+\toprule
+\textbf{Parameter} & \textbf{Selector Training} & \textbf{RL Training} \\
+\midrule
+Learning rate & $10^{-4}$ (Gemma-2B), $10^{-5}$ (Qwen-2 0.5B) & $10^{-4}$ (Gemma-2B), $10^{-5}$ (Qwen-2 0.5B) \\
+Batch size & $8$--$16$ (model-dependent) & $1$ \\
+Gradient accumulation steps & $4$ & $32$ (Qwen-2), $4$ (Gemma-2B) \\
+Local update steps & $30$ & $30$ \\
+Total rounds & $50$ & $50$ \\
+KL weight ($\beta$) & $0.1$ & -- \\
+Orthogonal loss weight ($\lambda$) & $1.0$ & -- \\
+Orthonorm weight ($\gamma$) & $0.1$ & -- \\
+Gumbel-Softmax temperature ($\tau$) & $1.0$ & -- \\
+Prototype scale ($s$) & $5.0$ & -- \\
+Latent dimension ($d$) & $32$ & -- \\
+LoRA rank ($r$) & $8$ & $8$ \\
+LoRA alpha ($\alpha$) & $16$ & $16$ \\
+LoRA dropout ($p$) & $0.05$ & $0.05$ \\
+Reward coefficient & -- & $0.1$ \\
+Max prompts for generation & -- & $50$ \\
+Generation batch size & -- & $3$ \\
+Max samples for reward & -- & $30$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Experimental Settings}
+\label{app:experimental}
+
+\subsection{Dataset Details}
+
+\subsubsection{HH-RLHF Dataset}
+
+We use the \textbf{HH-RLHF} (Helpful and Harmless from Human Feedback) dataset \citep{bai2022training}, which contains pairwise preference comparisons along two axes: helpfulness and harmlessness.
+
+\textbf{Data splits:}
+\begin{itemize}
+    \item Train: $90\%$
+    \item Validation: $9\%$
+    \item Test: $1\%$
+\end{itemize}
+
+\textbf{Client configurations:}
+\begin{itemize}
+    \item Number of clients: $K \in \{10, 50, 100\}$
+    \item Sampling rates per round:
+    \begin{itemize}
+        \item $K=10$: $5$ clients per round
+        \item $K \in \{50, 100\}$: $10$ clients per round
+    \end{itemize}
+\end{itemize}
+
+\textbf{Data characteristics:}
+\begin{itemize}
+    \item Data type: Pairwise preference comparisons
+    \item Preference axes: Helpfulness, Harmlessness
+    \item Each sample: $(s_A, s_B, y)$ where $y \in \{0, 1\}$ indicates preference
+\end{itemize}
+
+\subsection{Model Details}
+
+\subsubsection{Base Language Models}
+
+We conduct experiments using two base language models:
+
+\begin{itemize}
+    \item \textbf{Qwen-2 0.5B}: A compact $0.5$ billion parameter model from the Qwen-2 family \citep{yang2024qwen2}, suitable for resource-constrained federated environments.
+    \item \textbf{Gemma-2B}: A $2$ billion parameter model from Google's Gemma family \citep{gemma2024gemma}, providing a larger model baseline for comparison.
+\end{itemize}
+
+\subsubsection{Fine-tuning Configuration}
+
+Both models are fine-tuned using LoRA (Low-Rank Adaptation) \citep{hu2021lora} to enable parameter-efficient fine-tuning in federated settings.
+
+\textbf{LoRA parameters:}
+\begin{itemize}
+    \item LoRA rank: $r = 8$
+    \item LoRA alpha: $\alpha = 16$
+    \item Dropout rate: $p = 0.05$
+\end{itemize}
+
+\textbf{Training configuration:}
+\begin{itemize}
+    \item During federated selector training: Base LLM is frozen; only VPL components (feature extractor, variational encoder, latent projection) and LoRA adapters are updated.
+    \item During RL training: All parameters (base LLM + adapters) are trainable.
+\end{itemize}
+
+\subsection{Evaluation Settings}
+
+\subsubsection{Winrate Evaluation}
+
+We evaluate the final policy using \textbf{GPT-4 Win-rate} \citep{bai2022training}:
+
+\begin{itemize}
+    \item \textbf{Judge}: GPT-4 or gpt-4o-mini (for cost efficiency)
+    \item \textbf{Comparison}: Fine-tuned model response vs baseline (frozen) model response
+    \item \textbf{Evaluation samples}: Up to $30$ samples per evaluation (for efficiency)
+    \item \textbf{Metrics}: 
+    \begin{itemize}
+        \item Helpful Win-rate (\%): Percentage of responses where fine-tuned model is more helpful
+        \item Harmless Win-rate (\%): Percentage of responses where fine-tuned model is more harmless
+    \end{itemize}
+\end{itemize}
+
+\subsubsection{Reward Model Evaluation}
+
+We also evaluate using reward model scores:
+
+\begin{itemize}
+    \item \textbf{Harmlessness score}: Reward model's harmlessness score (higher is better)
+    \item \textbf{Helpfulness score}: Reward model's helpfulness score (higher is better)
+    \item \textbf{Evaluation samples}: Up to $100$ samples
+\end{itemize}
+
+\subsection{Baseline Methods}
+
+We compare our proposed \textbf{FedVPA-GP} with the following baselines:
+
+\begin{itemize}
+    \item \textbf{FedDPO}: Federated Direct Preference Optimization \citep{ye2024openfedllm}, which aggregates gradients for a single global policy without personalized reward modeling.
+    \item \textbf{FedBiscuit}: Federated learning with multiple LoRA adapters ($U=3$) for coarse-grained personalization \citep{wu2024towards}.
+    \item \textbf{FedVPL}: Our naive adaptation of VPL \citep{poddar2024personalizing} to FL---same latent selector with FedAvg, but using fixed Gaussian prior $\mathcal{N}(0, I)$ and no orthogonal loss.
+    \item \textbf{FedVPA-GP} (ours): Our full method with federated mixture prior, Gumbel-Softmax relaxation, difference embeddings, and orthogonal loss for preference separation.
+\end{itemize}

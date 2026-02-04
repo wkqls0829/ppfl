@@ -246,8 +246,15 @@ def load_hh_rlhf_for_rlhf(data_root,
                 client_prompts = list(client_test_shard)
                 if max_num_test > 0:
                     client_prompts = client_prompts[:max_num_test]
-                client_test_data[client_id] = client_prompts
+                    client_test_data[client_id] = client_prompts
                 helpful_shard_idx += 1
+            
+            # Log unseen experiment info
+            logger.info(f"Split test data by client using shard() (unseen experiment): {len(client_test_data)} clients")
+            logger.info(f"  Training harmless clients: {training_clients[:training_harmless_num]}, Training helpful clients: {training_clients[training_harmless_num:]}")
+            logger.info(f"  Unseen harmless clients: {unseen_clients[:unseen_harmless_num]}, Unseen helpful clients: {unseen_clients[unseen_harmless_num:]}")
+            for client_id, prompts in client_test_data.items():
+                logger.info(f"  Client {client_id}: {len(prompts)} test prompts")
         else:
             # Normal experiment: first half harmless, second half helpful
             harmless_clients_num = client_num // 2
@@ -284,11 +291,11 @@ def load_hh_rlhf_for_rlhf(data_root,
                         client_prompts = client_prompts[:max_num_test]
                     
                     client_test_data[client_id] = client_prompts
-        
-        logger.info(f"Split test data by client using shard() (same as selector training): {len(client_test_data)} clients, "
-                   f"harmless clients: 1-{harmless_clients_num}, helpful clients: {harmless_clients_num+1}-{client_num}")
-        for client_id, prompts in client_test_data.items():
-            logger.info(f"  Client {client_id}: {len(prompts)} test prompts")
+            
+            logger.info(f"Split test data by client using shard() (same as selector training): {len(client_test_data)} clients, "
+                       f"harmless clients: 1-{harmless_clients_num}, helpful clients: {harmless_clients_num+1}-{client_num}")
+            for client_id, prompts in client_test_data.items():
+                logger.info(f"  Client {client_id}: {len(prompts)} test prompts")
         
         if raw_no_prompt:
             return (client_test_data, None, None)

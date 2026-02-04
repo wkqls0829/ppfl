@@ -1,0 +1,56 @@
+We propose \textbf{Federated Variational Preference Alignment with Gumbel-Softmax Prior (FedVPA-GP)}, a framework designed to learn personalized reward models in a privacy-preserving manner. Unlike previous approaches that simply aggregate gradients \citep{wu2024towards}, FedVPA-GP treats user personalization as a distributed continuous latent variable inference problem. We first detail our variational inference mechanism with the proposed mixture prior, followed by the orthogonal regularization for disentanglement, the unified objective function, and finally the two-stage training strategy.
+
+\subsection{Variational Inference with Federated Mixture Prior}
+\label{sec:variational}
+
+\textbf{Inference Network:} Each client maintains a local variational encoder $q_\phi(z \mid \mathcal{D}_i)$. Given a preference pair $(s_A, s_B, y)$, we extract hidden representations $h_A, h_B$ from the frozen base LLM. Crucially, to isolate the preference signal from generic semantics, we explicitly construct the difference embedding $\Delta h = h_{\text{chosen}} - h_{\text{rejected}}$ by splitting the sequence at response markers to exclude prompt tokens. 
+
+The difference vector $\Delta h$ is then processed by a feature extractor, which is a multi-layer perceptron that transforms the raw embedding difference into a lower-dimensional feature representation suitable for encoding. This feature extractor learns to extract preference-specific signals while suppressing general response characteristics. The processed features are then passed to the variational encoder to parameterize the posterior distribution:
+\begin{equation}
+    q_\phi(z \mid \mathcal{D}_i) = \mathcal{N}(z; \mu_i, \sigma_i^2 I).
+\end{equation}
+We employ the reparameterization trick $z_i = \mu_i + \sigma_i \odot \epsilon$, with $\epsilon \sim \mathcal{N}(0, I)$, to enable gradient-based optimization. By conditioning on $\Delta h$, our design forces $z_i$ to encode the relative direction of user preferences rather than static response content.
+
+
+\textbf{Federated Mixture Prior with Learnable Gumbel-Softmax Weights:}
+To mitigate local data sparsity, we leverage the population-level distribution as a dynamic prior. However, simply averaging distributions from all clients (e.g., sample-size weighting) is suboptimal due to preference heterogeneity. To address this, we propose a Federated Mixture Prior with Learnable Weights. Let $\mathcal{S} \subseteq \{1, \dots, K\}$ be the set of participating clients. We construct the mixture prior $p_{\text{mixture}}(z)$ as a weighted sum of peer posteriors $\mathcal{N}_j(z)$:
+\begin{equation}
+    p_{\text{mixture}}(z) = \sum_{j \in \mathcal{S}} w_j \cdot \mathcal{N}_j(z),
+\end{equation}
+where $w_j$ represents the relevance weight of client $j$'s distribution to the current client $i$.
+
+\textbf{Gumbel-Softmax Relaxation:} Instead of static weighting, we optimize these coefficients to prioritize compatible peers using the Gumbel-Softmax relaxation \citep{jang2016categorical}. The weights are computed via the reparameterization trick:
+\begin{equation} \label{eq:gumbel_weights}
+    w_j = \frac{\exp((\log \pi_j + g_j) / \tau)}{\sum_{k \in \mathcal{S}} \exp((\log \pi_k + g_k) / \tau)},
+\end{equation}
+where $\pi_j$ are learnable logits, $g_j \sim \text{Gumbel}(0, 1)$ is Gumbel noise, and $\tau$ is the temperature. By minimizing the KL divergence, the model automatically learns to upweight informative peers with similar preference structures while filtering out conflicting noise.
+
+\subsection{Orthogonal Loss for Preference Separation}
+\label{sec:orthogonal}
+To ensure the latent space semantically separates diverse preference modes and prevents posterior collapse, we introduce an orthogonal loss motivated by \citep{li2024preventingcollapsecontrastivelearning}. We maintain a set of $M$ learnable prototype vectors $\{\mathbf{p}_m\}_{m=1}^M \subset \mathbb{R}^d$. 
+
+\textbf{Prototype Initialization:} These prototypes are initialized to ensure orthogonality using QR decomposition \citep{saxe2013exact}. Specifically, we first generate random prototype vectors, then perform QR decomposition on the prototype matrix to obtain an orthonormal basis. The orthogonal matrix $\mathbf{Q}$ from the decomposition is then scaled to a fixed radius from the origin to ensure prototypes are sufficiently separated. This initialization strategy ensures that prototypes start in orthogonal subspaces, which helps prevent mode collapse and encourages distinct preference clusters.
+
+\textbf{Server-Side Label Assignment:} To guide this separation, the server performs balanced $k$-means clustering (with $k=M$) on the collected client means $\{\bar{\mu}_i\}$ and assigns a prototype index $y_i^* \in \{1, \dots, M\}$ to each client.
+
+\textbf{Loss Computation:} Clients encourage their latent $z$ to align with the assigned prototype $\mathbf{p}_{y_i^*}$ while maintaining orthogonality among all prototypes. The loss combines a pull term and an orthonormality constraint:
+\begin{equation}
+    \mathcal{L}_{\text{orthogonal}}(z) = \|z - \mathbf{p}_{y_i^*}\|_2^2 + \gamma \cdot \|\mathbf{P} \mathbf{P}^T - \mathbf{I}_M\|_F^2,
+\end{equation}
+where $\mathbf{P} \in \mathbb{R}^{M \times d}$ is the matrix of stacked prototypes. This mechanism forces latent representations into distinct orthogonal subspaces, effectively disentangling conflicting preferences (e.g., helpful vs. harmless).
+
+\subsection{Federated Variational Objective}
+During Stage 1, we aim to maximize the Evidence Lower Bound (ELBO) regularized by the orthogonal loss. The local loss function for client $i$ is:
+\begin{align}
+    \mathcal{L}_i(\theta, \phi) &= \underbrace{-\mathbb{E}_{z \sim q_\phi} \left[ \sum_{(s_A, s_B, y) \in \mathcal{D}_i} \log p_\theta(y \mid s_A, s_B, z) \right]}_{\mathcal{L}_{\text{recon}}} \nonumber \\
+    &\quad + \underbrace{\beta \cdot \mathbb{D}_{KL}(q_\phi(z \mid \mathcal{D}_i) \,\|\, p_{\text{mixture}}(z))}_{\mathcal{L}_{\text{reg}} \text{ (Prior Matching)}} \nonumber \\
+    &\quad + \lambda \cdot \underbrace{\mathcal{L}_{\text{orthogonal}}(z)}_{\mathcal{L}_{\text{ortho}}},
+\end{align}
+where $\beta$ controls KL regularization and $\lambda$ weights the separation penalty. The first two terms constitute the negative ELBO, while the third enforces orthogonality.
+
+\subsection{Two-Stage Training Strategy}
+Finally, we describe the deployment pipeline, adopting a two-stage strategy \citep{wu2024towards} to handle heterogeneity efficiently.
+
+\textbf{Stage 1 (Federated Selector Training):} We train the variational binary preference selector using the objective $\mathcal{L}_i(\theta, \phi)$ defined above. This involves training the latent conditional preference model, where each client learns a posterior $q_\phi(z \mid \mathcal{D}_i)$ and predicts choices conditioned on $z_i$ without exchanging raw data. The latent conditional reward model maps the inferred $z_i$ to logit adjustments via a learned projection network: $\text{logits}(s_A, s_B \mid z_i) = \text{logits}_{\text{base}}(s_A, s_B) + f_\theta(z_i)$, where $f_\theta$ is a linear projection that maps the latent vector to choice logit adjustments. Clients utilize the mixture prior for knowledge transfer, enabling stable variational inference despite local data sparsity.
+
+\textbf{Stage 2 (Conditional RLHF):} We perform Centralized RLHF \citep{rafailov2023direct} on the server. We employ DPO to train a policy conditioned on the inferred client context $z$ (e.g., $z \sim q_i$). The converged selector from Stage 1 serves as the reward model, scoring generations as $\text{logits}(s_A, s_B \mid z)$. This decoupling avoids the prohibitive communication costs of federated generation and mitigates training instability caused by conflicting local gradients \citep{wu2024towards}.

@@ -1,0 +1,24 @@
+\begin{table}[t]
+\caption{\textbf{Unseen Client Generalization Results.} We report the GPT-4 Win-rate (\%) for seen and unseen clients. \colorbox{lightgray}{Shaded rows} indicate our proposed method, \textbf{FedVPA-GP}, which demonstrates superior generalization to unseen clients.}
+\label{tab:unseen}
+\vskip 0.15in
+\begin{center}
+\footnotesize
+\renewcommand{\arraystretch}{1.1}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccccc}
+\toprule
+& \multicolumn{2}{c}{\textbf{Seen}} & & \multicolumn{2}{c}{\textbf{Unseen}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){5-6}
+\textbf{Method} & \textbf{Helpful} & \textbf{Harmless} & & \textbf{Helpful} & \textbf{Harmless} \\
+\midrule
+FedDPO      & -- & -- & & -- & -- \\
+FedBiscuit  & -- & -- & & -- & -- \\
+FedVPL      & -- & -- & & -- & -- \\
+\rowcolor{lightgray}
+\textbf{FedVPA-GP} & \textbf{--} & \textbf{--} & & \textbf{--} & \textbf{--} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\vskip -0.1in
+\end{table}
