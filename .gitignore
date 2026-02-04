@@ -151,7 +151,8 @@ exp*/
 *_yaml/
 *dolly*/
 *.sh
-!scripts/*.sh
+!scripts/
+!scripts/**/*.sh
 data/
 !/federatedscope/*/data/
 checkpoints*/
