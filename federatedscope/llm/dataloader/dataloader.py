@@ -522,6 +522,11 @@ def load_llm_dataset(config=None, **kwargs):
         dataset = load_comparison_dataset_by_choice(data_root,
                                                     tokenizer,
                                                     max_num_test=1000)
+    elif dataset_name.lower() == 'ultrafeedback':
+        from federatedscope.llm.dataloader.ultrafeedback import \
+            load_ultrafeedback_dataset
+        dataset, config = load_ultrafeedback_dataset(config, tokenizer)
+
     elif dataset_name.lower() == 'hh-rlhf':
         dataset, config = load_hh_rlhf_dataset(config, tokenizer)
     elif dataset_name.lower() == 'shp-comparison':

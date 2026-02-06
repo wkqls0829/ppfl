@@ -34,8 +34,9 @@ SLURM 클러스터에서 Hyperparameter Search 실험을 실행하기 위한 스
 ```
 scripts/hpsearch/
 ├── README.md (이 파일)
-├── run_selector_hpsearch.sh      # Selector 실행 스크립트
-├── run_rl_hpsearch.sh            # RL 실행 스크립트
+├── run_selector_hpsearch.sh      # Selector 실행 스크립트 (SLURM)
+├── run_rl_hpsearch.sh            # RL 실행 스크립트 (SLURM, selector 필요)
+├── run_rl_local_only.sh          # Local RL only 실행 스크립트 (로컬, selector 불필요)
 ├── submit_selector.sh            # Selector 제출 (phase 인자 사용)
 └── submit_rl.sh                  # RL 제출 (phase 인자 사용)
 ```
@@ -44,57 +45,78 @@ scripts/hpsearch/
 
 ### 1. Selector 실험 실행
 
+**중요**: `submit_selector.sh`와 `submit_rl.sh`는 bash 스크립트이므로 `bash`로 실행해야 합니다. `sbatch`로 실행하면 안 됩니다!
+
 #### Phase별로 실행
 ```bash
-# Phase 1
+# Phase 1 (7개 실험 제출)
 bash scripts/hpsearch/submit_selector.sh 1
 
-# Phase 2
+# Phase 2 (7개 실험 제출)
 bash scripts/hpsearch/submit_selector.sh 2
 
-# Phase 3
+# Phase 3 (3개 실험 제출)
 bash scripts/hpsearch/submit_selector.sh 3
 
-# Phase 4
+# Phase 4 (1개 실험 제출)
 bash scripts/hpsearch/submit_selector.sh 4
 
-# Phase 5
+# Phase 5 (21개 실험 제출)
 bash scripts/hpsearch/submit_selector.sh 5
 ```
 
 #### 개별 실험 실행
 ```bash
-# 개별 selector 실험
+# 개별 selector 실험 (sbatch 사용)
 sbatch scripts/hpsearch/run_selector_hpsearch.sh 54000
 ```
 
 ### 2. RL 실험 실행
 
-**주의**: RL 실험은 해당 selector checkpoint가 완료된 후에 실행해야 합니다.
+**주의**: 
+- RL 실험은 해당 selector checkpoint가 완료된 후에 실행해야 합니다.
+- `submit_rl.sh`는 bash 스크립트이므로 `bash`로 실행해야 합니다. `sbatch`로 실행하면 안 됩니다!
 
 #### Phase별로 실행
 ```bash
-# Phase 1 (selector 54000-54006 완료 후)
+# Phase 1 (selector 54000-54006 완료 후, 7개 RL 실험 제출)
 bash scripts/hpsearch/submit_rl.sh 1
 
-# Phase 2 (selector 54007-54013 완료 후)
+# Phase 2 (selector 54007-54013 완료 후, 7개 RL 실험 제출)
 bash scripts/hpsearch/submit_rl.sh 2
 
-# Phase 3 (selector 54014-54016 완료 후)
+# Phase 3 (selector 54014-54016 완료 후, 3개 RL 실험 제출)
 bash scripts/hpsearch/submit_rl.sh 3
 
-# Phase 4 (selector 54017 완료 후)
+# Phase 4 (selector 54017 완료 후, 1개 RL 실험 제출)
 bash scripts/hpsearch/submit_rl.sh 4
 
-# Phase 5 (selector 54018-54038 완료 후)
+# Phase 5 (selector 54018-54038 완료 후, 21개 RL 실험 제출)
 bash scripts/hpsearch/submit_rl.sh 5
 ```
 
 #### 개별 RL 실험 실행
 ```bash
-# 개별 RL 실험 (selector checkpoint 필요)
+# 개별 RL 실험 (sbatch 사용, selector checkpoint 필요)
 sbatch scripts/hpsearch/run_rl_hpsearch.sh 55000 54000
 ```
+
+### 3. Local RL Training Only (Baseline)
+
+**목적**: Selector checkpoint 없이 RL training만 실행하여 baseline 성능 측정
+
+**특징**:
+- Selector checkpoint 불필요
+- 로컬 서버에서 실행 (SLURM cluster 아님)
+- `rlhf_use_variational_selection: False`
+
+**실행 방법**:
+```bash
+# 로컬 서버에서 실행 (sbatch 사용 안 함, bash로 직접 실행)
+bash scripts/hpsearch/run_rl_local_only.sh 56000
+```
+
+**TID 범위**: 56000-560XX (baseline 실험용)
 
 ## 하이퍼파라미터 설정
 

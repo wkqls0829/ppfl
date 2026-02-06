@@ -1,0 +1,80 @@
+{
+  "total_conflicting_pairs": 40732,
+  "threshold_results": {
+    "0.5": {
+      "total": 40732,
+      "dim_counts": {
+        "helpfulness": 17665,
+        "instruction_following": 7400,
+        "truthfulness": 6010,
+        "honesty": 9657
+      },
+      "percentage": 100.0
+    },
+    "1.0": {
+      "total": 40732,
+      "dim_counts": {
+        "helpfulness": 17665,
+        "instruction_following": 7400,
+        "truthfulness": 6010,
+        "honesty": 9657
+      },
+      "percentage": 100.0
+    },
+    "1.5": {
+      "total": 26790,
+      "dim_counts": {
+        "instruction_following": 7054,
+        "truthfulness": 6010,
+        "honesty": 7274,
+        "helpfulness": 6452
+      },
+      "percentage": 65.77138367868015
+    },
+    "2.0": {
+      "total": 26790,
+      "dim_counts": {
+        "instruction_following": 7054,
+        "truthfulness": 6010,
+        "honesty": 7274,
+        "helpfulness": 6452
+      },
+      "percentage": 65.77138367868015
+    },
+    "2.5": {
+      "total": 12388,
+      "dim_counts": {
+        "instruction_following": 3754,
+        "truthfulness": 1762,
+        "honesty": 4854,
+        "helpfulness": 2018
+      },
+      "percentage": 30.413434154964158
+    },
+    "3.0": {
+      "total": 12388,
+      "dim_counts": {
+        "instruction_following": 3754,
+        "truthfulness": 1762,
+        "honesty": 4854,
+        "helpfulness": 2018
+      },
+      "percentage": 30.413434154964158
+    }
+  },
+  "max_diff_stats": {
+    "mean": 2.0760581361092014,
+    "median": 2.0,
+    "std": 0.9915974677320982,
+    "min": 1.0,
+    "max": 4.0,
+    "percentiles": {
+      "25": 1.0,
+      "50": 2.0,
+      "75": 3.0,
+      "90": 4.0,
+      "95": 4.0,
+      "99": 4.0
+    }
+  }
+}

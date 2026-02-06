@@ -118,6 +118,31 @@ def get_rlhf_prompts_dataset(config):
         generation_prompt = SHP_PROMPT_DICT["shp"]
         selector_prompt = SHP_PROMPT_DICT["shp_cmp"]
 
+    elif dataset_name.lower() == "ultrafeedback":
+        from federatedscope.llm.dataloader.ultrafeedback import (
+            load_ultrafeedback_for_rlhf,
+            ULTRAFEEDBACK_PROMPT_DICT,
+        )
+        data_root = os.path.join(base_data_root, "ultrafeedback")
+        # Ensure directory exists for saving generated data
+        os.makedirs(data_root, exist_ok=True)
+
+        # Check if split_by_client is needed
+        split_by_client = getattr(config.data, 'split_by_client', False)
+        client_num = getattr(config.federate, 'client_num', None)
+        
+        list_train_prompts, _, _ = load_ultrafeedback_for_rlhf(
+            data_root,
+            config,
+            max_num_test=1000,
+            raw_no_prompt=True,
+            split_by_client=split_by_client,
+            client_num=client_num,
+        )
+
+        generation_prompt = ULTRAFEEDBACK_PROMPT_DICT["generation"]
+        selector_prompt = ULTRAFEEDBACK_PROMPT_DICT["comparison"]
+
     logger.info(f"Using data root for RLHF: {data_root}")
     return (data_root, list_train_prompts, generation_prompt, selector_prompt)
 

@@ -1,0 +1,16 @@
+{
+  "threshold": 3.0,
+  "total_pairs": 12388,
+  "strategy1_10clients": {
+    "num_clients": 8,
+    "min_pairs": 488,
+    "max_pairs": 2655,
+    "mean_pairs": 1548.5
+  },
+  "strategy1_100clients": {
+    "num_clients": 8,
+    "min_pairs": 488,
+    "max_pairs": 2655,
+    "mean_pairs": 1548.5
+  }
+}

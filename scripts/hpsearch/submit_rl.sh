@@ -85,11 +85,23 @@ for i in $(seq 0 $((NUM_EXP - 1))); do
     rl_tid=$((RL_START + i))
     
     # Check if selector checkpoint exists
-    SELECTOR_CKPT="$CHECKPOINT_DIR/final_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${selector_tid}.ckpt"
+    # Note: Selector saves as: hhrl_choice_gemma-2b_fedbiscuit_u3_vplgp_ortho_t${selector_tid}.ckpt
+    # Try with _ortho_ suffix first (hpsearch naming convention)
+    SELECTOR_CKPT="$CHECKPOINT_DIR/final_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_ortho_t${selector_tid}.ckpt"
     if [ ! -f "$SELECTOR_CKPT" ]; then
-        SELECTOR_CKPT="$CHECKPOINT_DIR/hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${selector_tid}.ckpt"
+        SELECTOR_CKPT="$CHECKPOINT_DIR/hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_ortho_t${selector_tid}.ckpt"
         if [ ! -f "$SELECTOR_CKPT" ]; then
-            SELECTOR_CKPT="$CHECKPOINT_DIR/40_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${selector_tid}.ckpt"
+            SELECTOR_CKPT="$CHECKPOINT_DIR/40_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_ortho_t${selector_tid}.ckpt"
+            if [ ! -f "$SELECTOR_CKPT" ]; then
+                # Fallback: try without _ortho_ (for compatibility)
+                SELECTOR_CKPT="$CHECKPOINT_DIR/final_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${selector_tid}.ckpt"
+                if [ ! -f "$SELECTOR_CKPT" ]; then
+                    SELECTOR_CKPT="$CHECKPOINT_DIR/hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${selector_tid}.ckpt"
+                    if [ ! -f "$SELECTOR_CKPT" ]; then
+                        SELECTOR_CKPT="$CHECKPOINT_DIR/40_hhrl_choice_${MODEL}_fedbiscuit_u3_${METHOD}_t${selector_tid}.ckpt"
+                    fi
+                fi
+            fi
         fi
     fi
     

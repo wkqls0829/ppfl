@@ -442,6 +442,69 @@ nvidia-smi
 
 ---
 
+## Local RL Training Only Experiments (56000)
+
+**목적**: Selector checkpoint 없이 RL training만 실행하여 baseline 성능을 측정합니다. 이는 selector training의 효과를 평가하기 위한 비교 실험입니다.
+
+**특징**:
+- Selector checkpoint 불필요 (FedDPO 방식)
+- `rlhf_use_variational_selection: False` - Variational selection 사용 안 함
+- FedDPO와 유사한 방식으로 직접 preference data에서 학습
+- 로컬 서버에서 실행 (SLURM cluster 아님, nohup으로 백그라운드 실행)
+- `scripts/feddpo/hrl-10000.sh` 스크립트를 참고하여 작성
+
+**실험 설정**:
+
+| TID | 설명 | Status |
+|-----|------|--------|
+| 56000 | Local RL only (baseline, no selector) | Not started |
+
+**공통 설정**:
+
+| 파라미터 | 값 |
+|---------|-----|
+| Model | `google/gemma-2b@huggingface_llm` |
+| Trainer | `llmdporewardtrainer` (DPO trainer) |
+| `rlhf_use_variational_selection` | `False` |
+| `rlhf_use_variational_generation` | `False` |
+| `reward_coeff` | 0.1 |
+| `grad_accum_step` | 4 |
+| `max_prompts_for_generation` | 50 |
+| `generation_batch_size` | 3 |
+| `use_gpt_api_for_winrate` | `True` |
+| `use_baseline_model_for_winrate` | `True` |
+| `openai_model` | `gpt-4o-mini` |
+| Learning rate | 0.0001 |
+| Total rounds | 50 |
+| Local update steps | 30 |
+| Batch size | 1 |
+
+**실행 방법**:
+
+```bash
+# 로컬 서버에서 실행 (bash로 실행, nohup으로 백그라운드 실행됨)
+bash scripts/hpsearch/run_rl_local_only.sh
+```
+
+**참고**: 
+- TID는 스크립트 내부에서 56000으로 고정되어 있습니다.
+- 스크립트는 `nohup`으로 백그라운드 실행되므로 터미널을 닫아도 계속 실행됩니다.
+- 로그는 `outputs/56000.log`에 저장됩니다.
+
+**평가 지표**:
+- `avg_helpfulness`: Helpfulness score
+- `avg_harmlessness`: Harmlessness score
+- `helpfulness_winrate`: Helpful response win rate
+- `harmlessness_winrate`: Harmless response win rate
+- `avg_winlose_rate`: Overall win-lose rate
+
+**비교 목적**:
+- Selector training이 있는 경우 (55000-55038)와 없는 경우 (56000)의 성능 비교
+- Selector의 기여도 정량화
+- FedDPO와 동일한 방식으로 직접 preference learning 수행
+
+---
+
 ## 업데이트 이력
 
 - **2026-01-26**: 초기 문서 작성, 현재 진행 상황 기록
