@@ -1341,14 +1341,10 @@ class RLHF_finetuning:
         # Win-lose is computed separately by comparing generated responses with original chosen/rejected
         test_dataset = None
         try:
-            # Load test prompts from hh-rlhf dataset (same as train prompts)
-            # Use load_hh_rlhf_for_rlhf to get prompts only
-            from federatedscope.llm.dataloader.hh_rlhf import load_hh_rlhf_for_rlhf
             from federatedscope.llm.dataset.llm_dataset import LLMDataset
             from federatedscope.llm.dataloader.dataloader import LLMDataCollator
             
-            logger.info("Loading test prompts from hh-rlhf dataset for evaluation...")
-            
+            data_type = getattr(self.config.data, 'type', '').lower()
             # Check if VPL model for conditional generation
             use_variational_generation = getattr(self.config.llm, 'rlhf_use_variational_generation', False)
             is_vpl_model = False
@@ -1377,61 +1373,94 @@ class RLHF_finetuning:
             if len(unseen_clients_id) == 0:
                 unseen_clients_id = getattr(self.config.federate, 'unseen_clients_id', [])
             
-            # Load test data: split by client if VPL model OR unseen experiment, otherwise combine
             is_unseen_experiment = len(unseen_clients_id) > 0
-            if (is_vpl_model and self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0) or is_unseen_experiment:
-                # Load test data split by client (harmless: 1 to num_clients//2, helpful: num_clients//2+1 to num_clients)
-                num_clients = self.num_clients
-                client_test_data, _, _ = load_hh_rlhf_for_rlhf(
-                    self.data_root,
-                    self.config,
-                    max_num_test=getattr(self.config.eval, 'max_samples_for_reward', 30),
-                    raw_no_prompt=True,
-                    split_by_client=True,
-                    client_num=num_clients,
-                )
-                
-                # Store client_test_data as instance variable for seen/unseen evaluation
-                self.client_test_data = client_test_data
-                
-                if is_unseen_experiment:
-                    logger.info(f"Unseen experiment detected. Loaded client-specific test data for {len(unseen_clients_id)} unseen clients")
-                
-                if client_test_data is None or len(client_test_data) == 0:
-                    logger.warning("No test prompts loaded. Test evaluation will be skipped.")
-                else:
-                    # Convert client-specific test data to list of dicts with 'prompt' and 'client_id' keys
-                    list_test_dict = []
-                    for client_id, client_prompts in client_test_data.items():
-                        for prompt_dict in client_prompts:
-                            if prompt_dict.get('prompt'):
-                                list_test_dict.append({
-                                    'prompt': prompt_dict['prompt'],
-                                    'client_id': client_id,  # Assign client_id from the split
-                                    'output': '',  # Empty output for test data (will be generated during evaluation)
-                                })
-                    
-                    logger.info(f"Loaded {len(list_test_dict)} test prompts split by {len(client_test_data)} clients "
-                               f"for conditional generation (VPL model)")
-                    if self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0:
-                        logger.info(f"Client average z available for {len(self.client_average_z_dict)} clients")
+            num_clients = self.num_clients
+            max_num_test = getattr(self.config.eval, 'max_samples_for_reward', 30)
+            
+            if 'ultrafeedback' in data_type:
+                # Load test prompts from UltraFeedback dataset
+                from federatedscope.llm.dataloader.ultrafeedback import load_ultrafeedback_for_rlhf
+                logger.info("Loading test prompts from UltraFeedback dataset for evaluation...")
+                use_split = (is_vpl_model and self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0) or is_unseen_experiment
+                use_split = use_split and num_clients == 10  # UltraFeedback equal distribution requires 10 clients
+                if use_split:
+                    client_test_data, _, _ = load_ultrafeedback_for_rlhf(
+                        self.data_root,
+                        self.config,
+                        max_num_test=max_num_test,
+                        raw_no_prompt=True,
+                        split_by_client=True,
+                        client_num=num_clients,
+                    )
+                    self.client_test_data = client_test_data
+                    if client_test_data and len(client_test_data) > 0:
+                        list_test_dict = []
+                        for cid, prompts in client_test_data.items():
+                            for p in prompts:
+                                prompt_text = p if isinstance(p, str) else (p.get('prompt') if isinstance(p, dict) else None)
+                                if prompt_text:
+                                    list_test_dict.append({'prompt': prompt_text, 'client_id': cid, 'output': ''})
+                        logger.info(f"Loaded {len(list_test_dict)} UltraFeedback test prompts (split by {len(client_test_data)} clients)")
                     else:
-                        logger.info("No client average z available (non-VPL model or z not loaded)")
-            else:
-                # Load combined test data (non-VPL or VPL without client z)
-                list_test_prompts, _, _ = load_hh_rlhf_for_rlhf(
-                    self.data_root,
-                    self.config,
-                    max_num_test=getattr(self.config.eval, 'max_samples_for_reward', 30),
-                    raw_no_prompt=True,
-                    split_by_client=False,
-                )
-                
-                if list_test_prompts is None or len(list_test_prompts) == 0:
-                    logger.warning("No test prompts loaded. Test evaluation will be skipped.")
+                        list_test_dict = []
+                        logger.warning("No UltraFeedback test prompts loaded (split by client).")
                 else:
-                    # Convert prompts to list of dicts with 'prompt' key
-                    list_test_dict = [{'prompt': p['prompt'], 'output': ''} for p in list_test_prompts if p.get('prompt')]  # Add empty 'output' for test data
+                    list_prompts, _, _ = load_ultrafeedback_for_rlhf(
+                        self.data_root,
+                        self.config,
+                        max_num_test=max_num_test,
+                        raw_no_prompt=True,
+                        split_by_client=False,
+                    )
+                    if list_prompts and len(list_prompts) > 0:
+                        list_test_dict = [{'prompt': (p if isinstance(p, str) else p.get('prompt')), 'output': ''} for p in list_prompts]
+                        if is_vpl_model and num_clients > 0:
+                            for idx, s in enumerate(list_test_dict):
+                                s['client_id'] = (idx % num_clients) + 1
+                        logger.info(f"Loaded {len(list_test_dict)} UltraFeedback test prompts")
+                    else:
+                        list_test_dict = []
+                        logger.warning("No UltraFeedback test prompts loaded.")
+            else:
+                # Load test prompts from HH-RLHF dataset
+                from federatedscope.llm.dataloader.hh_rlhf import load_hh_rlhf_for_rlhf
+                logger.info("Loading test prompts from hh-rlhf dataset for evaluation...")
+                if (is_vpl_model and self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0) or is_unseen_experiment:
+                    client_test_data, _, _ = load_hh_rlhf_for_rlhf(
+                        self.data_root,
+                        self.config,
+                        max_num_test=max_num_test,
+                        raw_no_prompt=True,
+                        split_by_client=True,
+                        client_num=num_clients,
+                    )
+                    self.client_test_data = client_test_data
+                    if is_unseen_experiment:
+                        logger.info(f"Unseen experiment detected. Loaded client-specific test data for {len(unseen_clients_id)} unseen clients")
+                    if client_test_data is None or len(client_test_data) == 0:
+                        logger.warning("No test prompts loaded. Test evaluation will be skipped.")
+                        list_test_dict = []
+                    else:
+                        list_test_dict = []
+                        for client_id, client_prompts in client_test_data.items():
+                            for prompt_dict in client_prompts:
+                                if (prompt_dict.get('prompt') if isinstance(prompt_dict, dict) else prompt_dict):
+                                    p = prompt_dict.get('prompt', prompt_dict) if isinstance(prompt_dict, dict) else prompt_dict
+                                    list_test_dict.append({'prompt': p, 'client_id': client_id, 'output': ''})
+                        logger.info(f"Loaded {len(list_test_dict)} test prompts split by {len(client_test_data)} clients (VPL model)")
+                else:
+                    list_test_prompts, _, _ = load_hh_rlhf_for_rlhf(
+                        self.data_root,
+                        self.config,
+                        max_num_test=max_num_test,
+                        raw_no_prompt=True,
+                        split_by_client=False,
+                    )
+                    if list_test_prompts is None or len(list_test_prompts) == 0:
+                        logger.warning("No test prompts loaded. Test evaluation will be skipped.")
+                        list_test_dict = []
+                    else:
+                        list_test_dict = [{'prompt': p['prompt'], 'output': ''} for p in list_test_prompts if p.get('prompt')]
                     
                     # Assign client_id for VPL models (for conditional generation) - cyclic assignment
                     if is_vpl_model:
@@ -1633,55 +1662,81 @@ class RLHF_finetuning:
                 
                 # Final round: reload full test dataset for evaluation (no max_samples limit)
                 is_final_round = (r + 1 == self.config.federate.total_round_num)
-                data_type = getattr(self.config.data, 'type', '').lower()
-                if is_final_round and 'hh-rlhf' in data_type:
+                data_type_final = getattr(self.config.data, 'type', '').lower()
+                if is_final_round and ('hh-rlhf' in data_type_final or 'ultrafeedback' in data_type_final):
                     logger.info("Final round: reloading full test dataset for evaluation.")
                     try:
-                        from federatedscope.llm.dataloader.hh_rlhf import load_hh_rlhf_for_rlhf
                         from federatedscope.llm.dataset.llm_dataset import LLMDataset
-                        # Split-by-client path (VPL or unseen): reload with no limit
-                        if hasattr(self, 'client_test_data') and self.client_test_data is not None and len(self.client_test_data) > 0:
-                            client_test_data_full, _, _ = load_hh_rlhf_for_rlhf(
-                                self.data_root,
-                                self.config,
-                                max_num_test=-1,
-                                raw_no_prompt=True,
-                                split_by_client=True,
-                                client_num=self.num_clients,
-                            )
-                            if client_test_data_full and len(client_test_data_full) > 0:
-                                self.client_test_data = client_test_data_full
-                                list_test_dict = []
-                                for client_id, client_prompts in client_test_data_full.items():
-                                    for prompt_dict in client_prompts:
-                                        if prompt_dict.get('prompt'):
-                                            list_test_dict.append({
-                                                'prompt': prompt_dict['prompt'],
-                                                'client_id': client_id,
-                                                'output': '',
-                                            })
-                                logger.info(f"Reloaded full test set: {len(list_test_dict)} prompts (split by {len(client_test_data_full)} clients)")
+                        list_test_dict = None
+                        if 'ultrafeedback' in data_type_final:
+                            from federatedscope.llm.dataloader.ultrafeedback import load_ultrafeedback_for_rlhf
+                            use_split_uf = (hasattr(self, 'client_test_data') and self.client_test_data is not None and len(self.client_test_data) > 0) and self.num_clients == 10
+                            if use_split_uf:
+                                client_test_data_full, _, _ = load_ultrafeedback_for_rlhf(
+                                    self.data_root, self.config, max_num_test=-1,
+                                    raw_no_prompt=True, split_by_client=True, client_num=self.num_clients,
+                                )
+                                if client_test_data_full and len(client_test_data_full) > 0:
+                                    self.client_test_data = client_test_data_full
+                                    list_test_dict = []
+                                    for cid, prompts in client_test_data_full.items():
+                                        for p in prompts:
+                                            pt = p if isinstance(p, str) else (p.get('prompt') if isinstance(p, dict) else None)
+                                            if pt:
+                                                list_test_dict.append({'prompt': pt, 'client_id': cid, 'output': ''})
                             else:
-                                logger.warning("Full test reload returned empty; keeping existing loader.")
-                                list_test_dict = None
-                        else:
-                            # Combined path: reload with no limit
-                            list_test_prompts, _, _ = load_hh_rlhf_for_rlhf(
-                                self.data_root,
-                                self.config,
-                                max_num_test=-1,
-                                raw_no_prompt=True,
-                                split_by_client=False,
-                            )
-                            if list_test_prompts and len(list_test_prompts) > 0:
-                                list_test_dict = [{'prompt': p['prompt'], 'output': ''} for p in list_test_prompts if p.get('prompt')]
-                                if getattr(self.config.llm, 'rlhf_use_variational_generation', False) and self.num_clients > 0:
-                                    for idx, test_sample in enumerate(list_test_dict):
-                                        test_sample['client_id'] = (idx % self.num_clients) + 1
-                                logger.info(f"Reloaded full test set: {len(list_test_dict)} prompts")
+                                list_prompts, _, _ = load_ultrafeedback_for_rlhf(
+                                    self.data_root, self.config, max_num_test=-1,
+                                    raw_no_prompt=True, split_by_client=False,
+                                )
+                                if list_prompts and len(list_prompts) > 0:
+                                    list_test_dict = [{'prompt': (p if isinstance(p, str) else p.get('prompt')), 'output': ''} for p in list_prompts]
+                                    if getattr(self.config.llm, 'rlhf_use_variational_generation', False) and self.num_clients > 0:
+                                        for idx, s in enumerate(list_test_dict):
+                                            s['client_id'] = (idx % self.num_clients) + 1
+                        elif 'hh-rlhf' in data_type_final:
+                            from federatedscope.llm.dataloader.hh_rlhf import load_hh_rlhf_for_rlhf
+                            if hasattr(self, 'client_test_data') and self.client_test_data is not None and len(self.client_test_data) > 0:
+                                client_test_data_full, _, _ = load_hh_rlhf_for_rlhf(
+                                    self.data_root,
+                                    self.config,
+                                    max_num_test=-1,
+                                    raw_no_prompt=True,
+                                    split_by_client=True,
+                                    client_num=self.num_clients,
+                                )
+                                if client_test_data_full and len(client_test_data_full) > 0:
+                                    self.client_test_data = client_test_data_full
+                                    list_test_dict = []
+                                    for client_id, client_prompts in client_test_data_full.items():
+                                        for prompt_dict in client_prompts:
+                                            if prompt_dict.get('prompt'):
+                                                list_test_dict.append({
+                                                    'prompt': prompt_dict['prompt'],
+                                                    'client_id': client_id,
+                                                    'output': '',
+                                                })
+                                    logger.info(f"Reloaded full test set: {len(list_test_dict)} prompts (split by {len(client_test_data_full)} clients)")
+                                else:
+                                    logger.warning("Full test reload returned empty; keeping existing loader.")
+                                    list_test_dict = None
                             else:
-                                logger.warning("Full test reload returned empty; keeping existing loader.")
-                                list_test_dict = None
+                                list_test_prompts, _, _ = load_hh_rlhf_for_rlhf(
+                                    self.data_root,
+                                    self.config,
+                                    max_num_test=-1,
+                                    raw_no_prompt=True,
+                                    split_by_client=False,
+                                )
+                                if list_test_prompts and len(list_test_prompts) > 0:
+                                    list_test_dict = [{'prompt': p['prompt'], 'output': ''} for p in list_test_prompts if p.get('prompt')]
+                                    if getattr(self.config.llm, 'rlhf_use_variational_generation', False) and self.num_clients > 0:
+                                        for idx, test_sample in enumerate(list_test_dict):
+                                            test_sample['client_id'] = (idx % self.num_clients) + 1
+                                    logger.info(f"Reloaded full test set: {len(list_test_dict)} prompts")
+                                else:
+                                    logger.warning("Full test reload returned empty; keeping existing loader.")
+                                    list_test_dict = None
                         if list_test_dict is not None and len(list_test_dict) > 0:
                             test_dataset_full = LLMDataset(
                                 list_test_dict,
@@ -1733,10 +1788,11 @@ class RLHF_finetuning:
                     seen_samples_count = 0
                     for client_id in seen_client_ids:
                         if client_id in self.client_test_data:
-                            for prompt_dict in self.client_test_data[client_id]:
-                                if prompt_dict.get('prompt') and seen_samples_count < max_eval_samples:
+                            for prompt_item in self.client_test_data[client_id]:
+                                prompt_text = prompt_item.get('prompt') if isinstance(prompt_item, dict) else prompt_item
+                                if prompt_text and seen_samples_count < max_eval_samples:
                                     seen_test_dict.append({
-                                        'prompt': prompt_dict['prompt'],
+                                        'prompt': prompt_text,
                                         'client_id': client_id,
                                         'output': '',
                                     })
@@ -1753,10 +1809,11 @@ class RLHF_finetuning:
                     unseen_samples_count = 0
                     for client_id in unseen_client_ids:
                         if client_id in self.client_test_data:
-                            for prompt_dict in self.client_test_data[client_id]:
-                                if prompt_dict.get('prompt') and unseen_samples_count < max_eval_samples:
+                            for prompt_item in self.client_test_data[client_id]:
+                                prompt_text = prompt_item.get('prompt') if isinstance(prompt_item, dict) else prompt_item
+                                if prompt_text and unseen_samples_count < max_eval_samples:
                                     unseen_test_dict.append({
-                                        'prompt': prompt_dict['prompt'],
+                                        'prompt': prompt_text,
                                         'client_id': client_id,
                                         'output': '',
                                     })
