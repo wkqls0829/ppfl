@@ -716,8 +716,24 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                 torch.cuda.empty_cache()
 
     def _hook_on_fit_end(self, ctx):
-        ctx.ys_true = CtxVar(torch.concatenate(ctx.ys_true), LIFECYCLE.ROUTINE)
-        ctx.ys_pred = CtxVar(torch.concatenate(ctx.ys_pred), LIFECYCLE.ROUTINE)
+        # Handle case where all batches were skipped (e.g. NaN loss): avoid empty concatenate
+        if not ctx.ys_true:
+            device = getattr(ctx, 'device', None) or getattr(self, 'device', None) or 'cpu'
+            ctx.ys_true = CtxVar(
+                torch.tensor([], dtype=torch.long, device=device),
+                LIFECYCLE.ROUTINE,
+            )
+            ctx.ys_pred = CtxVar(
+                torch.tensor([], dtype=torch.long, device=device),
+                LIFECYCLE.ROUTINE,
+            )
+            logger.warning(
+                "Evaluation had no valid batches (all skipped e.g. due to NaN loss). "
+                "Reporting empty metrics for this client."
+            )
+        else:
+            ctx.ys_true = CtxVar(torch.concatenate(ctx.ys_true), LIFECYCLE.ROUTINE)
+            ctx.ys_pred = CtxVar(torch.concatenate(ctx.ys_pred), LIFECYCLE.ROUTINE)
         # Set tokenizer in ctx for evaluation metrics that need it (e.g., reward model evaluation)
         if not hasattr(ctx, 'tokenizer') and hasattr(self, 'tokenizer'):
             ctx.tokenizer = self.tokenizer

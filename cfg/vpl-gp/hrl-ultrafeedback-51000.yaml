@@ -1,0 +1,88 @@
+# VPL-GP RL (RLHF) training using UltraFeedback selector checkpoint 50000
+# TID 51000: UltraFeedback data, selector from hhst-ultrafeedback-50000-test
+# Standard pattern: same as hrl-ortho-51000 (HH-RLHF) but data=ultrafeedback, selector=ultrafeedback_50000
+use_gpu: True
+device: 4  # GPU 4 (same as UltraFeedback selector 50000)
+early_stop:
+  patience: 0
+federate:
+  mode: standalone
+  client_num: 1  # RL training uses single client (standalone RLHF)
+  total_round_num: 50  # RL training rounds (same as standard hrl-ortho)
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_vplgp_ortho_uf_51000.ckpt"  # uf = ultrafeedback (distinct from HH-RLHF 51000)
+  ignore_weight: True
+  save_freq: 20
+  share_local_model: True
+  online_aggr: False
+data:
+  root: /hdd/hdd3/kjb/
+  type: 'ultrafeedback@llm'  # UltraFeedback dataset for RL
+  ultrafeedback_threshold: 3.0  # Match selector
+  splits: [0.9, 0.09, 0.01]
+  splitter: 'iid'  # RL training uses iid splitter
+llm:
+  use: True
+  rlhf: True
+  tok_len: 1024
+  max_new_token: 512
+  num_completions: 2
+  accelerator:
+    use: False
+  chat:
+    max_len: 512
+  adapter:
+    use: True
+    count: 3
+    warmup:
+      use: True
+      round: 2
+    grouping:
+      use: False
+      round: 2
+    args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
+  # VPL parameters: must match UltraFeedback selector (hhst-ultrafeedback-50000-test)
+  vpl_latent_dim: 32
+  vpl_feature_method: 'choice_logits'
+  vpl_use_feature_difference: True
+  vpl_use_difference_only: True  # Selector uses True (difference only)
+  vpl_gp_temperature: 1.0
+  vpl_num_prototypes: 4  # UltraFeedback 4 dimensions
+  rlhf_use_variational_generation: True
+  rlhf_use_variational_selection: True
+  rlhf_selector_checkpoint: "/hdd/hdd3/kjb/checkpoints/final_ultrafeedback_choice_gemma_fedbiscuit_u3_vplgp_ortho_50000.ckpt"
+  reward_coeff: 0.1
+  grad_accum_step: 4
+  max_prompts_for_generation: 50
+  generation_batch_size: 3
+dataloader:
+  batch_size: 1
+  num_workers: 4
+  pin_memory: True
+model:
+  type: 'google/gemma-2b@huggingface_llm'
+train:
+  local_update_steps: 30
+  batch_or_epoch: batch
+  optimizer:
+    type: AdamW
+    betas: (0.9, 0.95)
+    lr: 0.0001
+  is_enable_half: True
+criterion:
+  type: CrossEntropyLoss
+trainer:
+  type: llmdporewardtrainer
+eval:
+  freq: 10
+  use_gpt_api_for_winrate: true
+  use_baseline_model_for_winrate: true
+  metrics: ['loss', 'acc', 'helpfulness_winrate', 'harmlessness_winrate', 'instruction_following_winrate', 'truthfulness_winrate']
+  best_res_update_round_wise_key: train_avg_loss
+  count_flops: False
+expname: vplgp_hrl_ultrafeedback_t51000
+wandb:
+  use: True
+  name_user: ''
+  name_project: 'fvpl-rl'
+  online_track: True
+  client_train_info: True

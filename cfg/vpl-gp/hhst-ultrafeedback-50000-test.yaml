@@ -1,11 +1,11 @@
 use_gpu: True
-device: 5  # GPU 5 for ultrafeedback test (tid: 50000)
+device: 4  # GPU 4 for ultrafeedback test (tid: 50000)
 early_stop:
   patience: 0
 federate:
   mode: standalone
-  client_num: 20  # UltraFeedback equal distribution: 5, 5, 5, 5
-  sample_client_num: 10
+  client_num: 20  # UltraFeedback equal distribution: 5, 5, 5, 5 per dimension
+  sample_client_num: 5  # Only 5 clients participate per round (sequential training → one on GPU at a time)
   total_round_num: 5  # Test run: 5 rounds only
   save_to: "/hdd/hdd3/kjb/checkpoints/ultrafeedback_choice_gemma_fedbiscuit_u3_vplgp_ortho_50000.ckpt"
   ignore_weight: True

@@ -1631,6 +1631,82 @@ class RLHF_finetuning:
             if test_available and (r + 1) % self.config.eval.freq == 0:
                 logger.info("----------- Evaluating on test split -------------")
                 
+                # Final round: reload full test dataset for evaluation (no max_samples limit)
+                is_final_round = (r + 1 == self.config.federate.total_round_num)
+                data_type = getattr(self.config.data, 'type', '').lower()
+                if is_final_round and 'hh-rlhf' in data_type:
+                    logger.info("Final round: reloading full test dataset for evaluation.")
+                    try:
+                        from federatedscope.llm.dataloader.hh_rlhf import load_hh_rlhf_for_rlhf
+                        from federatedscope.llm.dataset.llm_dataset import LLMDataset
+                        # Split-by-client path (VPL or unseen): reload with no limit
+                        if hasattr(self, 'client_test_data') and self.client_test_data is not None and len(self.client_test_data) > 0:
+                            client_test_data_full, _, _ = load_hh_rlhf_for_rlhf(
+                                self.data_root,
+                                self.config,
+                                max_num_test=-1,
+                                raw_no_prompt=True,
+                                split_by_client=True,
+                                client_num=self.num_clients,
+                            )
+                            if client_test_data_full and len(client_test_data_full) > 0:
+                                self.client_test_data = client_test_data_full
+                                list_test_dict = []
+                                for client_id, client_prompts in client_test_data_full.items():
+                                    for prompt_dict in client_prompts:
+                                        if prompt_dict.get('prompt'):
+                                            list_test_dict.append({
+                                                'prompt': prompt_dict['prompt'],
+                                                'client_id': client_id,
+                                                'output': '',
+                                            })
+                                logger.info(f"Reloaded full test set: {len(list_test_dict)} prompts (split by {len(client_test_data_full)} clients)")
+                            else:
+                                logger.warning("Full test reload returned empty; keeping existing loader.")
+                                list_test_dict = None
+                        else:
+                            # Combined path: reload with no limit
+                            list_test_prompts, _, _ = load_hh_rlhf_for_rlhf(
+                                self.data_root,
+                                self.config,
+                                max_num_test=-1,
+                                raw_no_prompt=True,
+                                split_by_client=False,
+                            )
+                            if list_test_prompts and len(list_test_prompts) > 0:
+                                list_test_dict = [{'prompt': p['prompt'], 'output': ''} for p in list_test_prompts if p.get('prompt')]
+                                if getattr(self.config.llm, 'rlhf_use_variational_generation', False) and self.num_clients > 0:
+                                    for idx, test_sample in enumerate(list_test_dict):
+                                        test_sample['client_id'] = (idx % self.num_clients) + 1
+                                logger.info(f"Reloaded full test set: {len(list_test_dict)} prompts")
+                            else:
+                                logger.warning("Full test reload returned empty; keeping existing loader.")
+                                list_test_dict = None
+                        if list_test_dict is not None and len(list_test_dict) > 0:
+                            test_dataset_full = LLMDataset(
+                                list_test_dict,
+                                self.tokenizer,
+                                prompt_input=self.generation_prompt,
+                                prompt_no_input=self.generation_prompt,
+                            )
+                            test_dataloader_full = DataLoader(
+                                test_dataset_full,
+                                batch_size=self.config.dataloader.batch_size,
+                                shuffle=False,
+                                num_workers=self.config.dataloader.num_workers,
+                                collate_fn=LLMDataCollator(tokenizer=self.tokenizer),
+                                pin_memory=self.config.dataloader.pin_memory,
+                            )
+                            data['test'] = test_dataloader_full
+                            if hasattr(self.trainer, 'data'):
+                                self.trainer.data['test'] = test_dataloader_full
+                            self.trainer.ctx.test_loader = test_dataloader_full
+                            logger.info(f"Updated test loader to full dataset ({len(list_test_dict)} samples).")
+                    except Exception as e:
+                        logger.warning(f"Failed to reload full test data for final round: {e}. Using existing test loader.")
+                        import traceback
+                        logger.debug(traceback.format_exc())
+                
                 # Check if this is an unseen experiment (has unseen_clients_id in config)
                 # Try to get from selector_cfg first (for VPL models), then from main config (for FedDPO)
                 unseen_clients_id = []
