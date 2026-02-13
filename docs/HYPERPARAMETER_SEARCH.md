@@ -22,6 +22,30 @@
    - Scripts: `scripts/hpsearch/run_rl_hpsearch.sh <rl_tid> <selector_tid>`
    - Submit: `scripts/hpsearch/submit_rl.sh <phase>`
 
+### Qwen 하이퍼파라미터 서치 (54100 / 55100)
+
+동일한 Phase 구조로 **Qwen2-0.5B** 모델에 대한 하이퍼파라미터 서치를 별도 TID 대역으로 진행합니다.
+
+1. **Selector Training (Qwen)**  
+   - Task ID: **54100–54138**  
+   - WandB Project: `fvpl-selector`  
+   - Config: `cfg/hpsearch/vpl-gp-qwen/phase_${TID}.yaml`  
+   - Script: `scripts/hpsearch/run_selector_hpsearch_qwen.sh <tid>`  
+   - Submit: `bash scripts/hpsearch/submit_selector_qwen.sh <phase>`  
+   - Checkpoint: `hhrl_choice_qwen2_fedbiscuit_u3_vplgp_ortho_t${TID}.ckpt` (또는 `final_*`, `40_*`)
+
+2. **RL Training (Qwen)**  
+   - Task ID: **55100–55138**  
+   - WandB Project: `fvpl-rl`  
+   - Config: `cfg/hpsearch/vpl-gp-rl-qwen/hrl_${RL_TID}.yaml`  
+   - Script: `scripts/hpsearch/run_rl_hpsearch_qwen.sh <rl_tid> <selector_tid>`  
+   - Submit: `bash scripts/hpsearch/submit_rl_qwen.sh <phase>`  
+   - Selector TID: 54100–54138 (phase별 54100–54106, 54107–54113, 54114–54116, 54117, 54118–54138)  
+   - Checkpoint: `hhrl_rlhf_qwen2_choice_vplgp_t${RL_TID}.ckpt`  
+   - Model: `Qwen/Qwen2-0.5B@huggingface_llm`
+
+Phase 범위는 Gemma와 동일: Phase 1 (54100–54106), Phase 2 (54107–54113), Phase 3 (54114–54116), Phase 4 (54117), Phase 5 (54118–54138).
+
 ## 공통 설정 (모든 실험)
 
 | 파라미터 | 값 |
