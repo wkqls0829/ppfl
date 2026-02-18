@@ -23,6 +23,28 @@ except ImportError:
     OPENAI_AVAILABLE = False
     logger.warning("OpenAI library not installed. Install with: pip install openai")
 
+# Try to import PeftModel for baseline (disable_adapter) detection
+try:
+    from peft import PeftModel
+    PEFT_AVAILABLE = True
+except ImportError:
+    PeftModel = None
+    PEFT_AVAILABLE = False
+
+
+def _model_supports_disable_adapter(model):
+    """Return True if model can generate with adapter disabled (baseline).
+    AdapterModel wraps PeftModel; only when inner model is PeftModel can we use disable_adapter.
+    """
+    if not hasattr(model, 'generate') or not hasattr(model, 'model'):
+        return False
+    if not PEFT_AVAILABLE or PeftModel is None:
+        return False
+    try:
+        return isinstance(model.model, PeftModel)
+    except Exception:
+        return False
+
 # Suppress decoder-only right-padding warnings
 warnings.filterwarnings(
     "ignore",
@@ -619,15 +641,7 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
         fine_tuned_completions = tokenizer.batch_decode(fine_tuned_ids, skip_special_tokens=True)
         
         # Generate responses from baseline model (with adapter disabled if available)
-        # Check if model supports disable_adapter
-        disable_adapter = False
-        if hasattr(ctx.model, 'generate'):
-            # Try to use disable_adapter if it's a PeftModel
-            try:
-                if hasattr(ctx.model, 'model') and hasattr(ctx.model.model, 'disable_adapter'):
-                    disable_adapter = True
-            except:
-                pass
+        disable_adapter = _model_supports_disable_adapter(ctx.model)
         
         with torch.no_grad():
             if disable_adapter:
@@ -646,8 +660,14 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
                         max_new_tokens=ctx.cfg.llm.max_new_token,
                         **generation_kwargs)
             else:
-                # If adapter cannot be disabled, use the same model (this means no baseline comparison)
-                logger.warning("Cannot disable adapter for baseline generation. Using fine-tuned model for both.")
+                # If adapter cannot be disabled, use the same model (no true baseline comparison)
+                if not getattr(ctx, '_winrate_baseline_warning_logged', False):
+                    logger.warning(
+                        "Cannot disable adapter for baseline generation (model is not a PeftModel). "
+                        "Using fine-tuned model for both; winrate is self-comparison. "
+                        "To get baseline comparison, set llm.adapter.use: True in RL config."
+                    )
+                    ctx._winrate_baseline_warning_logged = True
                 baseline_ids = fine_tuned_ids
         
         baseline_completions = tokenizer.batch_decode(baseline_ids, skip_special_tokens=True)
@@ -873,13 +893,8 @@ def _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name="w
         logger.info(f"Generating responses and computing {metric_name} winrate (comparing with chosen response)...")
     
     # Check if model supports disable_adapter for baseline generation
-    disable_adapter = False
-    if use_baseline_model and hasattr(ctx.model, 'generate'):
-        try:
-            if hasattr(ctx.model, 'model') and hasattr(ctx.model.model, 'disable_adapter'):
-                disable_adapter = True
-        except:
-            pass
+    disable_adapter = use_baseline_model and _model_supports_disable_adapter(ctx.model)
+    baseline_warning_logged = False
     
     # Process test loader to generate responses
     # IMPORTANT: Match prompts from eval_loader with original_data by prompt text, not by index
@@ -953,7 +968,13 @@ def _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name="w
             baseline_completions = ctx.tokenizer.batch_decode(baseline_ids, skip_special_tokens=True)
         elif use_baseline_model:
             # Cannot disable adapter, use fine-tuned model for both (fallback)
-            logger.warning("Cannot disable adapter for baseline generation. Using fine-tuned model for both.")
+            if not baseline_warning_logged:
+                logger.warning(
+                    "Cannot disable adapter for baseline generation (model is not a PeftModel). "
+                    "Using fine-tuned model for both; winrate is self-comparison. "
+                    "To get baseline comparison, set llm.adapter.use: True in RL config."
+                )
+                baseline_warning_logged = True
             baseline_completions = fine_tuned_completions
         else:
             # Not using baseline model, compare with chosen response from original data

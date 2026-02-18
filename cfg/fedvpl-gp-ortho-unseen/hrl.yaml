@@ -44,6 +44,9 @@ llm:
   vpl_use_manual_orthogonal_labels: True
   vpl_num_prototypes: 2
   vpl_prototype_scale: 5.0
+  adapter:
+    use: True
+    count: 3
 expname: fedvplgp_ortho_unseen_hrl
 trainer:
   type: llmdporewardtrainer

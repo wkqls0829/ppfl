@@ -39,6 +39,9 @@ llm:
   vpl_max_logvar: -3.0
   # Selector checkpoint path (will be overridden by script)
   selector_ckpt: ""
+  adapter:
+    use: True
+    count: 3
 expname: hhrl/rlhf_gemma/hhrl_choice_gemma_vpl_ortho
 trainer:
   type: llmdporewardtrainer  # DPO trainer (not VPL trainer, as this is for policy learning)

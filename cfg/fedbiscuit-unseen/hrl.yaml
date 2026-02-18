@@ -29,6 +29,9 @@ llm:
   grad_accum_step: 32
   max_prompts_for_generation: 50
   generation_batch_size: 3
+  adapter:
+    use: True
+    count: 3
 expname: fedbiscuit_unseen_hrl
 trainer:
   type: llmdporewardtrainer

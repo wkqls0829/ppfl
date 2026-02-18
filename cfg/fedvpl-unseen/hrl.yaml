@@ -37,6 +37,9 @@ llm:
   vpl_use_feature_difference: True
   vpl_use_difference_only: True
   vpl_max_logvar: -3.0
+  adapter:
+    use: True
+    count: 3
 expname: fedvpl_unseen_hrl
 trainer:
   type: llmdporewardtrainer

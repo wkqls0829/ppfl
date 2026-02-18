@@ -43,6 +43,9 @@ llm:
   vpl_use_manual_orthogonal_labels: False
   vpl_num_prototypes: 0
   vpl_prototype_scale: 0.0
+  adapter:
+    use: True
+    count: 3
 expname: hhrl/rlhf_gemma/hhrl_choice_gemma_fedbiscuit_u3_vplgp
 trainer:
   type: llmdporewardtrainer  # DPO trainer (not VPL-GP trainer, as this is for policy learning)

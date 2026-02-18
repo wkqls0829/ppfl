@@ -28,6 +28,9 @@ llm:
   grad_accum_step: 32  # Increased gradient accumulation to compensate for reduced batch_size (effective batch size = batch_size * grad_accum_step = 1 * 32 = 32, same as before)
   max_prompts_for_generation: 50  # Randomly sample 50 prompts per round instead of using all 1000 (reduces generation time from ~30min to ~1.5min)
   generation_batch_size: 3  # Batch size for text generation (reduced from 5 to save memory). Lower = less memory but slower generation
+  adapter:
+    use: True
+    count: 3
 expname: hhrl/rlhf_gemma/hhrl_choice_gemma_fedbiscuit_u3
 trainer:
   type: llmdporewardtrainer

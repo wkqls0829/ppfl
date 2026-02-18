@@ -35,6 +35,9 @@ llm:
   vpl_latent_dim: 32  # Should match selector's vpl_latent_dim
   vpl_feature_method: 'choice_logits'  # Should match selector's vpl_feature_method
   vpl_gp_temperature: 1.0  # Should match selector's vpl_gp_temperature
+  adapter:
+    use: True
+    count: 3
 expname: hhrl/rlhf_gemma/hhrl_choice_gemma_unseen_vplgp
 trainer:
   type: llmdporewardtrainer

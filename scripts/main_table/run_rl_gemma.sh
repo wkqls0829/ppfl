@@ -243,7 +243,13 @@ config['llm']['reward_coeff'] = 0.1
 config['llm']['max_prompts_for_generation'] = 50
 config['llm']['generation_batch_size'] = 3
 
-# New RL eval settings: eval every 10 rounds, GPT API winrate
+# Baseline comparison: use LoRA adapter so winrate can compare fine-tuned vs baseline (disable_adapter)
+if 'adapter' not in config['llm']:
+    config['llm']['adapter'] = {}
+config['llm']['adapter']['use'] = True
+config['llm']['adapter']['count'] = 3
+
+# New RL eval settings: eval every 10 rounds, GPT API winrate (baseline comparison)
 if 'eval' not in config:
     config['eval'] = {}
 config['eval']['freq'] = 10

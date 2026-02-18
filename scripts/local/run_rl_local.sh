@@ -95,6 +95,17 @@ config['expname'] = "rl_local_only_t${TID}_n${CLIENT_NUM}"
 config['llm']['rlhf_use_variational_selection'] = False
 config['llm']['rlhf_use_variational_generation'] = False
 
+# Baseline comparison: use LoRA adapter so winrate can compare fine-tuned vs baseline (disable_adapter)
+if 'adapter' not in config['llm']:
+    config['llm']['adapter'] = {}
+config['llm']['adapter']['use'] = True
+config['llm']['adapter']['count'] = 3
+
+# Eval: baseline comparison for winrate
+if 'eval' not in config:
+    config['eval'] = {}
+config['eval']['use_baseline_model_for_winrate'] = True
+
 # Save config
 with open(config_file, 'w') as f:
     yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
