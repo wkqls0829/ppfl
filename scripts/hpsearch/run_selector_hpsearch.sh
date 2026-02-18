@@ -61,11 +61,12 @@ cp $CONFIG_BASE $CONFIG_FILE
 # Determine hyperparameters based on TID
 # Phase 1: 54000-54006
 # Phase 2: 54007-54013
-# Phase 3: 54014-54016
-# Phase 4: 54017
-# Phase 5: 54018-54038
+# Phase 3: 54014-54022 (refinement around 54005, 54008, 54013)
+# Phase 4: 54023-54025 (Learning Rate)
+# Phase 5: 54026 (Combined Best)
+# Phase 6: 54027-54047 (Fine-grained)
 
-# Default values (Phase 1-4 optimal)
+# Default values (Phase 1-2 optimal)
 ORTHOGONAL_WEIGHT=1.0
 ORTHONORM_WEIGHT=0.1
 PROTOTYPE_SCALE=5.0
@@ -99,61 +100,77 @@ if [ $TID -ge 54007 ] && [ $TID -le 54013 ]; then
     esac
 fi
 
-# Phase 3: Learning Rate (54014-54016)
-if [ $TID -ge 54014 ] && [ $TID -le 54016 ]; then
+# Phase 3: Refinement around 54005 (prototype_scale), 54008 (kl), 54013 (gp_temperature)
+if [ $TID -ge 54014 ] && [ $TID -le 54022 ]; then
+    PROTOTYPE_SCALE=2.0
+    KL_WEIGHT=0.1
+    GP_TEMPERATURE=1.0
     case $TID in
-        54014) LR=0.00005 ;;
-        54015) LR=0.0001 ;;
-        54016) LR=0.0002 ;;
+        54014) PROTOTYPE_SCALE=1.0 ;;
+        54015) PROTOTYPE_SCALE=2.0 ;;
+        54016) PROTOTYPE_SCALE=3.0 ;;
+        54017) KL_WEIGHT=0.03 ;;
+        54018) KL_WEIGHT=0.05 ;;
+        54019) KL_WEIGHT=0.08 ;;
+        54020) GP_TEMPERATURE=3.0 ; KL_WEIGHT=0.05 ;;
+        54021) GP_TEMPERATURE=5.0 ; KL_WEIGHT=0.05 ;;
+        54022) GP_TEMPERATURE=7.0 ; KL_WEIGHT=0.05 ;;
     esac
 fi
 
-# Phase 4: Combined Best Parameters (54017)
+# Phase 4: Learning Rate (54023-54025)
+if [ $TID -ge 54023 ] && [ $TID -le 54025 ]; then
+    case $TID in
+        54023) LR=0.00005 ;;
+        54024) LR=0.0001 ;;
+        54025) LR=0.0002 ;;
+    esac
+fi
+
+# Phase 5: Combined Best Parameters (54026)
 # Uses default values (already set)
 
-# Phase 5: Fine-grained Search (54018-54038)
-if [ $TID -ge 54018 ] && [ $TID -le 54038 ]; then
-    # Sub-phase 5.1: Orthogonal Weight (54018-54024)
-    if [ $TID -ge 54018 ] && [ $TID -le 54024 ]; then
+# Phase 6: Fine-grained Search (54027-54047)
+if [ $TID -ge 54027 ] && [ $TID -le 54047 ]; then
+    # Sub-phase 6.1: Orthogonal Weight (54027-54033)
+    if [ $TID -ge 54027 ] && [ $TID -le 54033 ]; then
         case $TID in
-            54018) ORTHOGONAL_WEIGHT=0.1 ;;
-            54019) ORTHOGONAL_WEIGHT=0.2 ;;
-            54020) ORTHOGONAL_WEIGHT=0.5 ;;
-            54021) ORTHOGONAL_WEIGHT=1.0 ;;
-            54022) ORTHOGONAL_WEIGHT=2.0 ;;
-            54023) ORTHOGONAL_WEIGHT=5.0 ;;
-            54024) ORTHOGONAL_WEIGHT=10.0 ;;
+            54027) ORTHOGONAL_WEIGHT=0.1 ;;
+            54028) ORTHOGONAL_WEIGHT=0.2 ;;
+            54029) ORTHOGONAL_WEIGHT=0.5 ;;
+            54030) ORTHOGONAL_WEIGHT=1.0 ;;
+            54031) ORTHOGONAL_WEIGHT=2.0 ;;
+            54032) ORTHOGONAL_WEIGHT=5.0 ;;
+            54033) ORTHOGONAL_WEIGHT=10.0 ;;
         esac
     fi
     
-    # Sub-phase 5.2: Orthonorm Weight (54025-54030)
-    # Note: This should use optimal value from 5.1, but for now using default
-    if [ $TID -ge 54025 ] && [ $TID -le 54030 ]; then
+    # Sub-phase 6.2: Orthonorm Weight (54034-54039)
+    if [ $TID -ge 54034 ] && [ $TID -le 54039 ]; then
         case $TID in
-            54025) ORTHONORM_WEIGHT=0.0 ;;
-            54026) ORTHONORM_WEIGHT=0.05 ;;
-            54027) ORTHONORM_WEIGHT=0.1 ;;
-            54028) ORTHONORM_WEIGHT=0.2 ;;
-            54029) ORTHONORM_WEIGHT=0.5 ;;
-            54030) ORTHONORM_WEIGHT=1.0 ;;
+            54034) ORTHONORM_WEIGHT=0.0 ;;
+            54035) ORTHONORM_WEIGHT=0.05 ;;
+            54036) ORTHONORM_WEIGHT=0.1 ;;
+            54037) ORTHONORM_WEIGHT=0.2 ;;
+            54038) ORTHONORM_WEIGHT=0.5 ;;
+            54039) ORTHONORM_WEIGHT=1.0 ;;
         esac
     fi
     
-    # Sub-phase 5.3: KL Weight (54031-54037)
-    # Note: This should use optimal values from 5.1-5.2, but for now using default
-    if [ $TID -ge 54031 ] && [ $TID -le 54037 ]; then
+    # Sub-phase 6.3: KL Weight (54040-54046)
+    if [ $TID -ge 54040 ] && [ $TID -le 54046 ]; then
         case $TID in
-            54031) KL_WEIGHT=0.01 ;;
-            54032) KL_WEIGHT=0.02 ;;
-            54033) KL_WEIGHT=0.05 ;;
-            54034) KL_WEIGHT=0.1 ;;
-            54035) KL_WEIGHT=0.2 ;;
-            54036) KL_WEIGHT=0.5 ;;
-            54037) KL_WEIGHT=1.0 ;;
+            54040) KL_WEIGHT=0.01 ;;
+            54041) KL_WEIGHT=0.02 ;;
+            54042) KL_WEIGHT=0.05 ;;
+            54043) KL_WEIGHT=0.1 ;;
+            54044) KL_WEIGHT=0.2 ;;
+            54045) KL_WEIGHT=0.5 ;;
+            54046) KL_WEIGHT=1.0 ;;
         esac
     fi
     
-    # Sub-phase 5.4: Optimal Combination (54038)
+    # Sub-phase 6.4: Optimal Combination (54047)
     # Uses default values (already set)
 fi
 

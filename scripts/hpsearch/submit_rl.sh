@@ -2,21 +2,22 @@
 
 # Submit Hyperparameter Search RL Experiments
 # Usage: bash submit_rl.sh <phase>
-#   phase: 1, 2, 3, 4, or 5
+#   phase: 1, 2, 3, 4, 5, or 6
 # Note: Run this after the corresponding selector phase completes
 
 PHASE=$1
 
 if [ -z "$PHASE" ]; then
     echo "Usage: $0 <phase>"
-    echo "  phase: 1, 2, 3, 4, or 5"
+    echo "  phase: 1, 2, 3, 4, 5, or 6"
     echo ""
     echo "Phase ranges:"
     echo "  Phase 1: RL 55000-55006, Selector 54000-54006 (7 experiments)"
     echo "  Phase 2: RL 55007-55013, Selector 54007-54013 (7 experiments)"
-    echo "  Phase 3: RL 55014-55016, Selector 54014-54016 (3 experiments)"
-    echo "  Phase 4: RL 55017, Selector 54017 (1 experiment)"
-    echo "  Phase 5: RL 55018-55038, Selector 54018-54038 (21 experiments)"
+    echo "  Phase 3: RL 55014-55022, Selector 54014-54022 (9 experiments)"
+    echo "  Phase 4: RL 55023-55025, Selector 54023-54025 (3 experiments)"
+    echo "  Phase 5: RL 55026, Selector 54026 (1 experiment)"
+    echo "  Phase 6: RL 55027-55047, Selector 54027-54047 (21 experiments)"
     exit 1
 fi
 
@@ -41,28 +42,35 @@ case $PHASE in
         ;;
     3)
         SELECTOR_START=54014
-        SELECTOR_END=54016
+        SELECTOR_END=54022
         RL_START=55014
-        RL_END=55016
-        PHASE_NAME="Phase 3: Learning Rate"
+        RL_END=55022
+        PHASE_NAME="Phase 3: Refinement (prototype_scale / kl_weight / gp_temperature)"
         ;;
     4)
-        SELECTOR_START=54017
-        SELECTOR_END=54017
-        RL_START=55017
-        RL_END=55017
-        PHASE_NAME="Phase 4: Combined Best Parameters"
+        SELECTOR_START=54023
+        SELECTOR_END=54025
+        RL_START=55023
+        RL_END=55025
+        PHASE_NAME="Phase 4: Learning Rate"
         ;;
     5)
-        SELECTOR_START=54018
-        SELECTOR_END=54038
-        RL_START=55018
-        RL_END=55038
-        PHASE_NAME="Phase 5: Fine-grained Hyperparameter Search"
+        SELECTOR_START=54026
+        SELECTOR_END=54026
+        RL_START=55026
+        RL_END=55026
+        PHASE_NAME="Phase 5: Combined Best Parameters"
+        ;;
+    6)
+        SELECTOR_START=54027
+        SELECTOR_END=54047
+        RL_START=55027
+        RL_END=55047
+        PHASE_NAME="Phase 6: Fine-grained Hyperparameter Search"
         ;;
     *)
         echo "ERROR: Invalid phase: $PHASE"
-        echo "Phase must be 1, 2, 3, 4, or 5"
+        echo "Phase must be 1, 2, 3, 4, 5, or 6"
         exit 1
         ;;
 esac

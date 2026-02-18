@@ -2,20 +2,21 @@
 
 # Submit Hyperparameter Search Selector Experiments
 # Usage: bash submit_selector.sh <phase>
-#   phase: 1, 2, 3, 4, or 5
+#   phase: 1, 2, 3, 4, 5, or 6
 
 PHASE=$1
 
 if [ -z "$PHASE" ]; then
     echo "Usage: $0 <phase>"
-    echo "  phase: 1, 2, 3, 4, or 5"
+    echo "  phase: 1, 2, 3, 4, 5, or 6"
     echo ""
     echo "Phase ranges:"
-    echo "  Phase 1: 54000-54006 (7 experiments)"
-    echo "  Phase 2: 54007-54013 (7 experiments)"
-    echo "  Phase 3: 54014-54016 (3 experiments)"
-    echo "  Phase 4: 54017 (1 experiment)"
-    echo "  Phase 5: 54018-54038 (21 experiments)"
+    echo "  Phase 1: 54000-54006 (7 experiments) - Orthogonal Loss"
+    echo "  Phase 2: 54007-54013 (7 experiments) - VPL Core"
+    echo "  Phase 3: 54014-54022 (9 experiments) - Refinement (54005/54008/54013 기반)"
+    echo "  Phase 4: 54023-54025 (3 experiments) - Learning Rate"
+    echo "  Phase 5: 54026 (1 experiment) - Combined Best"
+    echo "  Phase 6: 54027-54047 (21 experiments) - Fine-grained"
     exit 1
 fi
 
@@ -36,22 +37,27 @@ case $PHASE in
         ;;
     3)
         START_TID=54014
-        END_TID=54016
-        PHASE_NAME="Phase 3: Learning Rate"
+        END_TID=54022
+        PHASE_NAME="Phase 3: Refinement (prototype_scale / kl_weight / gp_temperature)"
         ;;
     4)
-        START_TID=54017
-        END_TID=54017
-        PHASE_NAME="Phase 4: Combined Best Parameters"
+        START_TID=54023
+        END_TID=54025
+        PHASE_NAME="Phase 4: Learning Rate"
         ;;
     5)
-        START_TID=54018
-        END_TID=54038
-        PHASE_NAME="Phase 5: Fine-grained Hyperparameter Search"
+        START_TID=54026
+        END_TID=54026
+        PHASE_NAME="Phase 5: Combined Best Parameters"
+        ;;
+    6)
+        START_TID=54027
+        END_TID=54047
+        PHASE_NAME="Phase 6: Fine-grained Hyperparameter Search"
         ;;
     *)
         echo "ERROR: Invalid phase: $PHASE"
-        echo "Phase must be 1, 2, 3, 4, or 5"
+        echo "Phase must be 1, 2, 3, 4, 5, or 6"
         exit 1
         ;;
 esac

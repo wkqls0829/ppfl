@@ -65,7 +65,9 @@ if [ $TID -ge 54100 ] && [ $TID -le 54106 ]; then
     esac
 fi
 
+# Phase 2: VPL Core (54105 기반 — prototype_scale=2.0 사용)
 if [ $TID -ge 54107 ] && [ $TID -le 54113 ]; then
+    PROTOTYPE_SCALE=2.0
     case $TID in
         54107) KL_WEIGHT=0.02 ;;
         54108) KL_WEIGHT=0.05 ;;
