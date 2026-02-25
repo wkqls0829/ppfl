@@ -2,10 +2,12 @@
 
 SLURM 클러스터에서 Hyperparameter Search 실험을 실행하기 위한 스크립트입니다.
 
+**Phase·TID 전체 정리**: [docs/HYPERPARAMETER_SEARCH_PHASES_AND_TIDS.md](../../docs/HYPERPARAMETER_SEARCH_PHASES_AND_TIDS.md) 참고.
+
 ## 실험 구조
 
-- **Gemma**: Selector 54000-54047, RL 55000-55047
-- **Qwen**: Selector 54100-54138, RL 55100-55138
+- **Gemma**: Selector 54000-54047, RL 55000-55047 (**Phase 1–6**)
+- **Qwen**: Selector 54100-54138, RL 55100-55138 (**Phase 1–5**)
 
 ## Phase별 실험 범위 (Gemma)
 
