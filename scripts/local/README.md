@@ -13,8 +13,9 @@
 ## 특징
 
 - Selector checkpoint 불필요 (FedDPO 방식)
+- **`--selector-cfg-file` 미사용**: selector를 로드하지 않아 **모델 1개만 사용** (OOM 방지)
 - `rlhf_use_variational_selection: False` - Variational selection 사용 안 함
-- FedDPO와 유사한 방식으로 직접 preference data에서 학습
+- FedDPO와 유사한 방식으로 직접 preference data에서 학습 (policy 모델로 generation + selection 모두 수행)
 - 로컬 서버에서 실행 (SLURM cluster 아님, nohup으로 백그라운드 실행)
 - `scripts/feddpo/hrl-10000.sh` 스크립트를 참고하여 작성
 
@@ -49,7 +50,7 @@ bash scripts/local/run_all_local_rl.sh
 
 | 파라미터 | 값 |
 |---------|-----|
-| Model | `google/gemma-2b@huggingface_llm` |
+| Model | `Qwen/Qwen2-0.5B@huggingface_llm` |
 | Trainer | `llmdporewardtrainer` (DPO trainer) |
 | `rlhf_use_variational_selection` | `False` |
 | `rlhf_use_variational_generation` | `False` |
@@ -60,7 +61,7 @@ bash scripts/local/run_all_local_rl.sh
 | `use_gpt_api_for_winrate` | `True` |
 | `use_baseline_model_for_winrate` | `True` |
 | `openai_model` | `gpt-4o-mini` |
-| Learning rate | 0.0001 |
+| Learning rate | 0.00001 (Qwen2) |
 | Total rounds | 50 |
 | Local update steps | 30 |
 | Batch size | 1 |
@@ -87,9 +88,9 @@ ps aux | grep "01000\|01001\|01002" | grep python
 
 ## 체크포인트 위치
 
-- `/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_local_only_t01000.ckpt`
-- `/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_local_only_t01001.ckpt`
-- `/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_gemma_choice_local_only_t01002.ckpt`
+- `/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_qwen2_choice_local_only_t01000.ckpt`
+- `/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_qwen2_choice_local_only_t01001.ckpt`
+- `/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_qwen2_choice_local_only_t01002.ckpt`
 
 ## 평가 지표
 
@@ -98,6 +99,17 @@ ps aux | grep "01000\|01001\|01002" | grep python
 - `helpfulness_winrate`: Helpful response win rate
 - `harmlessness_winrate`: Harmless response win rate
 - `avg_winlose_rate`: Overall win-lose rate
+
+**Winrate 계산**: `use_gpt_api_for_winrate: true`이면 GPT API(gpt-4o-mini)로 비교합니다.  
+`openai` 미설치 또는 `OPENAI_API_KEY` 미설정 시 **내부 모델**로 자동 fallback 되어 0점이 되지 않습니다.  
+
+**GPT API 사용 시**: 프로젝트 루트에 **`.env`** 파일을 만들고 아래 한 줄을 넣으세요 (실제 키로 교체).
+```bash
+# 프로젝트 루트: /home/kjb/ppfl/.env
+OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxx
+```
+`.env.example`을 복사해 써도 됩니다: `cp .env.example .env` 후 `OPENAI_API_KEY` 값만 수정.  
+또한 `pip install openai` 필요.
 
 ## 비교 목적
 

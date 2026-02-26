@@ -26,8 +26,16 @@ export TOKENIZERS_PARALLELISM=false
 
 # Set PYTHONPATH to use the current directory's federatedscope
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
+
+# Load .env (OPENAI_API_KEY for winrate evaluation)
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    set -a
+    source "$PROJECT_ROOT/.env"
+    set +a
+    echo "Loaded .env (OPENAI_API_KEY for winrate eval)"
+fi
 
 # Determine checkpoint directory (local server)
 if [ -d "/hdd/hdd3/kjb" ]; then
@@ -82,14 +90,22 @@ config['device'] = int("$GPU_ID")
 config['federate']['client_num'] = int("$CLIENT_NUM")
 config['federate']['sample_client_num'] = $SAMPLE_CLIENT_NUM
 
-# Update checkpoint path
-config['federate']['save_to'] = "$CHECKPOINT_DIR/hhrl_rlhf_gemma_choice_local_only_t${TID}.ckpt"
+# Update checkpoint path (qwen2-0.5b)
+config['federate']['save_to'] = "$CHECKPOINT_DIR/hhrl_rlhf_qwen2_choice_local_only_t${TID}.ckpt"
 
 # Update data root
 config['data']['root'] = "$DATA_ROOT"
 
+# Model: Qwen2-0.5B (local only uses Qwen)
+config['model']['type'] = 'Qwen/Qwen2-0.5B@huggingface_llm'
+if 'train' not in config:
+    config['train'] = {}
+if 'optimizer' not in config['train']:
+    config['train']['optimizer'] = {}
+config['train']['optimizer']['lr'] = 0.00001  # Qwen2 recommended lr
+
 # Update expname
-config['expname'] = "rl_local_only_t${TID}_n${CLIENT_NUM}"
+config['expname'] = "rl_local_only_qwen2_t${TID}_n${CLIENT_NUM}"
 
 # RL settings (no selector - direct preference learning)
 config['llm']['rlhf_use_variational_selection'] = False
@@ -114,9 +130,9 @@ print(f"Config file created: {config_file}")
 EOF
 
 # Run experiment (nohup for background execution on local server)
+# Do NOT pass --selector-cfg-file: selector_model stays None, so we use policy model for selection (single model, no OOM)
 nohup python -u federatedscope/llm/rlhf/main.py \
     --cfg $CONFIG_FILE \
-    --selector-cfg-file $CONFIG_FILE \
     > outputs/${TID}.log 2>&1 &
 
 echo "Local RL only training started (task ID: ${TID})"

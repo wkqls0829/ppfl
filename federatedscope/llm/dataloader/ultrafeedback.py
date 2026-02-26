@@ -356,7 +356,7 @@ def load_ultrafeedback_for_rlhf(data_root,
             if overall_score is None:
                 overall_score = comp.get('fine-grained_score', None)
             
-            completion_text = comp.get('completion', '')
+            completion_text = comp.get('response', '') or comp.get('completion', '')
             if not completion_text:
                 continue
             
@@ -483,14 +483,12 @@ def load_ultrafeedback_for_rlhf(data_root,
         # Use test split (20%)
         total_pairs = len(all_prompts)
         test_size = int(total_pairs * 0.2)
-        test_prompts = all_prompts[:test_size]
-        
-        list_prompts = [item['prompt'] for item in test_prompts]
-        
+        train_prompts = all_prompts[test_size:]  # 80% for RL training
+        test_prompts = all_prompts[:test_size]   # 20% for test
+
         if raw_no_prompt:
-            if max_num_test > 0:
-                return (list_prompts[:max_num_test], None, None)
-            else:
-                return (list_prompts, None, None)
+            # Return list of dicts (like HH-RLHF) so _generate_pairwise_data can set harmless_client_id etc.
+            out = train_prompts if max_num_test <= 0 else train_prompts[:max_num_test]
+            return (out, None, None)
         
         return ([], [], [])

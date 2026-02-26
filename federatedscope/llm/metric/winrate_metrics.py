@@ -1127,7 +1127,15 @@ def _get_winrate_scores(ctx, prompt_template, metric_name="winrate"):
         dataset_type = getattr(getattr(ctx.cfg, 'data', None), 'type', '') or ''
         use_gpt_api = ('hh-rlhf' in str(dataset_type).lower() or 'hrl' in str(dataset_type).lower())
     if use_gpt_api:
-        return _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name)
+        scores = _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name)
+        # Fallback to internal model when GPT API unavailable (e.g. openai not installed or no API key)
+        if not scores and not OPENAI_AVAILABLE:
+            logger.info("GPT API unavailable; using internal model for winrate evaluation.")
+            return _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name)
+        if not scores:
+            logger.info("GPT API returned no scores; falling back to internal model for winrate evaluation.")
+            return _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name)
+        return scores
     else:
         # Use internal model (with baseline model support if configured)
         return _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name)
