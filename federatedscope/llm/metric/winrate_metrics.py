@@ -450,14 +450,22 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
     
     max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 30)
     # For winrate evaluation, set a reasonable default limit to prevent infinite loops
-    # Default: 30 samples for quick evaluation, or use config value if set
-    if max_eval_samples <= 0:
+    # Final round: use full dataset (no limit)
+    is_final_round = False
+    if hasattr(ctx, 'cur_round') and hasattr(ctx.cfg.federate, 'total_round_num'):
+        is_final_round = (ctx.cur_round + 1 == ctx.cfg.federate.total_round_num)
+    if is_final_round:
+        max_eval_samples = float('inf')
+        logger.info(f"Final round detected (round {ctx.cur_round + 1}/{ctx.cfg.federate.total_round_num}). Using full dataset for GPT API winrate evaluation.")
+    elif max_eval_samples <= 0:
         max_eval_samples = 30  # Default limit instead of infinity to prevent infinite loops
     
     # Additional safety: set maximum iteration limit to prevent infinite loops
     # Even if max_eval_samples is large, limit iterations to prevent runaway processes
     max_iterations = getattr(ctx.cfg.eval, 'max_iterations_for_winrate', 1000)
-    if max_iterations <= 0:
+    if is_final_round:
+        max_iterations = float('inf')  # No iteration limit on final round (use full dataset)
+    elif max_iterations <= 0:
         max_iterations = 1000  # Default safety limit
     
     total_samples_evaluated = 0

@@ -80,6 +80,10 @@ if [ $TID -ge 54107 ] && [ $TID -le 54113 ]; then
 fi
 
 if [ $TID -ge 54114 ] && [ $TID -le 54116 ]; then
+    # Phase 3: Learning Rate search with Phase 2 best (55113): prototype_scale=2.0, kl=0.1, gp_temp=5.0
+    PROTOTYPE_SCALE=2.0
+    KL_WEIGHT=0.1
+    GP_TEMPERATURE=5.0
     case $TID in
         54114) LR=0.00005 ;;
         54115) LR=0.0001 ;;
