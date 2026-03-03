@@ -87,6 +87,17 @@ if [ $TID -ge 54114 ] && [ $TID -le 54116 ]; then
     esac
 fi
 
+# Phase 4: Combined Best (54117) — Phase 1·2 최적/중간값 조합
+# 54105(prototype_scale=2.0) + Phase 2 중간: kl=0.05, gp_temp=1.0, lr=0.0001
+if [ $TID -eq 54117 ]; then
+    ORTHOGONAL_WEIGHT=1.0
+    ORTHONORM_WEIGHT=0.1
+    PROTOTYPE_SCALE=2.0
+    KL_WEIGHT=0.05
+    GP_TEMPERATURE=1.0
+    LR=0.0001
+fi
+
 if [ $TID -ge 54118 ] && [ $TID -le 54138 ]; then
     if [ $TID -ge 54118 ] && [ $TID -le 54124 ]; then
         case $TID in

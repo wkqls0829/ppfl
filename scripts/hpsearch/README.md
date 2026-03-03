@@ -196,7 +196,16 @@ Phase 1·2만 TID와 파라미터 값을 매핑한 표입니다. 공통 기본�
 | 54022/55022 | 1.0 | 0.1 | 2.0 | 0.05 | **7.0** |
 
 - 실행: `submit_selector.sh` / `submit_rl.sh`, 스크립트: `run_selector_hpsearch.sh`, `run_rl_hpsearch.sh`
+- Phase 3에서 54015(prototype_scale=2.0), 54018(kl=0.05), 54021(gp_temp=5.0), Phase 4에서 54024(lr=0.0001) 반영.
 - 상세: `PHASE3_EXECUTION_GUIDE.md` 참고
+
+**Phase 5 (Combined Best)** — Selector 54026 / RL 55026
+
+| TID (Sel/RL) | vpl_orthogonal_weight | vpl_orthogonal_orthonorm_weight | vpl_prototype_scale | vpl_kl_weight | vpl_gp_temperature | lr |
+|--------------|-----------------------|----------------------------------|----------------------|---------------|--------------------|-----|
+| 54026/55026 | 1.0 | 0.1 | **2.0** | **0.05** | **5.0** | **0.0001** |
+
+- Phase 1–4 최적/중간값 조합. 실행: `submit_selector.sh 5`, `submit_rl.sh 5`. 상세: `PHASE5_COMBINED_BEST_GUIDE.md`
 
 ### Qwen (Qwen2-0.5B)
 
@@ -226,6 +235,14 @@ Phase 1·2만 TID와 파라미터 값을 매핑한 표입니다. 공통 기본�
 
 - Phase 1에서 54105(prototype_scale=2.0)를 기준으로 Phase 2에서 kl_weight / gp_temperature만 탐색.
 - 실행: `submit_selector_qwen.sh` / `submit_rl_qwen.sh`, 스크립트: `run_selector_hpsearch_qwen.sh`, `run_rl_hpsearch_qwen.sh`
+
+**Phase 4 (Combined Best)** — Selector 54117 / RL 55117
+
+| TID (Sel/RL) | vpl_orthogonal_weight | vpl_orthogonal_orthonorm_weight | vpl_prototype_scale | vpl_kl_weight | vpl_gp_temperature | lr |
+|--------------|-----------------------|----------------------------------|----------------------|---------------|--------------------|-----|
+| 54117/55117 | 1.0 | 0.1 | **2.0** | **0.05** | **1.0** | **0.0001** |
+
+- Phase 1·2 최적/중간값 조합. 실행: `submit_selector_qwen.sh 4`, `submit_rl_qwen.sh 4`. 상세: `PHASE5_COMBINED_BEST_GUIDE.md`
 
 ## 설정 변경사항
 

@@ -128,7 +128,16 @@ if [ $TID -ge 54023 ] && [ $TID -le 54025 ]; then
 fi
 
 # Phase 5: Combined Best Parameters (54026)
-# Uses default values (already set)
+# Phase 1–4 최적/중간값 조합: orthogonal=1.0, orthonorm=0.1, prototype_scale=2.0 (54005/54015),
+# kl_weight=0.05 (54008/54018), gp_temperature=5.0 (54013/54021), lr=0.0001 (54024)
+if [ $TID -eq 54026 ]; then
+    ORTHOGONAL_WEIGHT=1.0
+    ORTHONORM_WEIGHT=0.1
+    PROTOTYPE_SCALE=2.0
+    KL_WEIGHT=0.05
+    GP_TEMPERATURE=5.0
+    LR=0.0001
+fi
 
 # Phase 6: Fine-grained Search (54027-54047)
 if [ $TID -ge 54027 ] && [ $TID -le 54047 ]; then

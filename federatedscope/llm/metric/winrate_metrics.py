@@ -224,6 +224,9 @@ def _load_original_ultrafeedback_data(ctx):
     """
     Load original UltraFeedback data for evaluation.
     Returns list of dicts with 'prompt', 'output_A', 'output_B'.
+    Uses dataset['train'] only (UltraFeedback has no official test split).
+    For consistency with HH-RLHF logic we build the same conflicting-pair structure;
+    the only difference is HH-RLHF uses official test split, UltraFeedback uses train.
     """
     try:
         import datasets
@@ -912,178 +915,249 @@ def _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name="w
     consecutive_failures = 0
     max_consecutive_failures = 100  # Stop if 100 consecutive samples fail to match
     
-    for batch in tqdm(eval_loader, desc=f"Generating responses for {metric_name} winrate"):
-        if should_limit and total_samples_evaluated >= max_eval_samples:
-            break
-        
-        # Handle different data formats
-        if 'win_input_ids' in batch:
-            input_ids = batch['win_input_ids'].to(ctx.device)
-            attention_mask = batch.get('win_attention_mask', None)
+    if 'ultrafeedback' in dataset_type:
+        # Use original_data directly: same flow as HH-RLHF (generate -> compare -> winrate)
+        # but avoid matching because eval_loader uses RL test split and original_data is from train.
+        # Generation template and comparison logic match HH-RLHF (same prompt_template, baseline/chosen, selector).
+        from federatedscope.llm.dataloader.ultrafeedback import ULTRAFEEDBACK_PROMPT_DICT
+        gen_tpl = ULTRAFEEDBACK_PROMPT_DICT["generation"]  # Same as RL generation_prompt
+        max_len = getattr(ctx.cfg.llm, 'tok_len', 1024)
+        for item in tqdm(original_data, desc=f"Generating for {metric_name} winrate (UltraFeedback)"):
+            prompt_raw = item['prompt']
+            output_A = item['output_A']
+            formatted_prompt = gen_tpl.format(prompt=prompt_raw)
+            enc = ctx.tokenizer(
+                formatted_prompt,
+                return_tensors='pt',
+                truncation=True,
+                max_length=max_len,
+                padding=False,
+            )
+            input_ids = enc['input_ids'].to(ctx.device)
+            attention_mask = enc.get('attention_mask')
             if attention_mask is not None:
                 attention_mask = attention_mask.to(ctx.device)
-        elif 'input_ids' in batch:
-            input_ids = batch['input_ids'].to(ctx.device)
-            attention_mask = batch.get('attention_mask', None)
-            if attention_mask is not None:
-                attention_mask = attention_mask.to(ctx.device)
-        else:
-            continue
-        
-        # Decode prompts
-        prompts = ctx.tokenizer.batch_decode(input_ids, skip_special_tokens=True)
-        
-        # Generate responses from fine-tuned model
-        with torch.no_grad():
-            if attention_mask is not None:
+            with torch.no_grad():
                 fine_tuned_ids = ctx.model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     max_new_tokens=ctx.cfg.llm.max_new_token,
-                    **generation_kwargs)
+                    **generation_kwargs
+                )
+            fine_tuned_dec = ctx.tokenizer.batch_decode(fine_tuned_ids, skip_special_tokens=True)[0]
+            if formatted_prompt in fine_tuned_dec:
+                fine_tuned_response = fine_tuned_dec.replace(formatted_prompt, "").strip()
             else:
-                fine_tuned_ids = ctx.model.generate(
-                    input_ids=input_ids,
-                    max_new_tokens=ctx.cfg.llm.max_new_token,
-                    **generation_kwargs)
-        
-        fine_tuned_completions = ctx.tokenizer.batch_decode(fine_tuned_ids, skip_special_tokens=True)
-        
-        # Generate responses from baseline model (if use_baseline_model is True)
-        if use_baseline_model and disable_adapter:
-            with torch.no_grad():
-                if attention_mask is not None:
+                fine_tuned_response = fine_tuned_dec[len(formatted_prompt):].strip() if fine_tuned_dec.startswith(formatted_prompt[:50]) else fine_tuned_dec.strip()
+            if use_baseline_model and disable_adapter:
+                with torch.no_grad():
                     baseline_ids = ctx.model.generate(
                         disable_adapter=True,
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         max_new_tokens=ctx.cfg.llm.max_new_token,
-                        **generation_kwargs)
+                        **generation_kwargs
+                    )
+                baseline_dec = ctx.tokenizer.batch_decode(baseline_ids, skip_special_tokens=True)[0]
+                if formatted_prompt in baseline_dec:
+                    baseline_response = baseline_dec.replace(formatted_prompt, "").strip()
                 else:
-                    baseline_ids = ctx.model.generate(
-                        disable_adapter=True,
-                        input_ids=input_ids,
-                        max_new_tokens=ctx.cfg.llm.max_new_token,
-                        **generation_kwargs)
-            baseline_completions = ctx.tokenizer.batch_decode(baseline_ids, skip_special_tokens=True)
-        elif use_baseline_model:
-            # Cannot disable adapter, use fine-tuned model for both (fallback)
-            if not baseline_warning_logged:
-                logger.warning(
-                    "Cannot disable adapter for baseline generation (model is not a PeftModel). "
-                    "Using fine-tuned model for both; winrate is self-comparison. "
-                    "To get baseline comparison, set llm.adapter.use: True in RL config."
-                )
-                baseline_warning_logged = True
-            baseline_completions = fine_tuned_completions
-        else:
-            # Not using baseline model, compare with chosen response from original data
-            baseline_completions = None
-        
-        # Extract generated responses (remove prompt part)
-        batch_size = len(prompts)
-        if should_limit and total_samples_evaluated + batch_size > max_eval_samples:
-            batch_size = max_eval_samples - total_samples_evaluated
-            prompts = prompts[:batch_size]
-            fine_tuned_completions = fine_tuned_completions[:batch_size]
-            if baseline_completions is not None:
-                baseline_completions = baseline_completions[:batch_size]
-        
-        for i in range(batch_size):
-            if total_samples_evaluated >= max_eval_samples:
-                break
-            
-            prompt = prompts[i]
-            fine_tuned_response = fine_tuned_completions[i]
-            
-            # Remove prompt from generated responses
-            if prompt in fine_tuned_response:
-                fine_tuned_response = fine_tuned_response.replace(prompt, "").strip()
-            
-            # Match prompt with original_data by prompt text (not by index)
-            # Extract the actual prompt text from the formatted prompt
-            # The prompt may contain generation template, extract the actual user prompt
-            prompt_text = prompt
-            if "### CONVERSATION:" in prompt:
-                # Extract the actual conversation part
-                parts = prompt.split("### CONVERSATION:")
-                if len(parts) > 1:
-                    prompt_text = parts[1].split("### RESPONSE:")[0].strip()
-            
-            # Find matching original_data item by prompt text
-            original_item = None
-            original_prompt = None
-            if prompt_text.strip() in prompt_to_original_idx:
-                original_idx = prompt_to_original_idx[prompt_text.strip()]
-                original_item = original_data[original_idx]
-                original_prompt = original_item['prompt']
-                consecutive_failures = 0  # Reset failure counter on success
+                    baseline_response = baseline_dec[len(formatted_prompt):].strip() if baseline_dec.startswith(formatted_prompt[:50]) else baseline_dec.strip()
             else:
-                # If no exact match, try to find by partial match
-                # This can happen if prompt formatting differs slightly
-                consecutive_failures += 1
-                if consecutive_failures >= max_consecutive_failures:
-                    logger.warning(f"Too many consecutive matching failures ({consecutive_failures}). "
-                                 f"Stopping winrate evaluation to prevent infinite loop.")
-                    break
-                if consecutive_failures % 10 == 0:
-                    logger.warning(f"Could not find exact match for prompt in original_data. "
-                                 f"Consecutive failures: {consecutive_failures}. Skipping this sample.")
-                continue
-            
-            if use_baseline_model and baseline_completions is not None:
-                # Compare fine-tuned vs baseline
-                baseline_response = baseline_completions[i]
-                if prompt in baseline_response:
-                    baseline_response = baseline_response.replace(prompt, "").strip()
-                
-                # Create evaluation prompt: fine-tuned (A) vs baseline (B)
-                eval_prompt = prompt_template.format(
-                    prompt=original_prompt,
-                    response_a=fine_tuned_response,  # Fine-tuned model response
-                    response_b=baseline_response      # Baseline model response
-                )
-            else:
-                # Compare fine-tuned vs chosen (original approach)
-                chosen_response = original_item['output_A']  # chosen (better)
-                
-                # Create evaluation prompt: fine-tuned (A) vs chosen (B)
-                eval_prompt = prompt_template.format(
-                    prompt=original_prompt,
-                    response_a=fine_tuned_response,
-                    response_b=chosen_response
-                )
-            
-            # Tokenize and get choice using baseline model (if available) or fine-tuned model
+                baseline_response = output_A
+            eval_prompt = prompt_template.format(
+                prompt=prompt_raw,
+                response_a=fine_tuned_response,
+                response_b=baseline_response
+            )
             input_ids_eval = ctx.tokenizer.encode(eval_prompt, return_tensors='pt').to(ctx.device)
-            
             with torch.no_grad():
-                # Use baseline model (selector) for comparison, not fine-tuned model
-                # The selector model should be used for fair comparison
                 if hasattr(ctx, 'selector_model') and ctx.selector_model is not None:
-                    # Use selector model for comparison (trained binary selector)
                     selector_device = next(ctx.selector_model.parameters()).device
-                    input_ids_eval_selector = input_ids_eval.to(selector_device)
-                    outputs = ctx.selector_model(input_ids=input_ids_eval_selector)
+                    input_ids_eval_sel = input_ids_eval.to(selector_device)
+                    outputs = ctx.selector_model(input_ids=input_ids_eval_sel)
                 elif use_baseline_model and disable_adapter:
-                    # Fallback: use baseline model (adapter disabled)
                     outputs = ctx.model(input_ids=input_ids_eval, disable_adapter=True)
                 else:
-                    # Last resort: use fine-tuned model (may be biased)
-                    logger.warning("Using fine-tuned model for winrate comparison (may be biased). Consider using selector model.")
                     outputs = ctx.model(input_ids=input_ids_eval)
                 logits = outputs.logits
                 last_logits = logits[0, -1, choice_tokens]
-                choice = torch.argmax(last_logits).item()  # 0 for A (fine-tuned), 1 for B (baseline/chosen)
-            
-            # choice == 0 means fine-tuned (A) is better than baseline/chosen (B) -> WIN
-            # choice == 1 means baseline/chosen (B) is better than fine-tuned (A) -> LOSE
+                choice = torch.argmax(last_logits).item()
             all_choices.append(choice)
-            
             total_samples_evaluated += 1
-        
-        if should_limit and total_samples_evaluated >= max_eval_samples:
-            break
+    else:
+        for batch in tqdm(eval_loader, desc=f"Generating responses for {metric_name} winrate"):
+            if should_limit and total_samples_evaluated >= max_eval_samples:
+                break
+            
+            # Handle different data formats
+            if 'win_input_ids' in batch:
+                input_ids = batch['win_input_ids'].to(ctx.device)
+                attention_mask = batch.get('win_attention_mask', None)
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(ctx.device)
+            elif 'input_ids' in batch:
+                input_ids = batch['input_ids'].to(ctx.device)
+                attention_mask = batch.get('attention_mask', None)
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(ctx.device)
+            else:
+                continue
+            
+                # Decode prompts
+            prompts = ctx.tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+            
+            # Generate responses from fine-tuned model
+            with torch.no_grad():
+                if attention_mask is not None:
+                    fine_tuned_ids = ctx.model.generate(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        max_new_tokens=ctx.cfg.llm.max_new_token,
+                        **generation_kwargs)
+                else:
+                    fine_tuned_ids = ctx.model.generate(
+                        input_ids=input_ids,
+                        max_new_tokens=ctx.cfg.llm.max_new_token,
+                        **generation_kwargs)
+            
+            fine_tuned_completions = ctx.tokenizer.batch_decode(fine_tuned_ids, skip_special_tokens=True)
+            
+            # Generate responses from baseline model (if use_baseline_model is True)
+            if use_baseline_model and disable_adapter:
+                with torch.no_grad():
+                    if attention_mask is not None:
+                        baseline_ids = ctx.model.generate(
+                            disable_adapter=True,
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            max_new_tokens=ctx.cfg.llm.max_new_token,
+                            **generation_kwargs)
+                    else:
+                        baseline_ids = ctx.model.generate(
+                            disable_adapter=True,
+                            input_ids=input_ids,
+                            max_new_tokens=ctx.cfg.llm.max_new_token,
+                            **generation_kwargs)
+                baseline_completions = ctx.tokenizer.batch_decode(baseline_ids, skip_special_tokens=True)
+            elif use_baseline_model:
+                # Cannot disable adapter, use fine-tuned model for both (fallback)
+                if not baseline_warning_logged:
+                    logger.warning(
+                        "Cannot disable adapter for baseline generation (model is not a PeftModel). "
+                        "Using fine-tuned model for both; winrate is self-comparison. "
+                        "To get baseline comparison, set llm.adapter.use: True in RL config."
+                    )
+                    baseline_warning_logged = True
+                baseline_completions = fine_tuned_completions
+            else:
+                # Not using baseline model, compare with chosen response from original data
+                baseline_completions = None
+            
+            # Extract generated responses (remove prompt part)
+            batch_size = len(prompts)
+            if should_limit and total_samples_evaluated + batch_size > max_eval_samples:
+                batch_size = max_eval_samples - total_samples_evaluated
+                prompts = prompts[:batch_size]
+                fine_tuned_completions = fine_tuned_completions[:batch_size]
+                if baseline_completions is not None:
+                    baseline_completions = baseline_completions[:batch_size]
+            
+            for i in range(batch_size):
+                if total_samples_evaluated >= max_eval_samples:
+                    break
+                
+                prompt = prompts[i]
+                fine_tuned_response = fine_tuned_completions[i]
+                
+                # Remove prompt from generated responses
+                if prompt in fine_tuned_response:
+                    fine_tuned_response = fine_tuned_response.replace(prompt, "").strip()
+                
+                # Match prompt with original_data by prompt text (not by index)
+                # Extract the actual prompt text from the formatted prompt
+                # The prompt may contain generation template, extract the actual user prompt
+                prompt_text = prompt
+                if "### CONVERSATION:" in prompt:
+                    # Extract the actual conversation part
+                    parts = prompt.split("### CONVERSATION:")
+                    if len(parts) > 1:
+                        prompt_text = parts[1].split("### RESPONSE:")[0].strip()
+                
+                # Find matching original_data item by prompt text
+                original_item = None
+                original_prompt = None
+                if prompt_text.strip() in prompt_to_original_idx:
+                    original_idx = prompt_to_original_idx[prompt_text.strip()]
+                    original_item = original_data[original_idx]
+                    original_prompt = original_item['prompt']
+                    consecutive_failures = 0  # Reset failure counter on success
+                else:
+                    # If no exact match, try to find by partial match
+                    # This can happen if prompt formatting differs slightly
+                    consecutive_failures += 1
+                    if consecutive_failures >= max_consecutive_failures:
+                        logger.warning(f"Too many consecutive matching failures ({consecutive_failures}). "
+                                     f"Stopping winrate evaluation to prevent infinite loop.")
+                        break
+                    if consecutive_failures % 10 == 0:
+                        logger.warning(f"Could not find exact match for prompt in original_data. "
+                                     f"Consecutive failures: {consecutive_failures}. Skipping this sample.")
+                    continue
+                
+                if use_baseline_model and baseline_completions is not None:
+                    # Compare fine-tuned vs baseline
+                    baseline_response = baseline_completions[i]
+                    if prompt in baseline_response:
+                        baseline_response = baseline_response.replace(prompt, "").strip()
+                    
+                    # Create evaluation prompt: fine-tuned (A) vs baseline (B)
+                    eval_prompt = prompt_template.format(
+                        prompt=original_prompt,
+                        response_a=fine_tuned_response,  # Fine-tuned model response
+                        response_b=baseline_response      # Baseline model response
+                    )
+                else:
+                    # Compare fine-tuned vs chosen (original approach)
+                    chosen_response = original_item['output_A']  # chosen (better)
+                    
+                    # Create evaluation prompt: fine-tuned (A) vs chosen (B)
+                    eval_prompt = prompt_template.format(
+                        prompt=original_prompt,
+                        response_a=fine_tuned_response,
+                        response_b=chosen_response
+                    )
+                
+                # Tokenize and get choice using baseline model (if available) or fine-tuned model
+                input_ids_eval = ctx.tokenizer.encode(eval_prompt, return_tensors='pt').to(ctx.device)
+                
+                with torch.no_grad():
+                    # Use baseline model (selector) for comparison, not fine-tuned model
+                    # The selector model should be used for fair comparison
+                    if hasattr(ctx, 'selector_model') and ctx.selector_model is not None:
+                        # Use selector model for comparison (trained binary selector)
+                        selector_device = next(ctx.selector_model.parameters()).device
+                        input_ids_eval_selector = input_ids_eval.to(selector_device)
+                        outputs = ctx.selector_model(input_ids=input_ids_eval_selector)
+                    elif use_baseline_model and disable_adapter:
+                        # Fallback: use baseline model (adapter disabled)
+                        outputs = ctx.model(input_ids=input_ids_eval, disable_adapter=True)
+                    else:
+                        # Last resort: use fine-tuned model (may be biased)
+                        logger.warning("Using fine-tuned model for winrate comparison (may be biased). Consider using selector model.")
+                        outputs = ctx.model(input_ids=input_ids_eval)
+                    logits = outputs.logits
+                    last_logits = logits[0, -1, choice_tokens]
+                    choice = torch.argmax(last_logits).item()  # 0 for A (fine-tuned), 1 for B (baseline/chosen)
+                
+                # choice == 0 means fine-tuned (A) is better than baseline/chosen (B) -> WIN
+                # choice == 1 means baseline/chosen (B) is better than fine-tuned (A) -> LOSE
+                all_choices.append(choice)
+                
+                total_samples_evaluated += 1
+            
+            if should_limit and total_samples_evaluated >= max_eval_samples:
+                break
     
     # Restore original tokenizer settings
     ctx.tokenizer.padding_side = original_padding_side
