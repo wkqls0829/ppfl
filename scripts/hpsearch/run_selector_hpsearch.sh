@@ -119,7 +119,11 @@ if [ $TID -ge 54014 ] && [ $TID -le 54022 ]; then
 fi
 
 # Phase 4: Learning Rate (54023-54025)
+# Use Phase 3 best (55017): prototype_scale=2.0, kl_weight=0.03, gp_temperature=1.0
 if [ $TID -ge 54023 ] && [ $TID -le 54025 ]; then
+    PROTOTYPE_SCALE=2.0
+    KL_WEIGHT=0.03
+    GP_TEMPERATURE=1.0
     case $TID in
         54023) LR=0.00005 ;;
         54024) LR=0.0001 ;;
