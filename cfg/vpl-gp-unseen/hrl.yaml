@@ -34,7 +34,8 @@ llm:
   # VPL-GP specific parameters for conditional generation
   vpl_latent_dim: 32  # Should match selector's vpl_latent_dim
   vpl_feature_method: 'choice_logits'  # Should match selector's vpl_feature_method
-  vpl_gp_temperature: 1.0  # Should match selector's vpl_gp_temperature
+  vpl_kl_weight: 0.05
+  vpl_gp_temperature: 5.0  # Should match selector (Gemma Phase 5)
   adapter:
     use: True
     count: 3

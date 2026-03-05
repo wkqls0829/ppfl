@@ -34,7 +34,7 @@ llm:
   vpl_feature_method: 'choice_logits'  # Should match selector's vpl_feature_method
   vpl_use_gp_prior: False  # No GP prior (standard VPL)
   vpl_gp_temperature: 1.0  # Not used when GP prior is disabled
-  vpl_kl_weight: 0.1  # Should match selector's vpl_kl_weight
+  vpl_kl_weight: 0.05  # From hyperparameter search (match selector)
   vpl_use_feature_difference: True
   vpl_use_difference_only: True
   vpl_max_logvar: -3.0

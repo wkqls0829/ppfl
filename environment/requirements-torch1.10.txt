@@ -17,3 +17,5 @@ setuptools==61.2.0
 fvcore
 pympler
 iopath
+
+openai

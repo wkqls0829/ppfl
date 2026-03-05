@@ -40,7 +40,7 @@ llm:
   vpl_latent_dim: 32
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
-  vpl_gp_temperature: 1.0
+  vpl_gp_temperature: 5.0  # Gemma Phase 5 combined best
   # RLHF with z-dependent generation
   rlhf_use_variational_generation: True
   rlhf_use_variational_selection: True

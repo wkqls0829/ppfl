@@ -143,21 +143,21 @@ if "$MODEL" == "gemma-2b":
     config['dataloader']['batch_size'] = 8
     config['llm']['grad_accum_step'] = 4
 
-# For FedVPA-GP, add hyperparameters from hyperparameter search results
+# For FedVPA-GP, add hyperparameters from hyperparameter search results (Gemma Phase 5)
 if "$METHOD" == "fedvpagp":
     config['llm']['vpl_use_gp_prior'] = True
     config['llm']['vpl_latent_dim'] = 32
-    config['llm']['vpl_kl_weight'] = 0.1  # Updated from hyperparameter search
-    config['llm']['vpl_gp_temperature'] = 1.0
+    config['llm']['vpl_kl_weight'] = 0.05  # Phase 5 combined best
+    config['llm']['vpl_gp_temperature'] = 5.0  # Gemma Phase 5
     config['llm']['vpl_feature_method'] = 'choice_logits'
     config['llm']['vpl_use_feature_difference'] = True
     config['llm']['vpl_use_difference_only'] = True
     config['llm']['vpl_max_logvar'] = -3.0
     config['llm']['vpl_orthogonal_weight'] = 1.0
-    config['llm']['vpl_orthogonal_orthonorm_weight'] = 0.0  # Updated from hyperparameter search
-    config['llm']['vpl_use_manual_orthogonal_labels'] = True
+    config['llm']['vpl_orthogonal_orthonorm_weight'] = 0.1  # Phase 5
+    config['llm']['vpl_use_manual_orthogonal_labels'] = False
     config['llm']['vpl_num_prototypes'] = 2
-    config['llm']['vpl_prototype_scale'] = 5.0
+    config['llm']['vpl_prototype_scale'] = 2.0  # Phase 5
     config['llm']['vpl_tsne_visualize_freq'] = 10
 
 # Save config

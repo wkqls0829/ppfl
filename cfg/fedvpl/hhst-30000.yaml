@@ -42,7 +42,7 @@ llm:
   # Following original VPL implementation: uses logits-based features (NOT embedding difference)
   vpl_use_gp_prior: False  # No GP prior (standard VPL)
   vpl_latent_dim: 32
-  vpl_kl_weight: 0.1  # Same as recent experiments
+  vpl_kl_weight: 0.05  # From hyperparameter search (VPL-only: no GP/ortho)
   vpl_gp_temperature: 1.0
   vpl_feature_method: 'choice_logits'  # Original VPL uses logits at choice positions
   vpl_use_feature_difference: False  # Original VPL does NOT use embedding difference

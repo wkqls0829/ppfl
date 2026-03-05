@@ -41,7 +41,8 @@ llm:
   vpl_feature_method: 'choice_logits'  # Should match selector's vpl_feature_method
   vpl_use_feature_difference: True  # Should match selector (50024 uses feature difference)
   vpl_use_difference_only: True  # Should match selector (50024 uses vpl_use_difference_only=True)
-  vpl_gp_temperature: 1.0  # Should match selector's vpl_gp_temperature
+  vpl_kl_weight: 0.05
+  vpl_gp_temperature: 5.0  # Gemma Phase 5 combined best (match selector)
   # RLHF with z-dependent generation
   rlhf_use_variational_generation: True  # Use z-dependent generation for RL training
   rlhf_use_variational_selection: True  # Use variational selection for preference data generation

@@ -28,4 +28,6 @@ fvcore
 pympler
 iopath
 
+openai
+
 

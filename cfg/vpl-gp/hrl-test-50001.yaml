@@ -50,7 +50,8 @@ llm:
   vpl_feature_method: choice_logits  # Match selector's vpl_feature_method
   vpl_use_feature_difference: true
   vpl_use_difference_only: true
-  vpl_gp_temperature: 1.0  # Match selector's vpl_gp_temperature
+  vpl_kl_weight: 0.05
+  vpl_gp_temperature: 5.0  # Match selector (Gemma Phase 5)
   rlhf_use_variational_selection: true  # Use z from selector for conditional selection
   rlhf_use_variational_generation: false  # Generation without z (for test)
   rlhf_selector_checkpoint: /hdd/hdd3/kjb/checkpoints/final_hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_50001.ckpt

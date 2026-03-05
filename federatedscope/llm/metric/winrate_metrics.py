@@ -575,14 +575,15 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
         # Determine client type for filtering (harmlessness: 1 to client_num//2, helpfulness: client_num//2+1 to client_num)
         client_num = getattr(ctx.cfg.federate, 'client_num', 10)
         harmless_clients_num = client_num // 2
+        dataset_type_for_filter = getattr(ctx.cfg.data, 'type', '').lower()
+        # Standalone RL (client_num==1): all test samples have client_id=1; do not filter so we evaluate all samples (HH-RLHF uses client_num>=2)
+        is_standalone_ultrafeedback = ('ultrafeedback' in dataset_type_for_filter and client_num == 1)
         
         # Filter samples based on metric type and client type
-        # For helpfulness metric: only evaluate helpfulness clients
-        # For harmlessness metric: only evaluate harmlessness clients
-        # For instruction_following metric: only evaluate instruction_following clients (7-8)
-        # For truthfulness metric: only evaluate truthfulness clients (9-10)
         if batch_client_ids is not None:
-            if 'helpfulness' in metric_name.lower():
+            if is_standalone_ultrafeedback and ('instruction_following' in metric_name.lower() or 'truthfulness' in metric_name.lower()):
+                valid_indices = list(range(len(input_ids)))  # Use all samples; no client filter
+            elif 'helpfulness' in metric_name.lower():
                 # Only evaluate helpfulness clients (HH-RLHF: client_num//2+1 to client_num)
                 # UltraFeedback: clients 1-3
                 valid_indices = [i for i, cid in enumerate(batch_client_ids) 

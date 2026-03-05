@@ -199,21 +199,25 @@ config['train']['local_update_steps'] = 5  # Reduced for quick test
 # Expname
 config['expname'] = "${METHOD}_${MODEL}_test_selector_t${SELECTOR_TEST_TID}"
 
-# For FedVPA-GP, add hyperparameters from hyperparameter search results
+# For FedVPA-GP, add hyperparameters from final hyperparameter search results
 if "$METHOD" == "fedvpagp":
     config['llm']['vpl_use_gp_prior'] = True
     config['llm']['vpl_latent_dim'] = 32
-    config['llm']['vpl_kl_weight'] = 0.02  # Updated from hyperparameter search
-    config['llm']['vpl_gp_temperature'] = 1.0
+    config['llm']['vpl_kl_weight'] = 0.05  # Phase 5/4 combined best
     config['llm']['vpl_feature_method'] = 'choice_logits'
     config['llm']['vpl_use_feature_difference'] = True
     config['llm']['vpl_use_difference_only'] = True
     config['llm']['vpl_max_logvar'] = -3.0
     config['llm']['vpl_orthogonal_weight'] = 1.0
-    config['llm']['vpl_orthogonal_orthonorm_weight'] = 0.0  # Updated from hyperparameter search
-    config['llm']['vpl_use_manual_orthogonal_labels'] = True
+    config['llm']['vpl_orthogonal_orthonorm_weight'] = 0.1  # Final best
+    config['llm']['vpl_use_manual_orthogonal_labels'] = False
     config['llm']['vpl_num_prototypes'] = 2
-    config['llm']['vpl_prototype_scale'] = 5.0
+    config['llm']['vpl_prototype_scale'] = 2.0
+    # Model-dependent GP temperature
+    if "$MODEL" == "gemma-2b":
+        config['llm']['vpl_gp_temperature'] = 5.0  # Gemma Phase 5
+    elif "$MODEL" == "qwen2":
+        config['llm']['vpl_gp_temperature'] = 1.0  # Qwen Phase 4
 
 # WandB settings
 config['wandb']['name_project'] = 'fvpl-selector-test'
@@ -319,7 +323,10 @@ if "$USE_SELECTOR" == "true":
     config['llm']['vpl_feature_method'] = 'choice_logits'
     config['llm']['vpl_use_feature_difference'] = True
     config['llm']['vpl_use_difference_only'] = True
-    config['llm']['vpl_gp_temperature'] = 1.0
+    if "$MODEL" == "gemma-2b":
+        config['llm']['vpl_gp_temperature'] = 5.0  # Gemma Phase 5
+    elif "$MODEL" == "qwen2":
+        config['llm']['vpl_gp_temperature'] = 1.0  # Qwen Phase 4
     
     # For FedVPA-GP
     if "$METHOD" == "fedvpagp":

@@ -26,7 +26,7 @@
 - **[GPU_ALLOCATION_GUIDE.md](./GPU_ALLOCATION_GUIDE.md)**: GPU 할당 가이드
 - **[GPU_ALLOCATION_VERIFICATION.md](./GPU_ALLOCATION_VERIFICATION.md)**: GPU 할당 검증 방법
 - **[GPT_API_SETUP.md](./GPT_API_SETUP.md)**: GPT API 설정 가이드
-- **[GPT_API_KEY_SETUP.md](./GPT_API_KEY_SETUP.md)**: GPT API 키 설정
+- **[../docs/API_KEY_SETUP.md](../docs/API_KEY_SETUP.md)**: OpenAI API 키 설정 (로컬·클러스터·.env)
 
 ### 컨텍스트 및 구현 이력
 

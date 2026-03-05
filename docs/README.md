@@ -2,6 +2,13 @@
 
 이 폴더는 **코드 및 시스템 구현에 대한 기술 문서**를 포함합니다.
 
+## docs / documents 구분
+
+- **`docs/`**: 코드 구현, 수학 유도, 아키텍처, 설정 옵션, 논문 비교 등 **기술 문서**. 대상: 개발자·연구자.
+- **`documents/`**: 실험 가이드, 문제 상황·복구, 시스템 설정(API 키 등), GPU 할당 등 **운영·실험 문서**. 대상: 실험자·운영자.
+
+새 문서는 위 기준으로 `docs/` 또는 `documents/`에 두고, 해당 폴더의 README 인덱스에 링크를 추가하세요.
+
 ## 주요 문서
 
 ### VPL (Variational Preference Learning) 핵심 문서
@@ -37,7 +44,12 @@
 
 ### 실험 및 하이퍼파라미터 탐색
 
-- **[HYPERPARAMETER_SEARCH.md](./HYPERPARAMETER_SEARCH.md)**: VPL-GP 하이퍼파라미터 서치 실험 계획, 진행 상황, 결과 분석 가이드
+- **[HYPERPARAMETER_SEARCH.md](./HYPERPARAMETER_SEARCH.md)**: VPL-GP 하이퍼파라미터 서치 통합 문서 (Phase·TID·파라미터 표, 실행 방법, Gemma/Qwen)
+
+### 설정 (환경·API 키)
+
+- **[API_KEY_SETUP.md](./API_KEY_SETUP.md)**: OpenAI API 키 설정 (로컬·클러스터·.env·셸 프로필)
+- **[ENVIRONMENT_SETUP.md](./ENVIRONMENT_SETUP.md)**: Conda, PyTorch, CUDA 환경 설정
 
 ## 문서 구조
 

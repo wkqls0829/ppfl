@@ -32,7 +32,7 @@ llm:
   # VPL specific parameters for conditional generation
   vpl_latent_dim: 32
   vpl_feature_method: 'choice_logits'
-  vpl_kl_weight: 0.1
+  vpl_kl_weight: 0.05  # From hyperparameter search (VPL-only)
   vpl_use_gp_prior: False
   vpl_use_feature_difference: True
   vpl_use_difference_only: True

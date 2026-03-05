@@ -41,8 +41,8 @@ llm:
     args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
   vpl_use_gp_prior: True
   vpl_latent_dim: 32
-  vpl_kl_weight: 0.1
-  vpl_gp_temperature: 1.0
+  vpl_kl_weight: 0.05
+  vpl_gp_temperature: 5.0
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
   vpl_use_difference_only: True
@@ -51,7 +51,7 @@ llm:
   vpl_orthogonal_orthonorm_weight: 0.1
   vpl_use_manual_orthogonal_labels: True
   vpl_num_prototypes: 4  # UltraFeedback 4 dimensions
-  vpl_prototype_scale: 5.0
+  vpl_prototype_scale: 2.0  # From hyperparameter search
   vpl_tsne_visualize_freq: 10  # Every 10 rounds (same as hhst-ortho)
   grad_accum_step: 4
 dataloader:

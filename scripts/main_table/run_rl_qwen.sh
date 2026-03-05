@@ -225,11 +225,12 @@ if "$USE_SELECTOR" == "true":
     config['llm']['vpl_feature_method'] = 'choice_logits'
     config['llm']['vpl_use_feature_difference'] = True
     config['llm']['vpl_use_difference_only'] = True
-    config['llm']['vpl_gp_temperature'] = 1.0
+    config['llm']['vpl_gp_temperature'] = 1.0  # Qwen Phase 4 (match selector)
     
     # For FedVPA-GP
     if "$METHOD" == "fedvpagp":
         config['llm']['vpl_use_gp_prior'] = True
+        config['llm']['vpl_kl_weight'] = 0.05  # Match selector (Qwen Phase 4)
 
 # RL settings
 config['llm']['reward_coeff'] = 0.1

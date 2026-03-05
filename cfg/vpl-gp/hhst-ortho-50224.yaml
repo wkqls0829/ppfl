@@ -39,8 +39,8 @@ llm:
   # Client 100 version of 50024
   vpl_use_gp_prior: True
   vpl_latent_dim: 32
-  vpl_kl_weight: 0.1  # Lower KL to let mu move away from origin
-  vpl_gp_temperature: 1.0
+  vpl_kl_weight: 0.05  # Phase 5 combined best
+  vpl_gp_temperature: 5.0
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
   vpl_use_difference_only: True  # Use only difference embedding (reduces memory: embedding_dim vs embedding_dim * 3)
@@ -50,7 +50,7 @@ llm:
   vpl_orthogonal_orthonorm_weight: 0.1  # Orthonormal constraint weight (reduced from 1.0)
   vpl_use_manual_orthogonal_labels: True  # Use manual labeling: harmlessness (0) and helpfulness (1) based on train data
   vpl_num_prototypes: 2  # Number of orthogonal prototypes (k for k-means). For hh-rlhf, this is fixed to 2
-  vpl_prototype_scale: 5.0  # Distance of prototypes from origin (default: 5.0, larger = further from origin)
+  vpl_prototype_scale: 2.0  # From hyperparameter search
   vpl_tsne_visualize_freq: 10  # Generate t-SNE visualization every 10 rounds
   grad_accum_step: 4  # Increased from 2 to maintain effective batch size (8 * 4 = 32)
 dataloader:

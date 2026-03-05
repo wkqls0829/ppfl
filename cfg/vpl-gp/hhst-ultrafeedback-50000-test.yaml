@@ -41,8 +41,8 @@ llm:
   # Variational Preference Learning with Gumbel-Softmax Prior (VPL-GP) parameters
   vpl_use_gp_prior: True
   vpl_latent_dim: 32
-  vpl_kl_weight: 0.1
-  vpl_gp_temperature: 1.0
+  vpl_kl_weight: 0.05
+  vpl_gp_temperature: 5.0
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
   vpl_use_difference_only: True  # Use only difference embedding
@@ -52,7 +52,7 @@ llm:
   vpl_orthogonal_orthonorm_weight: 0.1
   vpl_use_manual_orthogonal_labels: True  # Use manual labeling based on preference dimensions
   vpl_num_prototypes: 4  # Number of orthogonal prototypes (4 dimensions for UltraFeedback)
-  vpl_prototype_scale: 5.0  # Distance of prototypes from origin
+  vpl_prototype_scale: 2.0  # From hyperparameter search (UltraFeedback: num_prototypes 4 kept)
   vpl_tsne_visualize_freq: 5  # Generate t-SNE visualization every 5 rounds (for test)
   grad_accum_step: 4
 dataloader:

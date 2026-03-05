@@ -1,8 +1,8 @@
 # VPL-GP RL (RLHF) training using UltraFeedback selector checkpoint 50000
 # TID 50001: UltraFeedback data, selector from hhst-ultrafeedback-50000-test (verify 50000 RL)
-# Same pattern as hrl-ultrafeedback-51000; device 3, tid 50001
+# Same pattern as hrl-ultrafeedback-51000; device 2, tid 50001
 use_gpu: True
-device: 3  # GPU 3 (as requested)
+device: 2  # GPU 2
 early_stop:
   patience: 0
 federate:
@@ -45,7 +45,8 @@ llm:
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
   vpl_use_difference_only: True  # Selector uses True (difference only)
-  vpl_gp_temperature: 1.0
+  vpl_kl_weight: 0.05
+  vpl_gp_temperature: 5.0  # Match selector (Gemma Phase 5)
   vpl_num_prototypes: 4  # UltraFeedback 4 dimensions
   rlhf_use_variational_generation: True
   rlhf_use_variational_selection: True

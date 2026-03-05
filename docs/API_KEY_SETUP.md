@@ -1,159 +1,135 @@
-# API Key Setup Guide
+# API Key 및 환경 변수 설정 가이드
 
-This guide explains how to configure API keys (especially OpenAI API key) for the experiments without committing them to the repository.
+OpenAI API 키를 로컬·원격·클러스터에서 설정하는 방법을 하나의 문서로 정리합니다.  
+키는 `.env` 또는 셸 프로필에 두고, **저장소에 커밋하지 않습니다.**
 
-## Overview
+## 개요
 
-The repository uses gitignored configuration files to store sensitive API keys. This ensures that:
-- API keys are never committed to the repository
-- Each user can configure their own API keys locally
-- The setup is secure and follows best practices
+- API 키는 `.env`(권장) 또는 `OPENAI_API_KEY` 환경 변수로 제공합니다.
+- 스크립트는 `$WORK_DIR/.env`를 자동 로드합니다.
+- Config의 `eval.openai_api_key`도 지원하지만, 보안상 환경 변수 사용을 권장합니다.
 
-## Setup Instructions
+## 1. .env 파일로 설정 (권장)
 
-### 1. Create `.env` File
-
-Copy the example environment file:
+### 로컬 / 일반 서버
 
 ```bash
 cp .env.example .env
+# .env 편집
+# OPENAI_API_KEY=sk-your-actual-api-key-here
 ```
 
-### 2. Add Your OpenAI API Key
-
-Edit the `.env` file and add your OpenAI API key:
+### 클러스터
 
 ```bash
-# .env
-OPENAI_API_KEY=sk-your-actual-api-key-here
+ssh <cluster_login_node>
+cd /home2/jbkoo/ppfl   # 또는 실제 작업 디렉토리
+
+cp .env.example .env
+nano .env   # 또는 vim
+# OPENAI_API_KEY=sk-your-actual-api-key-here
+
+chmod 600 .env
 ```
 
-**Important**: The `.env` file is gitignored and will never be committed to the repository.
-
-### 3. Get Your OpenAI API Key
-
-1. Go to [OpenAI API Keys](https://platform.openai.com/api-keys)
-2. Sign in or create an account
-3. Click "Create new secret key"
-4. Copy the key and paste it into your `.env` file
-
-## How It Works
-
-### Environment Variable Loading
-
-The experiment scripts automatically load environment variables from the `.env` file:
+스크립트는 다음처럼 자동 로드합니다:
 
 ```bash
-# Loaded automatically in scripts/main_table/*.sh
 if [ -f "$WORK_DIR/.env" ]; then
     export $(cat $WORK_DIR/.env | grep -v '^#' | xargs)
+    echo "Loaded environment variables from .env file"
 fi
 ```
 
-### API Key Usage in Code
+### .env 선택 항목
 
-The code checks for the API key in the following order:
-
-1. **Environment Variable** (`OPENAI_API_KEY`)
-   - Loaded from `.env` file by scripts
-   - Set manually: `export OPENAI_API_KEY=sk-...`
-
-2. **Config File** (`eval.openai_api_key`)
-   - Can be set in YAML config files
-   - **Not recommended** for API keys (use `.env` instead)
-
-3. **Error if Missing**
-   - If no API key is found, the code will raise an error
-
-### Code Reference
-
-The API key is used in `federatedscope/llm/metric/winrate_metrics.py`:
-
-```python
-api_key = getattr(ctx.cfg.eval, 'openai_api_key', None)
-if api_key is None:
-    api_key = os.getenv('OPENAI_API_KEY')
-    
-if api_key is None:
-    logger.error("OpenAI API key not found...")
+```bash
+OPENAI_API_KEY=sk-your-actual-api-key-here
+# OPENAI_API_BASE=https://api.openai.com/v1
+# OPENAI_MODEL=gpt-4o-mini
 ```
 
-## File Structure
+## 2. 셸 프로필에 설정 (선택)
+
+현재 사용자만 쓰는 환경이면 `~/.bashrc` 또는 `~/.zshrc`에 넣을 수 있습니다.
+
+```bash
+# ~/.bashrc 또는 ~/.zshrc
+export OPENAI_API_KEY="sk-***YOUR_API_KEY_HERE***"
+```
+
+적용: `source ~/.bashrc` 또는 `source ~/.zshrc`.  
+**주의**: 터미널 세션에서만 쓰려면 `export OPENAI_API_KEY=...` 로 임시 설정 (세션 종료 시 사라짐).
+
+### Conda 환경에서만 쓰기
+
+```bash
+conda activate your_env_name
+conda env config vars set OPENAI_API_KEY="sk-***YOUR_API_KEY_HERE***"
+conda deactivate && conda activate your_env_name
+```
+
+## 3. 코드에서의 사용 순서
+
+`federatedscope/llm/metric/winrate_metrics.py` 등에서는 다음 순서로 확인합니다:
+
+1. **Config**: `eval.openai_api_key`
+2. **환경 변수**: `OPENAI_API_KEY` (스크립트가 `.env`에서 로드)
+3. 없으면 에러: `"OpenAI API key not found. Set it in config (eval.openai_api_key) or environment variable (OPENAI_API_KEY)"`
+
+## 4. 파일 구조
 
 ```
 ppfl/
-├── .env                    # Your API keys (gitignored, DO NOT COMMIT)
-├── .env.example            # Template file (committed to repo)
-├── .gitignore              # Ensures .env is not committed
+├── .env                 # API 키 (gitignored, 커밋 금지)
+├── .env.example         # 템플릿 (저장소에 포함)
+├── .gitignore           # .env 제외
 └── scripts/main_table/
-    ├── run_selector_gemma.sh  # Loads .env automatically
-    ├── run_rl_gemma.sh        # Loads .env automatically
+    ├── run_selector_gemma.sh
+    ├── run_rl_gemma.sh
     └── ...
 ```
 
-## Security Best Practices
+클러스터에서는 `.env` 경로가 스크립트의 `$WORK_DIR`과 일치해야 합니다 (예: `/home2/jbkoo/ppfl/.env`).
 
-1. **Never commit `.env` file**
-   - The `.env` file is in `.gitignore`
-   - Double-check before committing: `git status`
+## 5. 보안
 
-2. **Use `.env.example` as template**
-   - The example file shows what variables are needed
-   - It does not contain actual keys
+- **절대 커밋하지 마세요**: `.env`는 `.gitignore`에 있어야 합니다. 커밋 전 `git status` 확인.
+- **파일 권한**: `chmod 600 .env` (소유자만 읽기/쓰기).
+- **키 노출 시**: OpenAI 대시보드에서 즉시 키 재발급 및 이전 키 삭제.
+- **Config에 키 넣기**: 가능하지만 보안상 비권장. 사용 시 해당 config는 커밋하지 마세요.
 
-3. **Rotate keys if exposed**
-   - If you accidentally commit a key, rotate it immediately
-   - Revoke the old key in OpenAI dashboard
+## 6. 문제 해결
 
-4. **Use different keys for different environments**
-   - Development: `.env.local`
-   - Production: `.env.production`
-   - All are gitignored
+### "OpenAI API key not found" 에러
 
-## Troubleshooting
+1. `.env` 존재 여부: `ls -la .env` (또는 클러스터에서는 `ls -la $WORK_DIR/.env`).
+2. 키 설정 여부: `grep OPENAI_API_KEY .env`.
+3. 스크립트가 로드하는지: 로그에 `"Loaded environment variables from .env file"` 있는지 확인.
+4. 수동 확인: `source .env` 후 `echo $OPENAI_API_KEY | cut -c1-10`.
 
-### API Key Not Found Error
+### .env가 로드되지 않을 때
 
-If you see:
-```
-OpenAI API key not found. Set it in config (eval.openai_api_key) or environment variable (OPENAI_API_KEY)
-```
+- 스크립트가 사용하는 `$WORK_DIR`과 `.env` 경로가 같은지 확인.
+- `.env` 문법: `KEY=value` (등호 주변 공백 없음), 주석은 `#`.
 
-**Solutions:**
-1. Check if `.env` file exists: `ls -la .env`
-2. Verify the key is set: `grep OPENAI_API_KEY .env`
-3. Check if script loads it: Look for "Loaded environment variables from .env file" in logs
-4. Manually export: `export OPENAI_API_KEY=sk-...`
+### Conda/SSH에서 환경 변수가 안 보일 때
 
-### Repository Rule Violation
+- Conda: `conda env config vars set OPENAI_API_KEY=...` 후 환경 재활성화.
+- SSH: `~/.bashrc` 또는 `~/.bash_profile`에 넣었는지, 새 세션에서 `source` 했는지 확인.
 
-If GitHub shows "repository rule violation":
-- This means an API key was committed to the repository
-- Remove it from git history (if needed)
-- Ensure `.env` is in `.gitignore`
-- Use `.env.example` instead
-
-### Scripts Not Loading .env
-
-If scripts don't load `.env`:
-1. Check file path: Scripts look for `$WORK_DIR/.env`
-2. Check file permissions: `chmod 600 .env`
-3. Verify syntax: No spaces around `=` in `.env` file
-
-## Alternative: Config File Method
-
-If you prefer not to use `.env`, you can set the API key in config files:
+### Config 파일로 임시 설정 (비권장)
 
 ```yaml
-# cfg/main_table/.../hrl_*.yaml
+# cfg/.../hrl_*.yaml
 eval:
   openai_api_key: sk-your-key-here
 ```
 
-**Warning**: This method is less secure as config files might be committed. Use `.env` method instead.
+Config는 커밋하지 말고, 가능하면 `.env`로 이전하는 것을 권장합니다.
 
-## Additional Resources
+## 7. 참고
 
+- [OpenAI API Keys](https://platform.openai.com/api-keys)
 - [OpenAI API Documentation](https://platform.openai.com/docs)
-- [Environment Variables Best Practices](https://12factor.net/config)
-- [Gitignore Documentation](https://git-scm.com/docs/gitignore)
+- SLURM/클러스터: `docs/SLURM_GPU_MONITORING.md`

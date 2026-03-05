@@ -39,17 +39,17 @@ llm:
   # Ablation: Orthogonal loss only, WITHOUT GP prior (standard normal prior)
   vpl_use_gp_prior: False  # Standard normal prior (no GP)
   vpl_latent_dim: 32
-  vpl_kl_weight: 0.1  # Same as VPL baseline
+  vpl_kl_weight: 0.05  # From hyperparameter search
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
   vpl_use_difference_only: True
   vpl_max_logvar: -3.0
   # Orthogonal loss parameters (ENABLED for ablation)
-  vpl_orthogonal_weight: 1.0
-  vpl_orthogonal_orthonorm_weight: 0.0  # Same as FedVPA-GP
-  vpl_use_manual_orthogonal_labels: True
+  vpl_orthogonal_weight: 1.0  # From hyperparameter search (Phase 5/4 combined best)
+  vpl_orthogonal_orthonorm_weight: 0.1
+  vpl_use_manual_orthogonal_labels: False  # k-means (recommended)
   vpl_num_prototypes: 2
-  vpl_prototype_scale: 5.0
+  vpl_prototype_scale: 2.0  # From hyperparameter search
   vpl_tsne_visualize_freq: 10
   grad_accum_step: 4
 dataloader:

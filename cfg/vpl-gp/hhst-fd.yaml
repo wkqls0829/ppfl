@@ -38,11 +38,14 @@ llm:
   # Variational Preference Learning with Gumbel-Softmax Prior (VPL-GP) parameters
   vpl_use_gp_prior: True
   vpl_latent_dim: 32
-  vpl_kl_weight: 0.1
-  vpl_gp_temperature: 1.0
+  vpl_kl_weight: 0.05  # Phase 5 combined best
+  vpl_gp_temperature: 5.0
   vpl_feature_method: 'choice_logits'
-  vpl_use_manual_orthogonal_labels: True
-  vpl_orthogonal_weight: 10.0
+  vpl_use_manual_orthogonal_labels: False
+  vpl_orthogonal_weight: 1.0  # Phase 5 combined best
+  vpl_orthogonal_orthonorm_weight: 0.1
+  vpl_num_prototypes: 2
+  vpl_prototype_scale: 2.0
   vpl_use_feature_difference: True
   grad_accum_step: 2
 dataloader:

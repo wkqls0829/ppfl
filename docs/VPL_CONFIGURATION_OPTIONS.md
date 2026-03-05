@@ -153,6 +153,15 @@
 - **효과**: 매 N 라운드마다 t-SNE 플롯 생성
 - **권장**: 10 (너무 자주 생성하면 I/O 오버헤드)
 
+#### Z 값 수집 최적화 (vpl_tsne_visualize_freq 연동)
+
+HHST에서 z 값을 **매 라운드가 아니라**, t-SNE 시각화가 필요한 라운드에만 수집하도록 최적화되어 있습니다.
+
+- **Server**: `vpl_tsne_visualize_freq`를 보고 해당 라운드에만 `_collect_z_values_for_visualization()` 호출 (`federatedscope/llm/llm_local/server.py`).
+- **Client**: 같은 로직으로 시각화가 필요한 라운드에만 `get_client_z_values()` 계산·전송 (`federatedscope/llm/llm_local/client.py`).
+- **효과**: 50 라운드 기준 z 수집 약 90% 감소 (기본값 10라운드마다 수집).
+- **주의**: `vpl_use_gp_prior: True`이면 z 분포(mu, logvar)는 GP prior 업데이트를 위해 매 라운드 수집됩니다. `vpl_tsne_visualize_freq: 1`이면 매 라운드 수집(최적화 없음). 최종 라운드는 항상 z 수집하여 최종 시각화를 생성합니다.
+
 ## Feature Extraction 방법 비교
 
 ### 방법 1: Choice Logits

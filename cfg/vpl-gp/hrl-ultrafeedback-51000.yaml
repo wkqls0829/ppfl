@@ -45,7 +45,8 @@ llm:
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
   vpl_use_difference_only: True  # Selector uses True (difference only)
-  vpl_gp_temperature: 1.0
+  vpl_kl_weight: 0.05
+  vpl_gp_temperature: 5.0  # Match UltraFeedback selector (Gemma Phase 5)
   vpl_num_prototypes: 4  # UltraFeedback 4 dimensions
   rlhf_use_variational_generation: True
   rlhf_use_variational_selection: True
