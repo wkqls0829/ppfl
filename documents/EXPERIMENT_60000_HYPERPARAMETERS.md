@@ -122,12 +122,12 @@ Total Loss = Reconstruction Loss + λ_KL * KL Loss
 
 ### Baseline (Orthogonal Loss 비활성화)
 ```bash
-bash scripts/vpl-gp/hhst.sh
+bash scripts/server/vpl-gp/hhst.sh
 ```
 
 ### With Orthogonal Loss
 ```bash
-bash scripts/vpl-gp/hhst-ortho.sh
+bash scripts/server/vpl-gp/hhst-ortho.sh
 ```
 
 ## 출력 파일

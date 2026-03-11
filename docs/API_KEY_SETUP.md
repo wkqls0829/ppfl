@@ -84,7 +84,7 @@ ppfl/
 ├── .env                 # API 키 (gitignored, 커밋 금지)
 ├── .env.example         # 템플릿 (저장소에 포함)
 ├── .gitignore           # .env 제외
-└── scripts/main_table/
+└── scripts/slurm/main_table/
     ├── run_selector_gemma.sh
     ├── run_rl_gemma.sh
     └── ...

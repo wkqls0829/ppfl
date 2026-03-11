@@ -127,10 +127,18 @@ class LLMMultiLoRAServer(Server):
             for client_id in train_msg_buffer.keys():
                 if self.model_num == 1:
                     sample_size, model_para = train_msg_buffer[client_id]
-                    # Extract VPL components (variational_encoder, feature_extractor, latent_projection, z_to_embedding)
+                    # Extract VPL components (variational_encoder, feature_extractor, latent_projection, z_to_embedding, orthogonal_prototypes)
+                    vpl_comp_prefixes = [
+                        'variational_encoder.',
+                        'feature_extractor.',
+                        'latent_projection.',
+                        'z_to_embedding.',
+                        'orthogonal_prototypes.',
+                    ]
                     vpl_component_keys = []
                     for key in model_para.keys():
-                        if any(comp in key for comp in ['variational_encoder', 'feature_extractor', 'latent_projection', 'z_to_embedding']):
+                        if any(key.startswith(p)
+                               for p in vpl_comp_prefixes):
                             vpl_component_keys.append(key)
                     
                     # Collect VPL components
@@ -1313,6 +1321,17 @@ class LLMMultiLoRAServer(Server):
                 # Broadcast to all clients
                 selected_clients = list(self.comm_manager.neighbors.keys())
             
+            # Include aggregated prototypes if available
+            ortho_content = {
+                'labels': self.vpl_orthogonal_client_labels,
+            }
+            aggregator = self.aggregators[0]
+            if hasattr(aggregator, 'vpl_components'):
+                proto_key = 'orthogonal_prototypes.weight'
+                if proto_key in aggregator.vpl_components:
+                    ortho_content['prototypes'] = \
+                        aggregator.vpl_components[proto_key].cpu()
+
             for receiver in selected_clients:
                 self.comm_manager.send(
                     Message(msg_type='vpl_orthogonal_labels',
@@ -1320,6 +1339,6 @@ class LLMMultiLoRAServer(Server):
                             receiver=[receiver],
                             state=self.state,
                             timestamp=self.cur_timestamp,
-                            content=self.vpl_orthogonal_client_labels))
-            
+                            content=ortho_content))
+
             logger.info(f"Broadcasting orthogonal labels to {len(selected_clients)} clients at round {self.state}")

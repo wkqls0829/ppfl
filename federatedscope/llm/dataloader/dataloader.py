@@ -155,13 +155,32 @@ def get_tokenizer(model_name, cache_dir, tok_len=128, padding_side="right"):
             use_fast=False,
         )
     else:
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            cache_dir=cache_dir,
-            model_max_length=tok_len,
-            padding_side=padding_side,
-            use_fast=False,
-        )
+        # Prefer fast tokenizers when available.
+        # Slow tokenizers for some models (e.g., LLaMA) rely on protobuf internals
+        # that can be incompatible with certain protobuf versions (ImportError on
+        # google.protobuf.internal.builder). We first try fast=True and, if that
+        # fails for a specific model, gracefully fall back to slow tokenizers.
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                cache_dir=cache_dir,
+                model_max_length=tok_len,
+                padding_side=padding_side,
+                use_fast=True,
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to load fast tokenizer for {model_name} "
+                f"(error: {e}). Falling back to slow tokenizer "
+                f"(use_fast=False)."
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                cache_dir=cache_dir,
+                model_max_length=tok_len,
+                padding_side=padding_side,
+                use_fast=False,
+            )
 
     special_tokens = dict()
     if tokenizer.pad_token is None:

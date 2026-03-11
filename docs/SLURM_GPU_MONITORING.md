@@ -55,7 +55,7 @@ scontrol show job <job_id>
 # MinCPUsNode=8 MinMemoryNode=32G MinTmpDiskNode=0
 # Features=(null) DelayBoot=00:00:00
 # OverSubscribe=OK Contiguous=0 Licenses=(null) Network=(null)
-# Command=/home2/jbkoo/ppfl/scripts/main_table/run_selector_gemma.sh
+# Command=/home2/jbkoo/ppfl/scripts/slurm/main_table/run_selector_gemma.sh
 # WorkDir=/home2/jbkoo/ppfl
 # StdOut=/home2/jbkoo/slurm/logs/slurm-12345-run_selector_gemma.out
 # StdErr=/home2/jbkoo/slurm/logs/slurm-12345-run_selector_gemma.out
@@ -156,7 +156,7 @@ watch -n 2 'ssh gpu-node01 nvidia-smi'
 ### check_gpu_status.sh
 ```bash
 # 간편한 상태 확인 스크립트
-bash scripts/main_table/check_gpu_status.sh
+bash scripts/slurm/main_table/check_gpu_status.sh
 ```
 
 이 스크립트는 다음을 확인합니다:

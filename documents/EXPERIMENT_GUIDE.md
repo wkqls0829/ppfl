@@ -2,6 +2,35 @@
 
 이 문서는 VPL-GP, FedVPL, FedDPO, FedBiscuit 실험을 실행하는 방법과 프로젝트 구조를 설명합니다.
 
+## 환경 구분: SLURM 클러스터 vs 로컬 서버
+
+실험은 **두 가지 환경**에서 돌릴 수 있습니다. 스크립트와 경로를 구분해서 사용해야 합니다.
+
+| 구분 | SLURM 클러스터 | 로컬 서버 (현재 서버) |
+|------|----------------|------------------------|
+| **용도** | Main Table 실험 (논문 Table 1), 대량 제출 | DP 실험, VPL-GP 50001, LLaMA, 디버깅 |
+| **실행 방식** | `sbatch scripts/slurm/main_table/run_*.sh` | `bash scripts/server/...` 또는 `CUDA_VISIBLE_DEVICES=N bash ...` |
+| **WORK_DIR** | `/home2/jbkoo/ppfl` (클러스터 홈) | `/home/kjb/ppfl` (또는 스크립트 기준 프로젝트 루트) |
+| **데이터/체크포인트** | `$WORK_DIR/data`, `$WORK_DIR/checkpoints` (노드별) | `/hdd/hdd3/kjb` 있으면 사용, 없으면 `$WORK_DIR/data`, `$WORK_DIR/checkpoints` |
+| **Conda** | 클러스터 기본 환경 또는 모듈 | **반드시 `biscuit` env** (`conda activate biscuit`) |
+| **스크립트** | `scripts/slurm/main_table/run_selector_*.sh`, `run_rl_*.sh`, `submit_*.sh` | `scripts/server/differential_privacy/*.sh`, `scripts/server/vpl-gp/hrl-ultrafeedback-50001.sh`, `scripts/server/local/*.sh` |
+
+- **Main Table 전용 (SLURM)**: `run_selector_qwen.sh`, `run_selector_gemma.sh`, `run_rl_qwen.sh`, `run_rl_gemma.sh` — 내부에서 `SLURM_JOB_ID`가 있으면 `WORK_DIR=/home2/jbkoo/ppfl` 사용.
+- **로컬 서버 전용**: `scripts/server/differential_privacy/run_qwen_main_table_dp.sh`, `run_rl_qwen_dp.sh`, `scripts/server/vpl-gp/hrl-ultrafeedback-50001.sh` — 항상 현재 머신 프로젝트 루트와 biscuit 환경 사용.
+
+로컬 서버에서 Main Table RL 스크립트를 **직접** 돌릴 때(예: `bash run_rl_qwen.sh ...`)에는 `SLURM_JOB_ID`가 없으므로 스크립트가 프로젝트 루트를 스크립트 경로로 잡고, 체크포인트는 `$WORK_DIR/checkpoints`와(필요 시) `/hdd/hdd3/kjb/checkpoints`를 함께 찾습니다.
+
+### 스크립트 구분 요약
+
+| 위치 | 용도 | WORK_DIR 결정 |
+|------|------|----------------|
+| `scripts/slurm/main_table/run_selector_*.sh`, `run_rl_*.sh` | Main Table (SLURM 또는 로컬 직접 실행) | `SLURM_JOB_ID` 있음 → `/home2/jbkoo/ppfl`, 없음 → 스크립트 기준 프로젝트 루트 |
+| `scripts/slurm/main_table/submit_*.sh` | SLURM 제출만 (클러스터) | `/home2/jbkoo/ppfl` |
+| `scripts/server/differential_privacy/*.sh` | 로컬 서버 전용 (DP 실험) | 스크립트 기준 프로젝트 루트 |
+| `scripts/server/vpl-gp/hrl-ultrafeedback-50001.sh` | 로컬 서버 전용 (UltraFeedback RL) | 스크립트 기준 프로젝트 루트 |
+
+---
+
 ## 목차
 
 1. [프로젝트 구조](#프로젝트-구조)
@@ -105,7 +134,7 @@ bash scripts/{algorithm}/{script_name}.sh
 
 ```bash
 # 실험 40101 실행 (GPU 2)
-bash scripts/vpl-gp/hhst-40101.sh
+bash scripts/server/vpl-gp/hhst-40101.sh
 ```
 
 ### 3. 실험 종료
@@ -171,7 +200,7 @@ echo "Monitor with: tail -f outputs/${tid}.log"
 
 ### 주요 스크립트 파일
 
-#### VPL-GP 스크립트 (`scripts/vpl-gp/`)
+#### VPL-GP 스크립트 (`scripts/server/vpl-gp/`)
 
 - `hhst-{tid}.sh`: HHST (selector) 실험
   - `hhst-40001.sh`: Baseline, full embedding, KL=1.0
@@ -494,7 +523,7 @@ grep -i error outputs/40101.log
 
 3. **스크립트 생성**
    ```bash
-   cp scripts/vpl-gp/hhst-40100.sh scripts/vpl-gp/hhst-{new_tid}.sh
+   cp scripts/server/vpl-gp/hhst-40100.sh scripts/server/vpl-gp/hhst-{new_tid}.sh
    ```
 
 4. **스크립트 수정**
@@ -504,8 +533,8 @@ grep -i error outputs/40101.log
 
 5. **실험 실행**
    ```bash
-   chmod +x scripts/vpl-gp/hhst-{new_tid}.sh
-   bash scripts/vpl-gp/hhst-{new_tid}.sh
+   chmod +x scripts/server/vpl-gp/hhst-{new_tid}.sh
+   bash scripts/server/vpl-gp/hhst-{new_tid}.sh
    ```
 
 ### 하이퍼파라미터 조정 예시
@@ -536,6 +565,126 @@ vpl_orthogonal_weight: 100.0
 vpl_use_feature_difference: True
 vpl_use_difference_only: True  # 추가
 ```
+
+---
+
+## 환경 & 실행 모범 패턴
+
+### 1. 기본 Python / Conda 환경
+
+- **항상 `biscuit` conda env**에서 실험을 실행하는 것을 기본으로 합니다.
+- 터미널에서 수동 실행 시:
+
+  ```bash
+  cd /home/kjb/ppfl
+  eval "$(conda shell.bash hook)"
+  conda activate biscuit
+  ```
+
+- 새로 만든 스크립트들은 가능하면 다음 패턴을 포함하도록 합니다:
+
+  ```bash
+  if command -v conda >/dev/null 2>&1; then
+      eval "$(conda shell.bash hook)"
+      conda activate biscuit || echo "WARNING: failed to activate biscuit env"
+  fi
+  ```
+
+### 2. GPU 할당 규칙 (CUDA_VISIBLE_DEVICES + device)
+
+실험마다 GPU를 다르게 쓰면서 생기는 **`invalid device ordinal`** 오류를 피하기 위해 다음 규칙을 강제합니다.
+
+- **YAML config (`cfg/**.yaml`) 안의 `device` 값은 항상 0으로 고정**합니다.
+
+  ```yaml
+  use_gpu: True
+  device: 0  # 논리 GPU 인덱스 (항상 0)
+  ```
+
+- 실제 물리 GPU 선택은 **스크립트/터미널에서만** `CUDA_VISIBLE_DEVICES`로 제어합니다.
+
+  ```bash
+  # 예: GPU 3에서 50001 RL 실험 실행
+  eval "$(conda shell.bash hook)"
+  conda activate biscuit
+  CUDA_VISIBLE_DEVICES=3 bash scripts/server/vpl-gp/hrl-ultrafeedback-50001.sh
+  ```
+
+- 이렇게 하면:
+  - 프로세스 안에서는 항상 GPU 0만 보이고,
+  - config의 `device: 0`과 일관되게 맞아서 **device ordinal 에러가 나지 않습니다.**
+
+### 3. Main Table / DP / LLaMA 계열 실행 요약
+
+- **Main table (Gemma / Qwen)**:  
+  - Selector:
+
+    ```bash
+    # Gemma
+    sbatch scripts/slurm/main_table/run_selector_gemma.sh fedvpagp 10 62130
+
+    # Qwen
+    sbatch scripts/slurm/main_table/run_selector_qwen.sh fedvpagp 10 62230
+    ```
+
+  - RL:
+
+    ```bash
+    # Gemma
+    sbatch scripts/slurm/main_table/run_rl_gemma.sh fedvpagp 10 63130 62130
+
+    # Qwen
+    sbatch scripts/slurm/main_table/run_rl_qwen.sh fedvpagp 10 63230 62230
+    ```
+
+- **DP 실험 (NbAFL + Qwen main table)**:
+
+  ```bash
+  # Qwen FedVPA-GP + DP (TID 82230, GPU 5)
+  cd /home/kjb/ppfl
+  eval "$(conda shell.bash hook)"
+  conda activate biscuit
+  bash scripts/server/differential_privacy/run_qwen_main_table_dp.sh fedvpagp 82230 5
+
+  # Qwen FedBiscuit + DP (TID 82210, GPU 6)
+  bash scripts/server/differential_privacy/run_qwen_main_table_dp.sh fedbiscuit 82210 6
+  ```
+
+- **LLaMA 7B VPL-GP 실험 (TID 92230)**:
+
+  ```bash
+  cd /home/kjb/ppfl
+  eval "$(conda shell.bash hook)"
+  conda activate biscuit
+  CUDA_VISIBLE_DEVICES=2 bash scripts/llama_vplgp/run_llama_vplgp_92230.sh
+  ```
+
+  - 해당 스크립트는 `cfg/vpl-gp/hhst.yaml`을 기반으로 `cfg/llama-vplgp/hhst_llama_92230.yaml`을 생성하고,
+  - 모델을 `meta-llama/Llama-2-7b-chat-hf@huggingface_llm` 로 설정합니다.
+
+### 4. 자주 나는 에러 패턴
+
+- **`ModuleNotFoundError: No module named 'torch'`**
+  - `biscuit` env가 아닌 곳에서 실행했을 가능성이 큼.
+  - 위 1번 환경 설정 절차 후 다시 실행.
+
+- **`RuntimeError: CUDA error: invalid device ordinal`**
+  - `CUDA_VISIBLE_DEVICES`와 YAML의 `device`가 불일치할 때 발생.
+  - **YAML은 항상 `device: 0`**, 실제 GPU는 `CUDA_VISIBLE_DEVICES`로 지정하는 패턴으로 통일.
+
+- **LLaMA 토크나이저 관련 protobuf 에러**
+
+  ```text
+  ImportError: cannot import name 'builder' from 'google.protobuf.internal'
+  ```
+
+  - `biscuit` env에서 다음 명령으로 protobuf 버전 다운그레이드 (이미 한 번 적용해 둠):
+
+    ```bash
+    eval "$(conda shell.bash hook)"
+    conda activate biscuit
+    pip install "protobuf<4.21.0"
+    ```
 
 ---
 
@@ -581,3 +730,4 @@ vpl_use_difference_only: True  # 추가
 
 - 2025-01-20: 초기 문서 작성
 - 실험 ID 체계, 스크립트 구조, configuration 구조 문서화
+- 2026-03-05: 환경(biscuit conda env), GPU 할당(CUDA_VISIBLE_DEVICES + device 0), DP/LLaMA 실험 실행 가이드 추가

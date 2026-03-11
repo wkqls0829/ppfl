@@ -8,7 +8,6 @@ import torch.nn.functional as F
 import logging
 import copy
 import numpy as np
-import gc
 
 from federatedscope.register import register_trainer
 from federatedscope.llm.trainer.reward_choice_trainer import (
@@ -59,6 +58,12 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         self.vpl_use_gp_prior = getattr(config.llm, 'vpl_use_gp_prior', False)
         self.vpl_gp_temperature = getattr(config.llm, 'vpl_gp_temperature', 1.0)
         self.num_clients = getattr(config.federate, 'client_num', 10)
+
+        # Temperature annealing for Gumbel-Softmax (VMTL-style)
+        self.vpl_gp_tau_anneal = getattr(config.llm, 'vpl_gp_tau_anneal', True)
+        self.vpl_gp_tau_start = getattr(config.llm, 'vpl_gp_tau_start', self.vpl_gp_temperature)
+        self.vpl_gp_tau_end = getattr(config.llm, 'vpl_gp_tau_end', 0.1)
+        self.total_round_num = getattr(config.federate, 'total_round_num', 30)
         
         # Orthogonal loss hyperparameters (CLOP-based)
         self.vpl_orthogonal_weight = getattr(config.llm, 'vpl_orthogonal_weight', 0.0)
@@ -66,29 +71,42 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         self.vpl_use_manual_orthogonal_labels = getattr(config.llm, 'vpl_use_manual_orthogonal_labels', False)
         
         # Initialize orthonormal prototypes if orthogonal loss is enabled
-        # NOTE: Prototypes are FIXED (CLOP standard), not learnable
+        # Prototypes are LEARNABLE nn.Parameters (CLOP standard)
+        # Orthonormality is maintained via the orthonorm constraint loss
         if self.vpl_orthogonal_weight > 0.0:
             num_prototypes = getattr(config.llm, 'vpl_num_prototypes', 2)
             # Get prototype scale (distance from origin)
-            prototype_scale = getattr(config.llm, 'vpl_prototype_scale', 5.0)  # Default: 5.0 (further from origin)
-            
-            # Fixed prototypes: Initialize as tensor (not updated by gradients)
-            # Create orthonormal basis: start with identity matrix, pad if needed
-            # torch.eye(n) creates n x n identity matrix, we need num_prototypes x latent_dim
+            prototype_scale = getattr(config.llm, 'vpl_prototype_scale', 5.0)
+            self.prototype_scale = prototype_scale
+
+            # Create orthonormal basis via QR decomposition, then scale
             if num_prototypes <= self.vpl_latent_dim:
-                # Start with identity matrix (num_prototypes x num_prototypes), then pad zeros
-                prototypes = torch.eye(num_prototypes, device=device) * prototype_scale
-                if self.vpl_latent_dim > num_prototypes:
-                    padding = torch.zeros(num_prototypes, self.vpl_latent_dim - num_prototypes, device=device)
-                    prototypes = torch.cat([prototypes, padding], dim=1)
+                # Random matrix -> QR -> orthonormal rows, padded to latent_dim
+                rand_mat = torch.randn(
+                    num_prototypes, self.vpl_latent_dim,
+                    device=device
+                )
+                q, _ = torch.linalg.qr(rand_mat.T)
+                # q is (latent_dim, num_prototypes), transpose
+                prototypes = q.T[:num_prototypes] * prototype_scale
             else:
-                # If num_prototypes > latent_dim, take only first latent_dim dimensions
-                prototypes = torch.eye(num_prototypes, device=device)[:num_prototypes, :self.vpl_latent_dim] * prototype_scale
-            
-            # Store as tensor with requires_grad=False (fixed prototypes)
-            self.orthogonal_prototypes = prototypes.detach().requires_grad_(False)
+                rand_mat = torch.randn(
+                    self.vpl_latent_dim, self.vpl_latent_dim,
+                    device=device
+                )
+                q, _ = torch.linalg.qr(rand_mat)
+                prototypes = q.T[:num_prototypes, :self.vpl_latent_dim] \
+                    * prototype_scale
+
+            # Learnable prototypes (updated via gradient descent)
+            self.orthogonal_prototypes = nn.Parameter(prototypes)
             self.orthogonal_label = None  # Will be set by server
-            logger.info(f"Initialized {num_prototypes} FIXED orthonormal prototypes for CLOP loss (scale={prototype_scale}, shape={self.orthogonal_prototypes.shape})")
+            logger.info(
+                f"Initialized {num_prototypes} LEARNABLE "
+                f"orthonormal prototypes for CLOP loss "
+                f"(scale={prototype_scale}, "
+                f"shape={self.orthogonal_prototypes.shape})"
+            )
         else:
             self.orthogonal_prototypes = None
             self.orthogonal_label = None
@@ -102,20 +120,30 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         except Exception as e:
             logger.debug(f"Could not get embedding_dim from get_input_embeddings(): {e}")
             try:
-                embedding_dim = self.model.config.hidden_size
-                logger.info(f"Got embedding_dim={embedding_dim} from config.hidden_size")
+                # Most HuggingFace models (including LLaMA) expose hidden_size on config
+                embedding_dim = getattr(self.model, "config", None)
+                if embedding_dim is not None:
+                    embedding_dim = embedding_dim.hidden_size
+                    logger.info(f"Got embedding_dim={embedding_dim} from model.config.hidden_size")
             except Exception as e2:
                 logger.debug(f"Could not get embedding_dim from config.hidden_size: {e2}")
-                # Try to infer from model type
-                model_type = getattr(config.model, 'type', '')
-                if 'gemma' in model_type.lower():
-                    embedding_dim = 2048  # Gemma-2B
-                elif 'qwen' in model_type.lower():
-                    # Qwen2 models: default to 0.5B (896) for main table experiments
-                    embedding_dim = 896  # Qwen2-0.5B (default for main table)
-                else:
-                    embedding_dim = 2048  # Default fallback
-                logger.info(f"Using inferred embedding_dim={embedding_dim} for model type: {model_type}")
+                embedding_dim = None
+
+        # If direct queries failed, fall back based on model type
+        if embedding_dim is None:
+            model_type = getattr(config.model, 'type', '')
+            mt_lower = model_type.lower()
+            if 'llama' in mt_lower:
+                # LLaMA hidden size (e.g., LLaMA-2 7B) is typically 4096
+                embedding_dim = 4096
+            elif 'gemma' in mt_lower:
+                embedding_dim = 2048  # Gemma-2B
+            elif 'qwen' in mt_lower:
+                # Qwen2 models: default to 0.5B (896) for main table experiments
+                embedding_dim = 896  # Qwen2-0.5B (default for main table)
+            else:
+                embedding_dim = 2048  # Generic fallback
+            logger.info(f"Using inferred embedding_dim={embedding_dim} for model type: {model_type}")
         
         if embedding_dim is None:
             embedding_dim = 2048  # Final fallback
@@ -194,7 +222,10 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                 hidden_dims=[512, 256, 128],
                 temperature=self.vpl_gp_temperature,
                 num_clients=self.num_clients,
-                max_logvar=vpl_max_logvar
+                max_logvar=vpl_max_logvar,
+                tau_anneal=self.vpl_gp_tau_anneal,
+                tau_start=self.vpl_gp_tau_start,
+                tau_end=self.vpl_gp_tau_end,
             ).to(device)
         else:
             self.variational_encoder = VariationalEncoder(
@@ -209,10 +240,30 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         # Option 2: Use latent to scale/adjust logits
         # We'll use Option 2: scale logits based on latent
         self.latent_projection = nn.Linear(
-            self.vpl_latent_dim, 
+            self.vpl_latent_dim,
             len(self.choices)
         ).to(device)
-        
+
+        # Cached loss function (avoid re-instantiation per batch)
+        self._ce_loss_fn = torch.nn.CrossEntropyLoss()
+
+        # Cache ortho target (avoid recreating torch.eye per batch)
+        if self.vpl_orthogonal_weight > 0.0:
+            scale_sq = self.prototype_scale ** 2
+            num_p = self.orthogonal_prototypes.shape[0]
+            self._ortho_target = (
+                torch.eye(num_p, device=device) * scale_sq
+            )
+
+        # Cache VPL param list for grad clipping
+        self._vpl_params_for_clip = []
+        for comp_name in ('feature_extractor',
+                          'variational_encoder',
+                          'latent_projection'):
+            comp = getattr(self, comp_name, None)
+            if comp is not None:
+                self._vpl_params_for_clip.extend(comp.parameters())
+
         # Initialize GP prior related attributes (only if GP prior is enabled)
         if self.vpl_use_gp_prior:
             # Z history for visualization
@@ -266,6 +317,11 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                 vpl_params.extend(self.variational_encoder.parameters())
             if hasattr(self, 'latent_projection'):
                 vpl_params.extend(self.latent_projection.parameters())
+            if hasattr(self, 'orthogonal_prototypes') \
+                    and self.orthogonal_prototypes is not None \
+                    and isinstance(self.orthogonal_prototypes,
+                                   nn.Parameter):
+                vpl_params.append(self.orthogonal_prototypes)
             
             if len(vpl_params) > 0:
                 # Get base learning rate from config
@@ -344,54 +400,37 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         A_positions = (shift_labels == A_token)  # (batch, seq_len-1)
         B_positions = (shift_labels == B_token)  # (batch, seq_len-1)
         
-        features_list = []
-        for b in range(batch_size):
-            # Get embeddings at choice positions
-            A_pos = A_positions[b]  # (seq_len-1,)
-            B_pos = B_positions[b]  # (seq_len-1,)
-            
-            # Determine which choice was selected (chosen) and which was rejected
-            A_found = A_pos.any()
-            B_found = B_pos.any()
-            
-            if A_found and B_found:
-                # Both choices found: determine which is chosen based on label
-                # For now, use A as chosen if both exist (can be improved by checking actual choice)
-                chosen_emb = shift_hidden[b, A_pos].mean(dim=0)  # (hidden_dim,)
-                rejected_emb = shift_hidden[b, B_pos].mean(dim=0)  # (hidden_dim,)
-            elif A_found:
-                # Only A found: A is chosen, B is rejected (use mean as rejected)
-                chosen_emb = shift_hidden[b, A_pos].mean(dim=0)
-                rejected_emb = shift_hidden[b].mean(dim=0)  # Use mean as rejected representation
-            elif B_found:
-                # Only B found: B is chosen, A is rejected
-                chosen_emb = shift_hidden[b, B_pos].mean(dim=0)
-                rejected_emb = shift_hidden[b].mean(dim=0)  # Use mean as rejected representation
+        # Vectorized extraction: compute masked means without Python loop
+        # This avoids per-sample GPU syncs from .any() calls
+        # Compute masked mean for A and B positions (batch, hidden_dim)
+        A_mask = A_positions.unsqueeze(-1).float()  # (B, seq, 1)
+        B_mask = B_positions.unsqueeze(-1).float()
+        A_count = A_mask.sum(dim=1).clamp(min=1)  # (B, 1)
+        B_count = B_mask.sum(dim=1).clamp(min=1)
+        A_emb = (shift_hidden * A_mask).sum(dim=1) / A_count  # (B, H)
+        B_emb = (shift_hidden * B_mask).sum(dim=1) / B_count  # (B, H)
+
+        # For samples where A or B is missing, fall back to sequence mean
+        seq_mean = shift_hidden.mean(dim=1)  # (B, H)
+        A_found = A_positions.any(dim=1, keepdim=True)  # (B, 1)
+        B_found = B_positions.any(dim=1, keepdim=True)  # (B, 1)
+
+        # chosen = A where A found, else B where B found, else seq_mean
+        # rejected = B where B found, else seq_mean
+        chosen_emb = torch.where(A_found, A_emb, torch.where(B_found, B_emb, seq_mean))
+        rejected_emb = torch.where(A_found & B_found, B_emb, seq_mean)
+
+        feature_diff = chosen_emb - rejected_emb
+
+        if self.vpl_use_llm_feature_extractor:
+            if self.vpl_use_difference_only:
+                features = feature_diff  # (B, H)
             else:
-                # No choice found: use mean for both (fallback)
-                chosen_emb = shift_hidden[b].mean(dim=0)
-                rejected_emb = shift_hidden[b].mean(dim=0)
-            
-            # Compute difference: chosen - rejected (removes general info, keeps preference)
-            feature_diff = chosen_emb - rejected_emb
-            
-            # According to original VPL: use [chosen, rejected, difference] for richer representation
-            # This allows the encoder to see both responses and their difference
-            # However, if vpl_use_difference_only=True, use only difference to remove general information
-            if self.vpl_use_llm_feature_extractor:
-                if self.vpl_use_difference_only:
-                    # Use only difference (removes general information, keeps only preference)
-                    feature_combined = feature_diff  # (hidden_dim,)
-                else:
-                    # Concatenate: [chosen_emb, rejected_emb, difference]
-                    feature_combined = torch.cat([chosen_emb, rejected_emb, feature_diff], dim=0)  # (hidden_dim * 3,)
-            else:
-                # Use only difference for efficiency
-                feature_combined = feature_diff  # (hidden_dim,)
-            
-            features_list.append(feature_combined)
-        
-        features = torch.stack(features_list, dim=0)  # (batch, hidden_dim * 3) or (batch, hidden_dim)
+                features = torch.cat(
+                    [chosen_emb, rejected_emb, feature_diff],
+                    dim=-1)  # (B, H*3)
+        else:
+            features = feature_diff  # (B, H)
         
         # Ensure features are float32
         if features.dtype != torch.float32:
@@ -452,9 +491,17 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         Forward pass with variational inference.
         Supports both standard VPL and VPL-GP (mixture prior).
         """
+        is_eval = ctx.cur_mode not in (MODE.TRAIN, MODE.FINETUNE)
+        if is_eval:
+            with torch.no_grad():
+                self._hook_on_batch_forward_impl(ctx)
+        else:
+            self._hook_on_batch_forward_impl(ctx)
+
+    def _hook_on_batch_forward_impl(self, ctx):
         # Get hidden states for embedding difference extraction
         output_hidden_states = self.vpl_use_feature_difference
-        
+
         if ctx.cfg.llm.accelerator.use:
             input_ids = ctx.data_batch['input_ids']
             labels = ctx.data_batch['labels']
@@ -511,9 +558,7 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             logits, labels, self.choices, hidden_states=hidden_states
         )
         
-        # Ensure preference_features are on the correct device and dtype
-        # Note: _extract_preference_features already converts to float32
-        preference_features = preference_features.to(ctx.device)
+        # preference_features are already on ctx.device from model output
         
         # Deep feature extraction: raw features -> richer representation
         # Note: We reuse hidden_states from the main forward pass (no additional forward pass)
@@ -528,12 +573,12 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         ctx.vpl_mu = CtxVar(mu.detach(), LIFECYCLE.BATCH)
         ctx.vpl_logvar = CtxVar(logvar.detach(), LIFECYCLE.BATCH)
         
-        # Collect z values for visualization (always collect, not just for GP prior)
-        # This allows t-SNE visualization even when GP prior is disabled
+        # Collect z values for visualization (subsample to avoid
+        # per-batch GPU->CPU transfer; 100 samples suffices for t-SNE)
         if not hasattr(self, 'z_history'):
             self.z_history = []
-        z_cpu = z.detach().cpu()
-        self.z_history.append(z_cpu)
+        if len(self.z_history) < 100:
+            self.z_history.append(z.detach().cpu())
         
         # Compute KL divergence: KL(q(z|x) || p(z)) or KL(q(z|x) || p_mixture(z))
         # If GP prior is enabled, uses mixture prior; otherwise uses standard normal prior
@@ -545,7 +590,14 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         
         # Apply latent conditioning to logits
         # Option: add latent adjustment to choice logits
-        new_logits, new_labels, base_loss = cal_loss(logits, labels, self.choices)
+        # Extract choice logits/labels without computing unused base loss
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+        new_labels = torch.full_like(shift_labels,
+                                     DefaultToken.IGNORE_INDEX.value)
+        for idx, choice in enumerate(self.choices):
+            new_labels[shift_labels == choice] = idx
+        new_logits = shift_logits[..., self.choices]
         
         # Adjust logits with latent
         # latent_adjustment is (batch, num_choices), need to expand to match new_logits
@@ -558,8 +610,7 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         conditioned_logits = new_logits + latent_adjustment_expanded
         
         # Compute reconstruction loss (negative log likelihood)
-        loss_fn = torch.nn.CrossEntropyLoss()
-        reconstruction_loss = loss_fn(
+        reconstruction_loss = self._ce_loss_fn(
             conditioned_logits.view(-1, num_choices),
             new_labels.view(-1)
         )
@@ -573,11 +624,13 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             orthogonal_loss_val, pull_loss, orthonorm_loss = self._compute_clop_orthogonal_loss(z)
             vpl_loss = vpl_loss + orthogonal_loss_val
         
-        # Store for monitoring
-        ctx.vpl_kl_loss = CtxVar(kl_loss.item(), LIFECYCLE.BATCH)
-        ctx.vpl_reconstruction_loss = CtxVar(reconstruction_loss.item(), LIFECYCLE.BATCH)
+        # Store for monitoring (use detach() to avoid GPU sync from .item())
+        ctx.vpl_kl_loss = CtxVar(kl_loss.detach(), LIFECYCLE.BATCH)
+        ctx.vpl_reconstruction_loss = CtxVar(
+            reconstruction_loss.detach(), LIFECYCLE.BATCH)
         if self.vpl_orthogonal_weight > 0.0:
-            ctx.vpl_orthogonal_loss = CtxVar(orthogonal_loss_val.item(), LIFECYCLE.BATCH)
+            ctx.vpl_orthogonal_loss = CtxVar(
+                orthogonal_loss_val.detach(), LIFECYCLE.BATCH)
         
         # Clean up intermediate tensors to save memory (keep only what's needed for backward)
         # Note: Don't delete tensors that are part of the computation graph
@@ -648,16 +701,9 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             if (ctx.cur_batch_i + 1) % self.grad_accum_step == 0:
                 if use_vpl_optimizer:
                     # Update VPL components with separate optimizer (faster learning)
-                    if ctx.grad_clip > 0:
-                        vpl_params = []
-                        if hasattr(self, 'feature_extractor'):
-                            vpl_params.extend(self.feature_extractor.parameters())
-                        if hasattr(self, 'variational_encoder'):
-                            vpl_params.extend(self.variational_encoder.parameters())
-                        if hasattr(self, 'latent_projection'):
-                            vpl_params.extend(self.latent_projection.parameters())
-                        if len(vpl_params) > 0:
-                            torch.nn.utils.clip_grad_norm_(vpl_params, ctx.grad_clip)
+                    if ctx.grad_clip > 0 and self._vpl_params_for_clip:
+                        torch.nn.utils.clip_grad_norm_(
+                            self._vpl_params_for_clip, ctx.grad_clip)
                     ctx.vpl_optimizer.step()
                     ctx.vpl_optimizer.zero_grad()
                     
@@ -676,10 +722,9 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                 if ctx.scheduler is not None:
                     ctx.scheduler.step()
 
-        # move the training data to cpu
-        ctx.data_batch['input_ids'].cpu()
-        ctx.data_batch['labels'].cpu()
-        ctx.data_batch['attention_mask'].cpu()
+        # Free training data from GPU (del instead of .cpu() which
+        # was a no-op bug — return values were discarded)
+        del ctx.data_batch
     
     def _hook_on_batch_end(self, ctx):
         if ctx.skip_this_batch:
@@ -708,12 +753,10 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         ctx.ys_true.append(ctx.y_true)
         ctx.ys_pred.append(ctx.y_pred)
         
-        # Periodic memory cleanup to prevent OOM
-        # Clean up every 5 batches to reduce memory usage
-        if ctx.cur_batch_i % 5 == 0:
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+        # NOTE: gc.collect() + empty_cache() removed here — calling
+        # every 5 batches was adding ~1-2s overhead per round.
+        # If OOM occurs, reduce batch_size or enable gradient
+        # checkpointing instead.
 
     def _hook_on_fit_end(self, ctx):
         # Handle case where all batches were skipped (e.g. NaN loss): avoid empty concatenate
@@ -741,11 +784,14 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         
         # Add VPL-specific metrics
         if hasattr(ctx, 'vpl_kl_loss_total') and ctx.num_samples > 0:
-            results['vpl_kl_loss'] = ctx.vpl_kl_loss_total / ctx.num_samples
-            results['vpl_reconstruction_loss'] = ctx.vpl_reconstruction_loss_total / ctx.num_samples
+            kl_avg = ctx.vpl_kl_loss_total / ctx.num_samples
+            recon_avg = ctx.vpl_reconstruction_loss_total / ctx.num_samples
+            results['vpl_kl_loss'] = kl_avg.item() if torch.is_tensor(kl_avg) else kl_avg
+            results['vpl_reconstruction_loss'] = recon_avg.item() if torch.is_tensor(recon_avg) else recon_avg
             # Add orthogonal loss if enabled
             if self.vpl_orthogonal_weight > 0.0 and hasattr(ctx, 'vpl_orthogonal_loss_total'):
-                results['vpl_orthogonal_loss'] = ctx.vpl_orthogonal_loss_total / ctx.num_samples
+                ortho_avg = ctx.vpl_orthogonal_loss_total / ctx.num_samples
+                results['vpl_orthogonal_loss'] = ortho_avg.item() if torch.is_tensor(ortho_avg) else ortho_avg
             # Add vpl_total for monitor formatting (required by format_eval_res)
             if 'vpl_total' not in results:
                 results['vpl_total'] = ctx.num_samples
@@ -837,20 +883,60 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             return None
         return self.client_z_values.clone()
     
-    def update_prior_from_server(self, client_mus, client_logvars, client_weights):
+    def update_prior_from_server(self, client_mus, client_logvars, client_weights, current_round=None):
         """
         Update the mixture prior from server.
         Only used when GP prior is enabled.
-        
+
+        After updating the prior, ensures prior_logits (learnable Gumbel-Softmax
+        weights) are included in the VPL optimizer, and anneals temperature.
+
         Args:
             client_mus: Mean vectors from other clients (num_clients, latent_dim)
             client_logvars: Log variance vectors from other clients (num_clients, latent_dim)
-            client_weights: Weights for each client distribution (num_clients,)
+            client_weights: Sample-size weights (used for initialization only) (num_clients,)
+            current_round: Current FL round (for temperature annealing)
         """
         if not self.vpl_use_gp_prior:
             return
         if hasattr(self.variational_encoder, 'update_prior'):
             self.variational_encoder.update_prior(client_mus, client_logvars, client_weights)
+
+            # Ensure prior_logits is in the VPL optimizer
+            if hasattr(self.variational_encoder, 'prior_logits') and \
+               self.variational_encoder.prior_logits is not None:
+                self._ensure_prior_logits_in_optimizer()
+
+            # Anneal temperature
+            if current_round is not None and hasattr(self.variational_encoder, 'anneal_temperature'):
+                self.variational_encoder.anneal_temperature(current_round, self.total_round_num)
+
+    def _ensure_prior_logits_in_optimizer(self):
+        """Add prior_logits to the VPL optimizer if not already present."""
+        logits_param = self.variational_encoder.prior_logits
+        if logits_param is None:
+            return
+
+        # Try VPL optimizer first, then fall back to ctx optimizer
+        optimizer = None
+        if hasattr(self, 'ctx') and hasattr(self.ctx, 'vpl_optimizer') and self.ctx.vpl_optimizer is not None:
+            optimizer = self.ctx.vpl_optimizer
+        elif hasattr(self, 'ctx') and hasattr(self.ctx, 'optimizer'):
+            optimizer = self.ctx.optimizer
+
+        if optimizer is None:
+            logger.warning("No optimizer found to add prior_logits to")
+            return
+
+        # Check if already tracked
+        param_id = id(logits_param)
+        existing_ids = {id(p) for group in optimizer.param_groups for p in group['params']}
+        if param_id not in existing_ids:
+            optimizer.add_param_group({
+                'params': [logits_param],
+                'lr': optimizer.param_groups[0]['lr'],
+            })
+            logger.info(f"Added prior_logits to optimizer (lr={optimizer.param_groups[0]['lr']:.2e})")
     
     def update_orthogonal_label_from_server(self, label):
         """
@@ -874,51 +960,73 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
     
     def _compute_clop_orthogonal_loss(self, z, labels=None):
         """
-        Compute CLOP orthogonal loss.
-        
+        Compute CLOP orthogonal loss (Eq. 9).
+
+        L_ortho = λ·||z - p_{y*}||² + γ·||PP^T - I||²_F
+
+        Prototypes are learnable nn.Parameters. The pull loss moves
+        both z and the assigned prototype closer together, while the
+        orthonormality constraint keeps prototypes separated.
+
+        Label assignment priority:
+          1. Server-assigned label (k-means on client z-means)
+          2. Local nearest-prototype fallback (round 1, before
+             server has computed labels)
+
         Args:
             z: Latent embeddings (batch_size, latent_dim)
             labels: Optional labels for each sample (batch_size,)
-            
+
         Returns:
             orthogonal_loss: Total orthogonal loss
             pull_loss: Pull loss component
             orthonorm_loss: Orthonormal constraint loss component
         """
         if self.orthogonal_prototypes is None:
-            return torch.tensor(0.0, device=z.device), torch.tensor(0.0, device=z.device), torch.tensor(0.0, device=z.device)
-        
+            return (torch.tensor(0.0, device=z.device),
+                    torch.tensor(0.0, device=z.device),
+                    torch.tensor(0.0, device=z.device))
+
         batch_size, latent_dim = z.shape
-        num_prototypes, _ = self.orthogonal_prototypes.shape
-        
-        # NOTE: QR decomposition을 forward에서 수행하면 gradient가 차단됨
-        # 대신 orthonormal constraint를 loss로만 적용하여 prototype이 학습되도록 함
-        # QR decomposition은 backward 후에만 수행 (gradient 유지)
-        
+        num_prototypes = self.orthogonal_prototypes.shape[0]
+
         # Determine orthogonal labels
-        if self.vpl_use_manual_orthogonal_labels and self.orthogonal_label is not None:
-            # Use manual label from server (same for all samples in batch)
-            orthogonal_labels = torch.full((batch_size,), self.orthogonal_label, device=z.device, dtype=torch.long)
+        # Use server-assigned label when available (k-means or manual)
+        if self.orthogonal_label is not None:
+            orthogonal_labels = torch.full(
+                (batch_size,), self.orthogonal_label,
+                device=z.device, dtype=torch.long
+            )
         else:
-            # Automatically assign to closest prototype
-            similarities = torch.matmul(z, self.orthogonal_prototypes.T)  # (batch_size, num_prototypes)
-            orthogonal_labels = torch.argmax(similarities, dim=1)  # (batch_size,)
-        
-        # Pull loss: z를 해당 prototype에 가깝게
-        # NOTE: Prototypes are FIXED, so only z moves toward prototypes
-        selected_prototypes = self.orthogonal_prototypes[orthogonal_labels]  # (batch_size, latent_dim)
+            # Fallback: assign to closest prototype (e.g. round 1)
+            with torch.no_grad():
+                similarities = torch.matmul(
+                    z.detach(),
+                    self.orthogonal_prototypes.detach().T
+                )
+                orthogonal_labels = torch.argmax(
+                    similarities, dim=1
+                )
+
+        # Pull loss: move z toward assigned prototype (and vice versa)
+        selected_prototypes = self.orthogonal_prototypes[
+            orthogonal_labels
+        ]  # (batch_size, latent_dim)
         pull_loss = torch.mean((z - selected_prototypes) ** 2)
-        
-        # Orthonormal constraint: P^T P = I
-        # NOTE: Fixed prototypes are already orthonormal, but we compute this for monitoring
-        PTP = torch.matmul(self.orthogonal_prototypes, self.orthogonal_prototypes.T)  # (num_prototypes, num_prototypes)
-        identity = torch.eye(num_prototypes, device=z.device)
-        orthonorm_loss = torch.norm(PTP - identity, p='fro') ** 2
-        
+
+        # Orthonormal constraint: ||PP^T - s²·I||²_F
+        # Uses scaled identity since prototypes have norm ~prototype_scale
+        PTP = torch.matmul(
+            self.orthogonal_prototypes,
+            self.orthogonal_prototypes.T
+        )  # (num_prototypes, num_prototypes)
+        orthonorm_loss = torch.norm(
+            PTP - self._ortho_target, p='fro') ** 2
+
         # Total orthogonal loss
         orthogonal_loss = self.vpl_orthogonal_weight * pull_loss + \
-                         self.vpl_orthogonal_orthonorm_weight * orthonorm_loss
-        
+            self.vpl_orthogonal_orthonorm_weight * orthonorm_loss
+
         return orthogonal_loss, pull_loss, orthonorm_loss
     
 

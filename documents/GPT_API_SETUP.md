@@ -122,7 +122,7 @@ eval:
 
 3. **실험 실행**:
    ```bash
-   bash scripts/vpl-gp/hhst.sh
+   bash scripts/server/vpl-gp/hhst.sh
    ```
 
 ## 7. 주의사항

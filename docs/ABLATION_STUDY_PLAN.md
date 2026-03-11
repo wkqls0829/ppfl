@@ -89,7 +89,7 @@ VPL 대비 Gumbel-Softmax Prior와 Orthogonal Loss의 효과를 확인하는 abl
 ## 파일 구조
 
 ```
-scripts/main_table/ablation/
+scripts/slurm/main_table/ablation/
 ├── README.md (이 파일)
 ├── run_selector_ablation_gemma.sh      # Gemma-2B selector ablation 실행
 ├── run_rl_ablation_gemma.sh            # Gemma-2B RL ablation 실행
@@ -114,25 +114,25 @@ cfg/
 #### Gemma-2B
 ```bash
 # VPL + GP
-sbatch scripts/main_table/ablation/run_selector_ablation_gemma.sh vplgp 10 62300
+sbatch scripts/slurm/main_table/ablation/run_selector_ablation_gemma.sh vplgp 10 62300
 
 # VPL + Ortho
-sbatch scripts/main_table/ablation/run_selector_ablation_gemma.sh vplortho 10 62310
+sbatch scripts/slurm/main_table/ablation/run_selector_ablation_gemma.sh vplortho 10 62310
 
 # 모든 ablation selector 실험 제출
-bash scripts/main_table/ablation/submit_all_ablation_gemma.sh
+bash scripts/slurm/main_table/ablation/submit_all_ablation_gemma.sh
 ```
 
 #### Qwen 2
 ```bash
 # VPL + GP
-sbatch scripts/main_table/ablation/run_selector_ablation_qwen.sh vplgp 10 62400
+sbatch scripts/slurm/main_table/ablation/run_selector_ablation_qwen.sh vplgp 10 62400
 
 # VPL + Ortho
-sbatch scripts/main_table/ablation/run_selector_ablation_qwen.sh vplortho 10 62410
+sbatch scripts/slurm/main_table/ablation/run_selector_ablation_qwen.sh vplortho 10 62410
 
 # 모든 ablation selector 실험 제출
-bash scripts/main_table/ablation/submit_all_ablation_qwen.sh
+bash scripts/slurm/main_table/ablation/submit_all_ablation_qwen.sh
 ```
 
 ### 2. RL 실험 실행
@@ -142,25 +142,25 @@ Selector 실험이 완료된 후:
 #### Gemma-2B
 ```bash
 # VPL + GP RL
-sbatch scripts/main_table/ablation/run_rl_ablation_gemma.sh vplgp 10 63300 62300
+sbatch scripts/slurm/main_table/ablation/run_rl_ablation_gemma.sh vplgp 10 63300 62300
 
 # VPL + Ortho RL
-sbatch scripts/main_table/ablation/run_rl_ablation_gemma.sh vplortho 10 63310 62310
+sbatch scripts/slurm/main_table/ablation/run_rl_ablation_gemma.sh vplortho 10 63310 62310
 
 # 모든 ablation RL 실험 제출
-bash scripts/main_table/ablation/submit_rl_ablation_gemma.sh
+bash scripts/slurm/main_table/ablation/submit_rl_ablation_gemma.sh
 ```
 
 #### Qwen 2
 ```bash
 # VPL + GP RL
-sbatch scripts/main_table/ablation/run_rl_ablation_qwen.sh vplgp 10 63400 62400
+sbatch scripts/slurm/main_table/ablation/run_rl_ablation_qwen.sh vplgp 10 63400 62400
 
 # VPL + Ortho RL
-sbatch scripts/main_table/ablation/run_rl_ablation_qwen.sh vplortho 10 63410 62410
+sbatch scripts/slurm/main_table/ablation/run_rl_ablation_qwen.sh vplortho 10 63410 62410
 
 # 모든 ablation RL 실험 제출
-bash scripts/main_table/ablation/submit_rl_ablation_qwen.sh
+bash scripts/slurm/main_table/ablation/submit_rl_ablation_qwen.sh
 ```
 
 ## 예상 결과 분석

@@ -852,36 +852,38 @@ def _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name="w
     if ctx.tokenizer.pad_token_id is None:
         ctx.tokenizer.pad_token_id = ctx.tokenizer.eos_token_id
     
-    # Check if this is the final round (last round) - use full dataset
+    # Check if this is the final round (last round) - use full dataset only for GPT API path
+    # For internal model path, never use full dataset (would take days of local generation)
     is_final_round = False
     if hasattr(ctx, 'cur_round') and hasattr(ctx.cfg.federate, 'total_round_num'):
         is_final_round = (ctx.cur_round + 1 == ctx.cfg.federate.total_round_num)
     
     max_eval_samples = getattr(ctx.cfg.eval, 'max_samples_for_reward', 30)
     if is_final_round:
-        # Final round: use full dataset (no limit)
-        max_eval_samples = float('inf')
-        logger.info(f"Final round detected (round {ctx.cur_round + 1}/{ctx.cfg.federate.total_round_num}). Using full dataset for evaluation.")
+        # Final round: use full dataset only when using GPT API (handled in _get_winrate_scores_with_gpt_api).
+        # For internal model we always cap to avoid days of local generation.
+        max_eval_samples = min(max_eval_samples if max_eval_samples > 0 else 30, 100)
+        logger.info(f"Final round: internal model winrate evaluation capped at {max_eval_samples} samples (set eval.max_samples_for_reward to change).")
     elif max_eval_samples <= 0:
-        max_eval_samples = float('inf')
+        max_eval_samples = 30
     
     total_samples_evaluated = 0
-    should_limit = max_eval_samples != float('inf')
+    should_limit = True  # Always limit for internal model path
     
     # Load original data once (cache it in ctx)
     # Check dataset type to load appropriate data
     dataset_type = getattr(ctx.cfg.data, 'type', '').lower()
     
     if 'ultrafeedback' in dataset_type:
-        cache_key = '_original_ultrafeedback_data'
-        if not hasattr(ctx, cache_key):
-            setattr(ctx, cache_key, _load_original_ultrafeedback_data(ctx))
-        original_data = getattr(ctx, cache_key)
+        data_cache_key = '_original_ultrafeedback_data'
+        if not hasattr(ctx, data_cache_key):
+            setattr(ctx, data_cache_key, _load_original_ultrafeedback_data(ctx))
+        original_data = getattr(ctx, data_cache_key)
     else:
-        cache_key = '_original_hhrlhf_data'
-        if not hasattr(ctx, cache_key):
-            setattr(ctx, cache_key, _load_original_hhrlhf_data(ctx))
-        original_data = getattr(ctx, cache_key)
+        data_cache_key = '_original_hhrlhf_data'
+        if not hasattr(ctx, data_cache_key):
+            setattr(ctx, data_cache_key, _load_original_hhrlhf_data(ctx))
+        original_data = getattr(ctx, data_cache_key)
     
     if len(original_data) == 0:
         logger.warning(f"Could not load original data for {metric_name} winrate evaluation. Skipping winrate evaluation.")

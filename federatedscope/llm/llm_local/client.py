@@ -209,7 +209,15 @@ class LLMMultiLoRAClient(Client):
                     vpl_state_dict['latent_projection'] = self.trainer.latent_projection.state_dict()
                 if hasattr(self.trainer, 'z_to_embedding') and self.trainer.z_to_embedding is not None:
                     vpl_state_dict['z_to_embedding'] = self.trainer.z_to_embedding.state_dict()
-                
+                # Add learnable orthogonal prototypes
+                if hasattr(self.trainer, 'orthogonal_prototypes') \
+                        and self.trainer.orthogonal_prototypes is not None \
+                        and isinstance(self.trainer.orthogonal_prototypes,
+                                       torch.nn.Parameter):
+                    vpl_state_dict['orthogonal_prototypes'] = {
+                        'weight': self.trainer.orthogonal_prototypes.data
+                    }
+
                 # Add VPL components to model_para_all with prefixes
                 for component_name, component_state_dict in vpl_state_dict.items():
                     for key, value in component_state_dict.items():
@@ -289,16 +297,46 @@ class LLMMultiLoRAClient(Client):
                 if not isinstance(prior_weights, torch.Tensor):
                     prior_weights = torch.tensor(prior_weights, dtype=torch.float32).to(self.device)
                 
-                self.trainer.update_prior_from_server(prior_mus, prior_logvars, prior_weights)
+                self.trainer.update_prior_from_server(
+                    prior_mus, prior_logvars, prior_weights,
+                    current_round=message.state
+                )
                 logger.info(f"Client {self.ID} updated VPL-GP prior from server with "
                           f"{len(prior_mus)} client distributions at round {message.state}")
     
     def callback_funcs_for_vpl_orthogonal_labels(self, message: Message):
         """
-        Handle orthogonal labels from server.
+        Handle orthogonal labels and aggregated prototypes from server.
+        Content format: dict with 'labels' and optional 'prototypes'.
         """
-        if hasattr(self.trainer, 'update_orthogonal_label_from_server'):
-            labels = message.content
+        content = message.content
+        if not isinstance(content, dict):
+            return
+
+        # Update orthogonal label
+        labels = content.get('labels')
+        if labels is not None and hasattr(
+                self.trainer, 'update_orthogonal_label_from_server'):
             if isinstance(labels, dict) and self.ID in labels:
-                self.trainer.update_orthogonal_label_from_server(labels[self.ID])
-                logger.info(f"Client {self.ID} updated orthogonal label from server: {labels[self.ID]}")
+                self.trainer.update_orthogonal_label_from_server(
+                    labels[self.ID])
+                logger.info(
+                    f"Client {self.ID} updated orthogonal "
+                    f"label from server: {labels[self.ID]}")
+
+        # Update aggregated prototypes
+        prototypes = content.get('prototypes')
+        if prototypes is not None and hasattr(
+                self.trainer, 'orthogonal_prototypes'):
+            if not isinstance(prototypes, torch.Tensor):
+                prototypes = torch.tensor(
+                    prototypes, dtype=torch.float32)
+            prototypes = prototypes.to(self.device)
+            if isinstance(self.trainer.orthogonal_prototypes,
+                          torch.nn.Parameter):
+                self.trainer.orthogonal_prototypes.data.copy_(
+                    prototypes)
+                logger.info(
+                    f"Client {self.ID} updated orthogonal "
+                    f"prototypes from server "
+                    f"(shape={prototypes.shape})")

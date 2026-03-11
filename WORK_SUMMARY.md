@@ -578,7 +578,7 @@ The implementation is production-ready and has been tested with the hh-rlhf data
 
 ### 12.2 Scripts Directory Structure
 
-**Location**: `scripts/vpl-gp/`
+**Location**: `scripts/server/vpl-gp/`
 
 **Script Categories**:
 
@@ -896,19 +896,19 @@ The implementation is production-ready and has been tested with the hh-rlhf data
 
 ```bash
 # 1. Standard training (non-orthogonal)
-./scripts/vpl-gp/hhst.sh
+./scripts/server/vpl-gp/hhst.sh
 # → Uses cfg/vpl-gp/hhst.yaml
 # → Output: hhrl_choice_gemma_fedbiscuit_u3_vplgp_${tid}.ckpt
 # → Log: outputs/${tid}.log
 
 # 2. Orthogonal loss training
-./scripts/vpl-gp/hhst-ortho.sh
+./scripts/server/vpl-gp/hhst-ortho.sh
 # → Uses cfg/vpl-gp/hhst-ortho.yaml
 # → Output: hhrl_choice_gemma_fedbiscuit_u3_vplgp_ortho_${tid}.ckpt
 # → Log: outputs/${tid}.log
 
 # 3. 100 clients training
-./scripts/vpl-gp/hhst_c100.sh
+./scripts/server/vpl-gp/hhst_c100.sh
 # → Uses cfg/vpl-gp/hhst.yaml with client_num=100
 # → Output: hhrl_choice_gemma_fedbiscuit_u3_vplgp_c100_${tid}.ckpt
 # → Log: outputs/${tid}_c100.log
@@ -918,7 +918,7 @@ The implementation is production-ready and has been tested with the hh-rlhf data
 
 ```bash
 # 1. Standard RL training
-./scripts/vpl-gp/hrl.sh
+./scripts/server/vpl-gp/hrl.sh
 # → Requires selector checkpoint from hhst.sh (tid=50100)
 # → Uses cfg/vpl-gp/test_hrl_selector.yaml (selector config)
 # → Uses cfg/vpl-gp/hrl.yaml (RL config)
@@ -926,7 +926,7 @@ The implementation is production-ready and has been tested with the hh-rlhf data
 # → Log: outputs/${tid}.log
 
 # 2. RL with 100 clients
-./scripts/vpl-gp/hrl_c100.sh
+./scripts/server/vpl-gp/hrl_c100.sh
 # → Requires selector checkpoint from hhst_c100.sh (tid=50100)
 # → Creates temporary selector config
 # → Output: hhrl_rlhf_gemma_choice_vplgp_c100_${tid}.ckpt

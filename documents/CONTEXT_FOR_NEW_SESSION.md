@@ -194,8 +194,8 @@ scripts/
 - `scripts/fedbiscuit/hrl_hpsearch_eval.sh`: GPU_IDS를 `(0 1 4)`로 변경, `CUDA_VISIBLE_DEVICES` 제거
 
 #### VPL-GP 스크립트 생성 ⭐ NEW
-- `scripts/vpl-gp/hhst.sh`: VPL-GP HHST 실행 스크립트 (TID: 50100, device: 5)
-- `scripts/vpl-gp/hrl.sh`: VPL-GP HRL 실행 스크립트 (TID: 50200, device: 5)
+- `scripts/server/vpl-gp/hhst.sh`: VPL-GP HHST 실행 스크립트 (TID: 50100, device: 5)
+- `scripts/server/vpl-gp/hrl.sh`: VPL-GP HRL 실행 스크립트 (TID: 50200, device: 5)
 
 #### VPL-GP 설정 파일 생성 ⭐ NEW
 - `cfg/vpl-gp/hhst.yaml`: VPL-GP binary selector 설정 (device: 5, trainer: vplgprewardchoicetrainer)
@@ -250,7 +250,7 @@ llm:
 
 ### VPL-GP HHST ⭐ NEW
 ```bash
-bash scripts/vpl-gp/hhst.sh
+bash scripts/server/vpl-gp/hhst.sh
 ```
 - TID: 50100
 - 로그: `outputs/50100.log`
@@ -259,7 +259,7 @@ bash scripts/vpl-gp/hhst.sh
 
 ### VPL-GP HRL ⭐ NEW
 ```bash
-bash scripts/vpl-gp/hrl.sh
+bash scripts/server/vpl-gp/hrl.sh
 ```
 - TID: 50200
 - 로그: `outputs/50200.log`

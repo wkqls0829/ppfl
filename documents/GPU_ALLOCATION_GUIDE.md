@@ -135,9 +135,9 @@ federate:
 ### 자동 GPU 감지 (권장)
 
 ```bash
-bash scripts/vpl-gp/hhst.sh
+bash scripts/server/vpl-gp/hhst.sh
 # 또는
-bash scripts/vpl-gp/hhst-ortho.sh
+bash scripts/server/vpl-gp/hhst-ortho.sh
 ```
 
 스크립트가 자동으로 GPU 개수를 감지하고 설정합니다.

@@ -11,10 +11,10 @@ VPL-GP 하이퍼파라미터 탐색의 **Phase 구간, TID–파라미터 매핑
 | **Gemma-2B** | 54000–54047 | 55000–55047 | 6 (Phase 1–6) |
 | **Qwen2-0.5B** | 54100–54138 | 55100–55138 | 5 (Phase 1–5) |
 
-**실행**: Gemma `bash scripts/hpsearch/submit_selector.sh <phase>`, 완료 후 `bash scripts/hpsearch/submit_rl.sh <phase>`  
-Qwen `bash scripts/hpsearch/submit_selector_qwen.sh <phase>`, 완료 후 `bash scripts/hpsearch/submit_rl_qwen.sh <phase>`
+**실행**: Gemma `bash scripts/slurm/hpsearch/submit_selector.sh <phase>`, 완료 후 `bash scripts/slurm/hpsearch/submit_rl.sh <phase>`  
+Qwen `bash scripts/slurm/hpsearch/submit_selector_qwen.sh <phase>`, 완료 후 `bash scripts/slurm/hpsearch/submit_rl_qwen.sh <phase>`
 
-**상세 스크립트·파일 구조**: `scripts/hpsearch/README.md`
+**상세 스크립트·파일 구조**: `scripts/slurm/hpsearch/README.md`
 
 ---
 
@@ -97,7 +97,7 @@ Phase 1–4 최적/중간값 조합.
 |--------------|------------------------|----------------------------------|----------------------|---------------|--------------------|--------|
 | 54026/55026 | 1.0 | 0.1 | **2.0** | **0.05** | **5.0** | **0.0001** |
 
-**실행**: `bash scripts/hpsearch/submit_selector.sh 5` → 완료 후 `bash scripts/hpsearch/submit_rl.sh 5`
+**실행**: `bash scripts/slurm/hpsearch/submit_selector.sh 5` → 완료 후 `bash scripts/slurm/hpsearch/submit_rl.sh 5`
 
 ### Phase 6: Fine-grained — 54027–54047 / 55027–55047 (21개)
 
@@ -154,7 +154,7 @@ Phase 1·2 최적/중간값 조합.
 |--------------|------------------------|----------------------------------|----------------------|---------------|--------------------|--------|
 | 54117/55117 | 1.0 | 0.1 | **2.0** | **0.05** | **1.0** | **0.0001** |
 
-**실행**: `bash scripts/hpsearch/submit_selector_qwen.sh 4` → 완료 후 `bash scripts/hpsearch/submit_rl_qwen.sh 4`
+**실행**: `bash scripts/slurm/hpsearch/submit_selector_qwen.sh 4` → 완료 후 `bash scripts/slurm/hpsearch/submit_rl_qwen.sh 4`
 
 ### Phase 5: Fine-grained — 54118–54138 / 55118–55138 (21개)
 
@@ -171,16 +171,16 @@ Phase 1·2 최적/중간값 조합.
 
 | 모델 | Selector 제출 | RL 제출 (Selector 완료 후) |
 |------|----------------|----------------------------|
-| Gemma | `bash scripts/hpsearch/submit_selector.sh <1–6>` | `bash scripts/hpsearch/submit_rl.sh <1–6>` |
-| Qwen | `bash scripts/hpsearch/submit_selector_qwen.sh <1–5>` | `bash scripts/hpsearch/submit_rl_qwen.sh <1–5>` |
+| Gemma | `bash scripts/slurm/hpsearch/submit_selector.sh <1–6>` | `bash scripts/slurm/hpsearch/submit_rl.sh <1–6>` |
+| Qwen | `bash scripts/slurm/hpsearch/submit_selector_qwen.sh <1–5>` | `bash scripts/slurm/hpsearch/submit_rl_qwen.sh <1–5>` |
 
 **개별 실험 (sbatch)**:
 ```bash
-sbatch scripts/hpsearch/run_selector_hpsearch.sh 54000
-sbatch scripts/hpsearch/run_rl_hpsearch.sh 55000 54000
+sbatch scripts/slurm/hpsearch/run_selector_hpsearch.sh 54000
+sbatch scripts/slurm/hpsearch/run_rl_hpsearch.sh 55000 54000
 
-sbatch scripts/hpsearch/run_selector_hpsearch_qwen.sh 54100
-sbatch scripts/hpsearch/run_rl_hpsearch_qwen.sh 55100 54100
+sbatch scripts/slurm/hpsearch/run_selector_hpsearch_qwen.sh 54100
+sbatch scripts/slurm/hpsearch/run_rl_hpsearch_qwen.sh 55100 54100
 ```
 
 **WORK_DIR**: `submit_*.sh`는 `WORK_DIR="/home2/jbkoo/ppfl"` 사용. 다른 경로는 스크립트 내 수정 또는 위 sbatch로 직접 실행.
@@ -201,5 +201,5 @@ tail -f outputs/55026.log
 
 ## 7. 기타
 
-- **Local RL only (baseline)**: TID 56000 등. Selector 없이 RL만 실행. `scripts/hpsearch/run_rl_local_only.sh` 참고.
+- **Local RL only (baseline)**: TID 56000 등. Selector 없이 RL만 실행. `scripts/slurm/hpsearch/run_rl_local_only.sh` 참고.
 - **Config 생성**: `run_selector_hpsearch.sh` / `run_selector_hpsearch_qwen.sh`가 TID에 따라 `cfg/hpsearch/vpl-gp/phase_<TID>.yaml` 또는 `cfg/hpsearch/vpl-gp-qwen/phase_<TID>.yaml` 생성.
