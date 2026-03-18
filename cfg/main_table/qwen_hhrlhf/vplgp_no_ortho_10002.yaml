@@ -1,5 +1,5 @@
 use_gpu: True
-device: 0  # Change this for your GPU
+device: 0
 early_stop:
   patience: 0
 federate:
@@ -7,10 +7,10 @@ federate:
   client_num: 10
   sample_client_num: 5
   total_round_num: 50
-  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_gemma_fedbiscuit_u3_vplgp_60000.ckpt"  # Override in script
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_qwen2_vplgp_no_ortho_t10002.ckpt"
   ignore_weight: True
-  save_freq: 20
-  share_local_model: True  # Single GPU mode
+  save_freq: 50
+  share_local_model: True
   online_aggr: False
 data:
   root: /hdd/hdd3/kjb/
@@ -35,35 +35,34 @@ llm:
       use: False
       round: 2
     args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
-  # Variational Preference Learning with Gumbel-Softmax Prior (VPL-GP) parameters
+  # VPL-GP: GP prior enabled, orthogonal loss disabled (Paper Table 3)
   vpl_use_gp_prior: True
   vpl_latent_dim: 32
-  vpl_kl_weight: 0.1  # Paper Table 3 default
-  vpl_gp_temperature: 1.0  # Paper Table 3 default
+  vpl_kl_weight: 0.1
+  vpl_gp_temperature: 1.0
   vpl_use_difference_only: True
-  vpl_orthogonal_weight: 1.0
-  vpl_orthogonal_orthonorm_weight: 0.1
-  vpl_use_manual_orthogonal_labels: False
-  vpl_num_prototypes: 2
-  vpl_prototype_scale: 5.0  # Paper Table 3 default
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
   vpl_max_logvar: -3.0
+  vpl_orthogonal_weight: 0.0
+  vpl_orthogonal_orthonorm_weight: 0.0
+  vpl_use_manual_orthogonal_labels: False
+  vpl_num_prototypes: 0
   vpl_tsne_visualize_freq: 10
-  grad_accum_step: 2
+  grad_accum_step: 8
 dataloader:
-  batch_size: 16
-  num_workers: 0  # Set to 0 to avoid "Too many open files" error in cluster environment
+  batch_size: 4
+  num_workers: 0
   pin_memory: True
 model:
-  type: 'google/gemma-2b@huggingface_llm'
+  type: 'Qwen/Qwen2-0.5B@huggingface_llm'
 train:
   local_update_steps: 30
   batch_or_epoch: batch
   optimizer:
     type: AdamW
     betas: (0.9, 0.95)
-    lr: 0.0001
+    lr: 0.00001
   is_enable_half: True
 criterion:
   type: CrossEntropyLoss
@@ -72,11 +71,11 @@ trainer:
   choices: ['A', 'B']
 eval:
   freq: 5
-  metrics: ['loss', 'acc', 'vpl_kl_loss', 'vpl_reconstruction_loss', 'vpl_orthogonal_loss']
+  metrics: ['loss', 'acc', 'vpl_kl_loss', 'vpl_reconstruction_loss']
   best_res_update_round_wise_key: train_avg_loss
   count_flops: False
   max_samples_for_reward: 100
-expname: vplgp_hhst_t60000  # Override in script
+expname: test_vplgp_no_ortho_qwen_t10002
 wandb:
   use: True
   name_user: ''

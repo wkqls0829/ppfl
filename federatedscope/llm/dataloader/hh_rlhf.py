@@ -1,3 +1,4 @@
+import random
 import datasets
 from federatedscope.core.auxiliaries.logging import logger
 from federatedscope.llm.dataset.llm_dataset import LLMDataset
@@ -60,26 +61,45 @@ def load_hh_rlhf_dataset(config, tokenizer):
         logger.error(f"Failed to load dataset from Hugging Face. Error: {e}")
         raise e
 
-    def preprocess(example):
+    def preprocess(example, category=None):
         """Preprocesses a single example for choice-based training."""
         prompt, chosen = parse_dialogue(example['chosen'])
         _, rejected = parse_dialogue(example['rejected'])
 
         if prompt is None or chosen is None or rejected is None:
             return None
-        
-        return {
-            "prompt": prompt,
-            "output_A": chosen,
-            "output_B": rejected,
-            "choice": " A"  # Target for the choice trainer
-        }
 
-    # Process all splits
-    harmless_train = harmless_raw['train'].map(preprocess).filter(lambda x: x is not None)
-    harmless_test = harmless_raw['test'].map(preprocess).filter(lambda x: x is not None)
-    helpful_train = helpful_raw['train'].map(preprocess).filter(lambda x: x is not None)
-    helpful_test = helpful_raw['test'].map(preprocess).filter(lambda x: x is not None)
+        # Randomize A/B order to prevent positional bias
+        if random.random() < 0.5:
+            return {
+                "prompt": prompt,
+                "output_A": chosen,
+                "output_B": rejected,
+                "choice": " A",
+                "category": category,
+            }
+        else:
+            return {
+                "prompt": prompt,
+                "output_A": rejected,
+                "output_B": chosen,
+                "choice": " B",
+                "category": category,
+            }
+
+    # Process all splits — tag each example with its source category
+    harmless_train = harmless_raw['train'].map(
+        lambda x: preprocess(x, category="harmless")
+    ).filter(lambda x: x is not None)
+    harmless_test = harmless_raw['test'].map(
+        lambda x: preprocess(x, category="harmless")
+    ).filter(lambda x: x is not None)
+    helpful_train = helpful_raw['train'].map(
+        lambda x: preprocess(x, category="helpful")
+    ).filter(lambda x: x is not None)
+    helpful_test = helpful_raw['test'].map(
+        lambda x: preprocess(x, category="helpful")
+    ).filter(lambda x: x is not None)
 
     # Limit dataset size for testing (read from config, default: -1 = no limit)
     # If config.data.max_train_samples or config.data.max_test_samples is set, use it
@@ -246,7 +266,7 @@ def load_hh_rlhf_for_rlhf(data_root,
                 client_prompts = list(client_test_shard)
                 if max_num_test > 0:
                     client_prompts = client_prompts[:max_num_test]
-                    client_test_data[client_id] = client_prompts
+                client_test_data[client_id] = client_prompts
                 helpful_shard_idx += 1
             
             # Log unseen experiment info

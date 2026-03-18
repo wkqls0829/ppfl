@@ -199,32 +199,15 @@ def load_ultrafeedback_data(config, client_cfgs=None):
     client_num = config.federate.client_num
     annotation_dims = ['helpfulness', 'honesty', 'instruction_following', 'truthfulness']
     
-    # Determine client distribution based on client_num
-    if client_num == 10:
-        dim_client_counts = {
-            'helpfulness': 3,
-            'honesty': 3,
-            'instruction_following': 2,
-            'truthfulness': 2
-        }
-    elif client_num == 20:
-        dim_client_counts = {
-            'helpfulness': 5,
-            'honesty': 5,
-            'instruction_following': 5,
-            'truthfulness': 5
-        }
-    else:
-        # For other client counts, distribute equally (client_num // 4 per dimension)
-        clients_per_dim = client_num // 4
-        remainder = client_num % 4
-        dim_client_counts = {
-            'helpfulness': clients_per_dim + (1 if remainder > 0 else 0),
-            'honesty': clients_per_dim + (1 if remainder > 1 else 0),
-            'instruction_following': clients_per_dim + (1 if remainder > 2 else 0),
-            'truthfulness': clients_per_dim
-        }
-        logger.info(f"UltraFeedback: Distributing {client_num} clients equally: {dim_client_counts}")
+    # Distribute clients across dimensions (matches MetaSplitter formula)
+    num_dims = len(annotation_dims)
+    clients_per_dim = client_num // num_dims
+    remainder = client_num % num_dims
+    dim_client_counts = {}
+    for i, dim in enumerate(annotation_dims):
+        dim_client_counts[dim] = clients_per_dim + (
+            1 if i < remainder else 0)
+    logger.info(f"UltraFeedback: {client_num} clients -> {dim_client_counts}")
     
     # Verify total matches
     total_assigned = sum(dim_client_counts.values())
@@ -298,7 +281,7 @@ def load_ultrafeedback_data(config, client_cfgs=None):
                     )
                     client_id += 1
     else:
-        # Normal experiment: equal distribution (3, 3, 2, 2)
+        # Normal experiment: distribute dimensions across clients
         client_id = 1
         
         for dim in annotation_dims:
@@ -325,7 +308,7 @@ def load_ultrafeedback_data(config, client_cfgs=None):
             
             client_id += num_clients
     
-    logger.info("Finished creating UltraFeedback data distribution with equal split (3, 3, 2, 2).")
+    logger.info(f"Finished creating UltraFeedback data distribution: {dim_client_counts}")
     return StandaloneDataDict(data_dict, config), config
 
 

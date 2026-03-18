@@ -29,16 +29,18 @@ class MetaSplitter(BaseSplitter):
         elif isinstance(tmp_dataset[0], dict):
             label = np.array([x['categories'] for x in tmp_dataset])
         else:
-            raise TypeError(f'Unsupported data formats {type(tmp_dataset[0])}')
+            raise TypeError(
+                f'Unsupported data formats {type(tmp_dataset[0])}')
 
-        # Split by categories
-        categories = set(label)
+        # Split by categories in SORTED order for deterministic assignment
+        categories = sorted(set(label))
         idx_slice = []
         for cat in categories:
-            idx_slice.append(np.where(np.array(label) == cat)[0].tolist())
-        random.shuffle(idx_slice)
+            idxs = np.where(np.array(label) == cat)[0].tolist()
+            random.shuffle(idxs)  # shuffle within category only
+            idx_slice.append(idxs)
 
-        # print the size of each categories
+        # Log category sizes
         tot_size = 0
         for i, cat in enumerate(categories):
             logger.info(f'Index: {i}\t'
@@ -47,23 +49,56 @@ class MetaSplitter(BaseSplitter):
             tot_size += len(idx_slice[i])
         logger.info(f'Total size: {tot_size}')
 
-        if len(categories) < self.client_num:
-            logger.warning(
-                f'The number of clients is {self.client_num}, which is '
-                f'smaller than a total of {len(categories)} catagories, '
-                'use iid splitter instead.')
+        num_cats = len(categories)
+
+        if num_cats < self.client_num:
+            # Fewer categories than clients: distribute each category's
+            # data across multiple clients (Non-IID split).
+            # E.g. 2 categories, 10 clients -> 5 clients per category.
+            clients_per_cat = self.client_num // num_cats
+            remainder = self.client_num % num_cats
+
+            new_idx_slice = []
+            for i in range(num_cats):
+                idxs = idx_slice[i]
+                n_clients = clients_per_cat + (
+                    1 if i < remainder else 0)
+                chunk_size = (len(idxs) // n_clients
+                              if n_clients > 0 else len(idxs))
+                for c in range(n_clients):
+                    start = c * chunk_size
+                    if c == n_clients - 1:
+                        new_idx_slice.append(idxs[start:])
+                    else:
+                        new_idx_slice.append(
+                            idxs[start:start + chunk_size])
+
+            assigned = 0
+            for i, cat in enumerate(categories):
+                n_clients = clients_per_cat + (
+                    1 if i < remainder else 0)
+                client_ids = list(
+                    range(assigned + 1, assigned + n_clients + 1))
+                logger.info(
+                    f'Category "{cat}": {len(idx_slice[i])} samples '
+                    f'-> {n_clients} clients {client_ids}')
+                assigned += n_clients
+
+        elif num_cats >= self.client_num:
+            # More categories than clients: merge categories
+            new_idx_slice = []
+            for i in range(num_cats):
+                if i < self.client_num:
+                    new_idx_slice.append(idx_slice[i])
+                else:
+                    new_idx_slice[i % self.client_num] += idx_slice[i]
+        else:
             return self.iid_spliter(dataset)
 
-        # Merge to client_num pieces
-        new_idx_slice = []
-        for i in range(len(categories)):
-            if i < self.client_num:
-                new_idx_slice.append(idx_slice[i])
-            else:
-                new_idx_slice[i % self.client_num] += idx_slice[i]
-
         if isinstance(dataset, Dataset):
-            data_list = [Subset(dataset, idxs) for idxs in idx_slice]
+            data_list = [Subset(dataset, idxs)
+                         for idxs in new_idx_slice]
         else:
-            data_list = [[dataset[idx] for idx in idxs] for idxs in idx_slice]
+            data_list = [[dataset[idx] for idx in idxs]
+                         for idxs in new_idx_slice]
         return data_list

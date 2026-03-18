@@ -399,13 +399,27 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
         logger.error("OpenAI library not available. Install with: pip install openai")
         return {}
     
-    # Get API key from config or environment variable
+    # Get API key from config or environment variable or .env file
     api_key = getattr(ctx.cfg.eval, 'openai_api_key', None)
     if api_key is None:
         api_key = os.getenv('OPENAI_API_KEY')
-    
     if api_key is None:
-        logger.error("OpenAI API key not found. Set it in config (eval.openai_api_key) or environment variable (OPENAI_API_KEY)")
+        # Try loading from .env file in project root
+        env_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            '..', '..', '..', '.env')
+        if os.path.exists(env_path):
+            with open(env_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') \
+                            and '=' in line:
+                        k, v = line.split('=', 1)
+                        os.environ[k.strip()] = v.strip()
+            api_key = os.getenv('OPENAI_API_KEY')
+
+    if api_key is None:
+        logger.error("OpenAI API key not found. Set it in config (eval.openai_api_key) or environment variable (OPENAI_API_KEY) or .env file")
         return {}
     
     # Get model name from config (default: gpt-4o-mini for cost efficiency)
@@ -572,34 +586,57 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
             except:
                 pass
         
-        # Determine client type for filtering (harmlessness: 1 to client_num//2, helpfulness: client_num//2+1 to client_num)
+        # Build client -> category mapping dynamically
         client_num = getattr(ctx.cfg.federate, 'client_num', 10)
-        harmless_clients_num = client_num // 2
         dataset_type_for_filter = getattr(ctx.cfg.data, 'type', '').lower()
-        # Standalone RL (client_num==1): all test samples have client_id=1; do not filter so we evaluate all samples (HH-RLHF uses client_num>=2)
-        is_standalone_ultrafeedback = ('ultrafeedback' in dataset_type_for_filter and client_num == 1)
-        
-        # Filter samples based on metric type and client type
+        is_standalone = (client_num == 1)
+
+        # Map metric name to category index
+        # HH-RLHF: 2 categories [harmless(0), helpful(1)]
+        # UltraFeedback: 4 categories [helpfulness(0), honesty(1),
+        #   instruction_following(2), truthfulness(3)]
+        if 'ultrafeedback' in dataset_type_for_filter:
+            num_cats = 4
+            _metric_to_cat = {
+                'helpfulness': 0,
+                'honesty': 1,
+                'instruction_following': 2,
+                'truthfulness': 3,
+            }
+        else:
+            num_cats = 2
+            _metric_to_cat = {
+                'harmlessness': 0,
+                'helpfulness': 1,
+            }
+
+        # Build client_id -> category label (same logic as MetaSplitter)
+        clients_per_cat = client_num // num_cats
+        cat_remainder = client_num % num_cats
+        _client_to_cat = {}
+        _cid = 1
+        for cat_idx in range(num_cats):
+            n = clients_per_cat + (1 if cat_idx < cat_remainder else 0)
+            for _ in range(n):
+                _client_to_cat[_cid] = cat_idx
+                _cid += 1
+
+        # Determine which category this metric corresponds to
+        target_cat = None
+        for key, cat_idx in _metric_to_cat.items():
+            if key in metric_name.lower():
+                target_cat = cat_idx
+                break
+
+        # Filter samples based on metric type and client category
         if batch_client_ids is not None:
-            if is_standalone_ultrafeedback and ('instruction_following' in metric_name.lower() or 'truthfulness' in metric_name.lower()):
-                valid_indices = list(range(len(input_ids)))  # Use all samples; no client filter
-            elif 'helpfulness' in metric_name.lower():
-                # Only evaluate helpfulness clients (HH-RLHF: client_num//2+1 to client_num)
-                # UltraFeedback: clients 1-3
-                valid_indices = [i for i, cid in enumerate(batch_client_ids) 
-                                if cid is not None and cid > harmless_clients_num]
-            elif 'harmlessness' in metric_name.lower():
-                # Only evaluate harmlessness clients (HH-RLHF: 1 to client_num//2)
-                valid_indices = [i for i, cid in enumerate(batch_client_ids) 
-                                if cid is not None and cid <= harmless_clients_num]
-            elif 'instruction_following' in metric_name.lower():
-                # Only evaluate instruction_following clients (UltraFeedback: 7-8)
-                valid_indices = [i for i, cid in enumerate(batch_client_ids) 
-                                if cid is not None and cid in [7, 8]]
-            elif 'truthfulness' in metric_name.lower():
-                # Only evaluate truthfulness clients (UltraFeedback: 9-10)
-                valid_indices = [i for i, cid in enumerate(batch_client_ids) 
-                                if cid is not None and cid in [9, 10]]
+            if is_standalone:
+                valid_indices = list(range(len(input_ids)))
+            elif target_cat is not None:
+                valid_indices = [
+                    i for i, cid in enumerate(batch_client_ids)
+                    if cid is not None
+                    and _client_to_cat.get(cid) == target_cat]
             else:
                 # For general winrate, evaluate all
                 valid_indices = list(range(len(input_ids)))
@@ -1247,27 +1284,42 @@ def _get_truthfulness_winrate_scores(ctx):
 
 
 # --- Metric 1: Helpfulness Winrate ---
+def _get_client_category(ctx, num_cats):
+    """Return category index for the current client, or None."""
+    client_id = getattr(ctx, 'client_id', None)
+    if client_id is None:
+        return None
+    client_num = getattr(ctx.cfg.federate, 'client_num', 10)
+    clients_per_cat = client_num // num_cats
+    remainder = client_num % num_cats
+    cid = 1
+    for cat in range(num_cats):
+        n = clients_per_cat + (1 if cat < remainder else 0)
+        if cid <= client_id < cid + n:
+            return cat
+        cid += n
+    return None
+
+
 def eval_helpfulness_winrate(ctx, **kwargs):
     """Evaluate helpfulness winrate using win-lose comparison."""
-    # Only compute winrate for test/val splits, not for train split
     cur_split = getattr(ctx, 'cur_split', 'train')
     if cur_split == 'train':
         return 0.0
-    
-    # Check dataset type - only for HRL
+
     dataset_type = getattr(ctx.cfg.data, 'type', '').lower()
-    if 'hh-rlhf' not in dataset_type and 'hrl' not in dataset_type:
-        return 0.0
-    
-    # Only evaluate helpfulness for helpfulness clients (client_id > client_num // 2)
-    client_id = getattr(ctx, 'client_id', None)
-    if client_id is not None:
-        client_num = getattr(ctx.cfg.federate, 'client_num', 10)
-        harmless_clients_num = client_num // 2
-        # Only evaluate if this is a helpfulness client
-        if client_id <= harmless_clients_num:
-            # This is a harmlessness client, skip helpfulness evaluation
+    if 'ultrafeedback' in dataset_type:
+        # UltraFeedback: helpfulness = category 0 (4 categories)
+        cat = _get_client_category(ctx, 4)
+        if cat is not None and cat != 0:
             return 0.0
+    elif 'hh-rlhf' in dataset_type or 'hrl' in dataset_type:
+        # HH-RLHF: helpfulness = category 1 (2 categories)
+        cat = _get_client_category(ctx, 2)
+        if cat is not None and cat != 1:
+            return 0.0
+    else:
+        return 0.0
     
     scores = _get_helpfulness_winrate_scores(ctx)
     return scores.get('helpfulness_winrate', 0.0)
@@ -1282,25 +1334,18 @@ def register_helpfulness_winrate_metric(types):
 # --- Metric 2: Harmlessness Winrate ---
 def eval_harmlessness_winrate(ctx, **kwargs):
     """Evaluate harmlessness winrate using win-lose comparison."""
-    # Only compute winrate for test/val splits, not for train split
     cur_split = getattr(ctx, 'cur_split', 'train')
     if cur_split == 'train':
         return 0.0
-    
-    # Check dataset type - only for HRL
+
     dataset_type = getattr(ctx.cfg.data, 'type', '').lower()
     if 'hh-rlhf' not in dataset_type and 'hrl' not in dataset_type:
         return 0.0
-    
-    # Only evaluate harmlessness for harmlessness clients (client_id 1 to client_num // 2)
-    client_id = getattr(ctx, 'client_id', None)
-    if client_id is not None:
-        client_num = getattr(ctx.cfg.federate, 'client_num', 10)
-        harmless_clients_num = client_num // 2
-        # Only evaluate if this is a harmlessness client
-        if client_id > harmless_clients_num:
-            # This is a helpfulness client, skip harmlessness evaluation
-            return 0.0
+
+    # HH-RLHF: harmlessness = category 0 (2 categories)
+    cat = _get_client_category(ctx, 2)
+    if cat is not None and cat != 0:
+        return 0.0
     
     scores = _get_harmlessness_winrate_scores(ctx)
     return scores.get('harmlessness_winrate', 0.0)
@@ -1315,25 +1360,18 @@ def register_harmlessness_winrate_metric(types):
 # --- Metric 3: Instruction Following Winrate ---
 def eval_instruction_following_winrate(ctx, **kwargs):
     """Evaluate instruction following winrate using win-lose comparison."""
-    # Only compute winrate for test/val splits, not for train split
     cur_split = getattr(ctx, 'cur_split', 'train')
     if cur_split == 'train':
         return 0.0
-    
-    # Check dataset type - only for UltraFeedback
+
     dataset_type = getattr(ctx.cfg.data, 'type', '').lower()
     if 'ultrafeedback' not in dataset_type:
         return 0.0
-    
-    # For UltraFeedback, evaluate instruction_following for instruction_following clients
-    # Equal distribution: helpfulness (3), honesty (3), instruction_following (2), truthfulness (2)
-    # instruction_following clients: 7-8 (out of 10)
-    # Note: This filtering is also done in _get_winrate_scores_with_gpt_api for batch-level filtering
-    client_id = getattr(ctx, 'client_id', None)
-    if client_id is not None:
-        # instruction_following clients are 7-8
-        if client_id not in [7, 8]:
-            return 0.0
+
+    # UltraFeedback: instruction_following = category 2 (4 categories)
+    cat = _get_client_category(ctx, 4)
+    if cat is not None and cat != 2:
+        return 0.0
     
     scores = _get_instruction_following_winrate_scores(ctx)
     return scores.get('instruction_following_winrate', 0.0)
@@ -1348,25 +1386,18 @@ def register_instruction_following_winrate_metric(types):
 # --- Metric 4: Truthfulness Winrate ---
 def eval_truthfulness_winrate(ctx, **kwargs):
     """Evaluate truthfulness winrate using win-lose comparison."""
-    # Only compute winrate for test/val splits, not for train split
     cur_split = getattr(ctx, 'cur_split', 'train')
     if cur_split == 'train':
         return 0.0
-    
-    # Check dataset type - only for UltraFeedback
+
     dataset_type = getattr(ctx.cfg.data, 'type', '').lower()
     if 'ultrafeedback' not in dataset_type:
         return 0.0
-    
-    # For UltraFeedback, evaluate truthfulness for truthfulness clients
-    # Equal distribution: helpfulness (3), honesty (3), instruction_following (2), truthfulness (2)
-    # truthfulness clients: 9-10 (out of 10)
-    # Note: This filtering is also done in _get_winrate_scores_with_gpt_api for batch-level filtering
-    client_id = getattr(ctx, 'client_id', None)
-    if client_id is not None:
-        # truthfulness clients are 9-10
-        if client_id not in [9, 10]:
-            return 0.0
+
+    # UltraFeedback: truthfulness = category 3 (4 categories)
+    cat = _get_client_category(ctx, 4)
+    if cat is not None and cat != 3:
+        return 0.0
     
     scores = _get_truthfulness_winrate_scores(ctx)
     return scores.get('truthfulness_winrate', 0.0)

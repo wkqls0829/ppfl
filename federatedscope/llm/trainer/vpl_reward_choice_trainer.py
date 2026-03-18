@@ -48,12 +48,43 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         self.vpl_latent_dim = getattr(config.llm, 'vpl_latent_dim', 32)
         self.vpl_kl_weight = getattr(config.llm, 'vpl_kl_weight', 0.1)
         self.vpl_feature_method = getattr(config.llm, 'vpl_feature_method', 'choice_logits')
+
+        # Deep latent projection: use MLP instead of linear 32->2
+        self.vpl_deep_projection = getattr(
+            config.llm, 'vpl_deep_projection', False)
+        # Base logit dropout: randomly zero out base logits to force
+        # the model to rely on z for prediction
+        self.vpl_logit_dropout = getattr(
+            config.llm, 'vpl_logit_dropout', 0.0)
         
         # Check if using feature difference (embedding difference)
         self.vpl_use_feature_difference = getattr(config.llm, 'vpl_use_feature_difference', False)
         self.vpl_use_llm_feature_extractor = getattr(config.llm, 'vpl_use_llm_feature_extractor', True)
         self.vpl_use_difference_only = getattr(config.llm, 'vpl_use_difference_only', False)  # Use only difference embedding (no chosen/rejected)
-        
+
+        # Tokenize response region markers for embedding difference
+        # extraction.  These are used to locate Response A / Response B
+        # regions inside input_ids so we can extract the *actual*
+        # response hidden states rather than just the answer-token
+        # hidden state.
+        if self.vpl_use_feature_difference:
+            _resp_a_marker = self.tokenizer(
+                "### RESPONSE A:",
+                add_special_tokens=False)['input_ids']
+            _resp_b_marker = self.tokenizer(
+                "### RESPONSE B:",
+                add_special_tokens=False)['input_ids']
+            _choice_marker = self.tokenizer(
+                "### YOUR CHOICE:",
+                add_special_tokens=False)['input_ids']
+            self._resp_a_marker = _resp_a_marker
+            self._resp_b_marker = _resp_b_marker
+            self._choice_marker = _choice_marker
+            logger.info(
+                f"Response markers: A={_resp_a_marker}, "
+                f"B={_resp_b_marker}, "
+                f"CHOICE={_choice_marker}")
+
         # VPL-GP hyperparameters (integrated into main trainer)
         self.vpl_use_gp_prior = getattr(config.llm, 'vpl_use_gp_prior', False)
         self.vpl_gp_temperature = getattr(config.llm, 'vpl_gp_temperature', 1.0)
@@ -150,47 +181,39 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             logger.warning(f"Could not determine embedding_dim, using default: {embedding_dim}")
         
         # Initialize feature extractor
-        # Strategy: Reuse hidden_states from main forward pass, no additional forward passes
-        # According to original VPL paper: encoder takes [chosen_emb, rejected_emb] or similar
+        # Strategy: Siamese-style — apply MLP to each response separately,
+        # then take difference.  This lets the MLP learn non-linear
+        # transformations that amplify preference-relevant features
+        # *before* subtraction.
         if self.vpl_use_llm_feature_extractor and self.vpl_use_feature_difference:
-            if self.vpl_use_difference_only:
-                # Use only difference embedding (removes general information, keeps only preference)
-                # Input: embedding_dim (difference only)
-                self.feature_extractor = nn.Sequential(
-                    nn.Linear(embedding_dim, 512),  # difference only
-                    nn.ReLU(),
-                    nn.Dropout(0.1),
-                    nn.Linear(512, 256),
-                    nn.ReLU(),
-                    nn.Dropout(0.1),
-                    nn.Linear(256, 128)
-                ).to(device)
-                feature_extractor_output_dim = 128
-                logger.info("Using projection-based feature extractor with [difference only] (removes general information, keeps only preference)")
-            else:
-                # Original VPL uses: concat([chosen_emb, rejected_emb]) or [chosen_emb, rejected_emb, diff]
-                # We'll use: [chosen_emb, rejected_emb, chosen_emb - rejected_emb] for richer representation
-                # Input: 3 * embedding_dim (chosen + rejected + difference)
-                self.feature_extractor = nn.Sequential(
-                    nn.Linear(embedding_dim * 3, 512),  # chosen + rejected + difference
-                    nn.ReLU(),
-                    nn.Dropout(0.1),
-                    nn.Linear(512, 256),
-                    nn.ReLU(),
-                    nn.Dropout(0.1),
-                    nn.Linear(256, 128)
-                ).to(device)
-                feature_extractor_output_dim = 128
-                logger.info("Using projection-based feature extractor with [chosen, rejected, difference] (reuses hidden_states from main forward pass)")
+            # Siamese MLP: input is a single response embedding (896-dim)
+            # Applied independently to chosen & rejected, difference taken
+            # after.  Output dim is 128 (same as before).
+            self.feature_extractor = nn.Sequential(
+                nn.Linear(embedding_dim, 512),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(512, 256),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(256, 128)
+            ).to(device)
+            feature_extractor_output_dim = 128
+            self._siamese_feature_extractor = True
+            logger.info(
+                "Using Siamese feature extractor with last-token "
+                "pooling (MLP applied per-response, difference "
+                "taken after)")
         else:
-            # Use MLP feature extractor
+            self._siamese_feature_extractor = False
+            # Use MLP feature extractor (logits-based path)
             if self.vpl_use_feature_difference:
                 raw_feature_dim = embedding_dim
             elif self.vpl_feature_method == 'choice_logits':
                 raw_feature_dim = len(self.choices) * 2
             else:
                 raw_feature_dim = 2
-            
+
             # Deep feature extraction network
             self.feature_extractor = nn.Sequential(
                 nn.Linear(raw_feature_dim, 256),
@@ -235,14 +258,22 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                 max_logvar=vpl_max_logvar
             ).to(device)
         
-        # Latent conditioning: project latent z to modify model behavior
-        # Option 1: Add latent to embeddings
-        # Option 2: Use latent to scale/adjust logits
-        # We'll use Option 2: scale logits based on latent
-        self.latent_projection = nn.Linear(
-            self.vpl_latent_dim,
-            len(self.choices)
-        ).to(device)
+        # Latent conditioning: project latent z to logit adjustments
+        if self.vpl_deep_projection:
+            # Deep MLP: gives z more expressive power over predictions
+            self.latent_projection = nn.Sequential(
+                nn.Linear(self.vpl_latent_dim, 64),
+                nn.ReLU(),
+                nn.Linear(64, 32),
+                nn.ReLU(),
+                nn.Linear(32, len(self.choices))
+            ).to(device)
+            logger.info("Using deep latent projection (32->64->32->2)")
+        else:
+            self.latent_projection = nn.Linear(
+                self.vpl_latent_dim,
+                len(self.choices)
+            ).to(device)
 
         # Cached loss function (avoid re-instantiation per batch)
         self._ce_loss_fn = torch.nn.CrossEntropyLoss()
@@ -341,101 +372,161 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                 ctx.vpl_optimizer = None
                 logger.warning("No VPL components found for separate optimizer")
 
-    def _extract_preference_features(self, logits, labels, choices, hidden_states=None):
+    def _extract_preference_features(self, logits, labels, choices,
+                                      hidden_states=None, input_ids=None):
         """
         Extract features from preference data for variational encoder.
-        
-        If vpl_use_feature_difference is True, extracts embedding difference:
-        feature = positive_embedding - negative_embedding
-        This removes general information and captures only preference information.
-        
+
+        If vpl_use_feature_difference is True and Siamese mode is
+        active, applies the feature extractor MLP to each response
+        embedding independently (last-token pooling), then returns
+        the difference.  The caller should **skip** the separate
+        ``feature_extractor()`` call in this case (indicated by
+        ``self._siamese_feature_extractor``).
+
         Args:
             logits: Model logits (batch, seq_len, vocab_size)
             labels: Labels (batch, seq_len)
             choices: Choice token indices [A_token, B_token]
-            hidden_states: Model hidden states (batch, seq_len, hidden_dim) if available
-            
+            hidden_states: Model hidden states (batch, seq_len,
+                hidden_dim) if available
+            input_ids: Input token ids (batch, seq_len) — needed to
+                locate response A/B regions
+
         Returns:
             features: Extracted features (batch, feature_dim)
-            - If feature_difference: (batch, embedding_dim)
-            - If choice_logits: (batch, len(choices) * 2) = (batch, 4)
+            - Siamese path: (batch, 128) — already through MLP
+            - Logits path: (batch, len(choices) * 2) = (batch, 4)
         """
         if self.vpl_use_feature_difference and hidden_states is not None:
-            # Extract embedding difference: positive - negative
-            # This removes general information and keeps only preference information
-            return self._extract_embedding_difference(hidden_states, labels, choices)
+            return self._extract_embedding_difference(
+                hidden_states, labels, choices, input_ids=input_ids)
         else:
             # Fallback to original logits-based extraction
             return self._extract_logits_features(logits, labels, choices)
     
-    def _extract_embedding_difference(self, hidden_states, labels, choices):
+    @staticmethod
+    def _find_subsequence(seq, subseq):
+        """Return the start index of *subseq* in *seq*, or -1."""
+        slen = len(subseq)
+        for i in range(len(seq) - slen + 1):
+            if seq[i:i + slen] == subseq:
+                return i
+        return -1
+
+    def _extract_embedding_difference(self, hidden_states, labels,
+                                      choices, input_ids=None):
         """
-        Extract preference features: [chosen_emb, rejected_emb, chosen_emb - rejected_emb]
-        
-        According to original VPL paper, the encoder should receive both chosen and rejected
-        embeddings to capture preference information. We use:
-        - chosen_emb: embedding of the chosen response
-        - rejected_emb: embedding of the rejected response  
-        - difference: chosen_emb - rejected_emb (removes general info, keeps preference)
-        
+        Extract preference features using **last-token pooling** and
+        **Siamese feature extraction**.
+
+        Pipeline (per sample):
+          1. Locate Response A / B regions via marker tokens in
+             input_ids.
+          2. Pool each region using the **last token** of the region
+             (for causal LLMs, the last token has attended to the
+             full response and carries the richest representation).
+          3. Apply the shared feature_extractor MLP to each pooled
+             embedding independently (Siamese style).
+          4. Return  MLP(chosen) − MLP(rejected).
+
+        When ``_siamese_feature_extractor`` is True the returned
+        features have already been through the MLP (128-dim) so the
+        caller should feed them directly to the variational encoder
+        **without** a second ``feature_extractor()`` call.
+
         Args:
             hidden_states: (batch, seq_len, hidden_dim)
             labels: (batch, seq_len)
             choices: [A_token, B_token]
-            
+            input_ids: (batch, seq_len) — token ids of the full input
+
         Returns:
-            features: (batch, hidden_dim * 3) - [chosen, rejected, difference]
-            OR (batch, hidden_dim) if only difference is used
+            features: (batch, 128) if Siamese, else
+                (batch, hidden_dim)
         """
-        # Detach hidden_states to prevent LLM gradient flow
-        # Only feature_extractor and variational_encoder will be trained
-        hidden_states = hidden_states.detach()
-        
+        import torch
         batch_size, seq_len, hidden_dim = hidden_states.shape
-        shift_labels = labels[..., 1:].contiguous()  # (batch, seq_len-1)
-        shift_hidden = hidden_states[..., :-1, :].contiguous()  # (batch, seq_len-1, hidden_dim)
-        
-        # Find choice token positions
         A_token, B_token = choices[0], choices[1]
-        A_positions = (shift_labels == A_token)  # (batch, seq_len-1)
-        B_positions = (shift_labels == B_token)  # (batch, seq_len-1)
-        
-        # Vectorized extraction: compute masked means without Python loop
-        # This avoids per-sample GPU syncs from .any() calls
-        # Compute masked mean for A and B positions (batch, hidden_dim)
-        A_mask = A_positions.unsqueeze(-1).float()  # (B, seq, 1)
-        B_mask = B_positions.unsqueeze(-1).float()
-        A_count = A_mask.sum(dim=1).clamp(min=1)  # (B, 1)
-        B_count = B_mask.sum(dim=1).clamp(min=1)
-        A_emb = (shift_hidden * A_mask).sum(dim=1) / A_count  # (B, H)
-        B_emb = (shift_hidden * B_mask).sum(dim=1) / B_count  # (B, H)
 
-        # For samples where A or B is missing, fall back to sequence mean
-        seq_mean = shift_hidden.mean(dim=1)  # (B, H)
-        A_found = A_positions.any(dim=1, keepdim=True)  # (B, 1)
-        B_found = B_positions.any(dim=1, keepdim=True)  # (B, 1)
+        # --- Locate response regions via input_ids markers ----------
+        has_markers = (input_ids is not None
+                       and hasattr(self, '_resp_a_marker'))
 
-        # chosen = A where A found, else B where B found, else seq_mean
-        # rejected = B where B found, else seq_mean
-        chosen_emb = torch.where(A_found, A_emb, torch.where(B_found, B_emb, seq_mean))
-        rejected_emb = torch.where(A_found & B_found, B_emb, seq_mean)
+        chosen_embs = []
+        rejected_embs = []
 
-        feature_diff = chosen_emb - rejected_emb
+        for b in range(batch_size):
+            resp_a_start = resp_a_end = -1
+            resp_b_start = resp_b_end = -1
 
-        if self.vpl_use_llm_feature_extractor:
-            if self.vpl_use_difference_only:
-                features = feature_diff  # (B, H)
+            if has_markers:
+                ids = input_ids[b].tolist()
+                pa = self._find_subsequence(
+                    ids, self._resp_a_marker)
+                pb = self._find_subsequence(
+                    ids, self._resp_b_marker)
+                pc = self._find_subsequence(
+                    ids, self._choice_marker)
+
+                if pa >= 0 and pb >= 0:
+                    resp_a_start = pa + len(self._resp_a_marker)
+                    resp_a_end = pb
+                if pb >= 0:
+                    resp_b_start = pb + len(self._resp_b_marker)
+                    resp_b_end = pc if pc >= 0 else seq_len
+
+            # --- Last-token pooling --------------------------------
+            # For causal LLMs the last token of a region has attended
+            # to every preceding token, giving the richest per-
+            # response representation.
+            if resp_a_start >= 0 and resp_a_end > resp_a_start:
+                a_emb = hidden_states[b, resp_a_end - 1, :]
             else:
-                features = torch.cat(
-                    [chosen_emb, rejected_emb, feature_diff],
-                    dim=-1)  # (B, H*3)
+                a_emb = hidden_states[b, -1, :]
+
+            if resp_b_start >= 0 and resp_b_end > resp_b_start:
+                b_emb = hidden_states[b, resp_b_end - 1, :]
+            else:
+                b_emb = hidden_states[b, -1, :]
+
+            # Determine chosen/rejected from the answer label
+            label_tokens = labels[b]
+            a_is_answer = (label_tokens == A_token).any()
+
+            if a_is_answer:
+                chosen_embs.append(a_emb)
+                rejected_embs.append(b_emb)
+            else:
+                chosen_embs.append(b_emb)
+                rejected_embs.append(a_emb)
+
+        chosen_emb = torch.stack(chosen_embs)      # (B, H)
+        rejected_emb = torch.stack(rejected_embs)   # (B, H)
+
+        if chosen_emb.dtype != torch.float32:
+            chosen_emb = chosen_emb.float()
+        if rejected_emb.dtype != torch.float32:
+            rejected_emb = rejected_emb.float()
+
+        # --- Siamese feature extraction ----------------------------
+        if getattr(self, '_siamese_feature_extractor', False):
+            chosen_feat = self.feature_extractor(chosen_emb)
+            rejected_feat = self.feature_extractor(rejected_emb)
+            features = chosen_feat - rejected_feat     # (B, 128)
         else:
-            features = feature_diff  # (B, H)
-        
-        # Ensure features are float32
-        if features.dtype != torch.float32:
-            features = features.float()
-        
+            # Legacy path: raw difference
+            feature_diff = chosen_emb - rejected_emb
+            if self.vpl_use_llm_feature_extractor:
+                if self.vpl_use_difference_only:
+                    features = feature_diff
+                else:
+                    features = torch.cat(
+                        [chosen_emb, rejected_emb, feature_diff],
+                        dim=-1)
+            else:
+                features = feature_diff
+
         return features
     
     def _extract_logits_features(self, logits, labels, choices):
@@ -552,19 +643,26 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                     hidden_states = None
         
         # Extract preference features for variational encoder
-        # If feature_difference=True: uses embedding difference (positive - negative)
+        # If feature_difference=True: uses response-region embedding
+        # difference (chosen - rejected) located via input_ids markers
         # Otherwise: uses logits-based features
         preference_features = self._extract_preference_features(
-            logits, labels, self.choices, hidden_states=hidden_states
+            logits, labels, self.choices,
+            hidden_states=hidden_states, input_ids=input_ids
         )
         
         # preference_features are already on ctx.device from model output
-        
-        # Deep feature extraction: raw features -> richer representation
-        # Note: We reuse hidden_states from the main forward pass (no additional forward pass)
-        # The embedding difference already contains information processed by the main model
-        extracted_features = self.feature_extractor(preference_features)
-        
+
+        # Feature extraction:
+        # - Siamese path: MLP already applied inside
+        #   _extract_embedding_difference (per-response, then diff)
+        # - Other paths: apply MLP here on raw features
+        if getattr(self, '_siamese_feature_extractor', False):
+            extracted_features = preference_features  # already 128-dim
+        else:
+            extracted_features = self.feature_extractor(
+                preference_features)
+
         # Variational inference: encode to latent z
         z, mu, logvar = self.variational_encoder(extracted_features)
         
@@ -598,14 +696,27 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         for idx, choice in enumerate(self.choices):
             new_labels[shift_labels == choice] = idx
         new_logits = shift_logits[..., self.choices]
-        
+
+        # Base logit dropout: during training, randomly zero out base
+        # logits so the model must rely on z for prediction
+        is_training = ctx.cur_mode in (MODE.TRAIN, MODE.FINETUNE)
+        if is_training and self.vpl_logit_dropout > 0.0:
+            dropout_mask = torch.bernoulli(
+                torch.full(
+                    (new_logits.size(0), 1, 1),
+                    1.0 - self.vpl_logit_dropout,
+                    device=new_logits.device
+                )
+            )  # (batch, 1, 1) — same mask for all positions
+            new_logits = new_logits * dropout_mask
+
         # Adjust logits with latent
         # latent_adjustment is (batch, num_choices), need to expand to match new_logits
         batch_size, seq_len, num_choices = new_logits.shape
         latent_adjustment_expanded = latent_adjustment.unsqueeze(1).expand(
             -1, seq_len, -1
         )  # (batch, seq_len, num_choices)
-        
+
         # Add latent adjustment to logits
         conditioned_logits = new_logits + latent_adjustment_expanded
         

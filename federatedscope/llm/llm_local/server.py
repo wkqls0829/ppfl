@@ -58,6 +58,27 @@ class LLMMultiLoRAServer(Server):
         self.client_orthogonal_prototypes_dict = {}  # {client_id: prototypes}
         self.client_average_z_dict = {}  # {client_id: average_z_tensor} - computed from z_values_dict for checkpoint saving
 
+        # Initialize canonical prototypes on server (shared across all
+        # clients).  Using a fixed seed ensures every client receives
+        # identical prototypes, preventing FedAvg from corrupting them.
+        self._canonical_prototypes = None
+        if (hasattr(self._cfg.llm, 'vpl_orthogonal_weight')
+                and self._cfg.llm.vpl_orthogonal_weight > 0):
+            num_proto = getattr(self._cfg.llm, 'vpl_num_prototypes', 2)
+            latent_dim = getattr(self._cfg.llm, 'vpl_latent_dim', 32)
+            proto_scale = getattr(
+                self._cfg.llm, 'vpl_prototype_scale', 5.0)
+            gen = torch.Generator().manual_seed(42)
+            rand_mat = torch.randn(
+                num_proto, latent_dim, generator=gen)
+            q, _ = torch.linalg.qr(rand_mat.T)
+            self._canonical_prototypes = (
+                q.T[:num_proto] * proto_scale)
+            logger.info(
+                f"Server initialized canonical prototypes: "
+                f"shape={self._canonical_prototypes.shape}, "
+                f"scale={proto_scale}")
+
     def _register_default_handlers(self):
         super()._register_default_handlers()
         self.register_handlers('grouping', self.callback_funcs_for_grouping,
@@ -127,7 +148,10 @@ class LLMMultiLoRAServer(Server):
             for client_id in train_msg_buffer.keys():
                 if self.model_num == 1:
                     sample_size, model_para = train_msg_buffer[client_id]
-                    # Extract VPL components (variational_encoder, feature_extractor, latent_projection, z_to_embedding, orthogonal_prototypes)
+                    # Extract VPL components (variational_encoder,
+                    # feature_extractor, latent_projection,
+                    # z_to_embedding, orthogonal_prototypes)
+                    # for FedAvg aggregation.
                     vpl_comp_prefixes = [
                         'variational_encoder.',
                         'feature_extractor.',
@@ -499,6 +523,29 @@ class LLMMultiLoRAServer(Server):
         # start feature engineering (This part is for hard code)
         if self.check_client_join_in():
             logger.info('Waited all clients join, start now...')
+
+            # Broadcast canonical prototypes to ALL clients so they
+            # start with identical orthogonal prototypes.
+            if self._canonical_prototypes is not None:
+                all_clients = list(
+                    self.comm_manager.neighbors.keys())
+                for receiver in all_clients:
+                    self.comm_manager.send(
+                        Message(
+                            msg_type='vpl_orthogonal_labels',
+                            sender=self.ID,
+                            receiver=[receiver],
+                            state=self.state,
+                            timestamp=self.cur_timestamp,
+                            content={
+                                'labels': None,
+                                'prototypes':
+                                    self._canonical_prototypes.cpu(),
+                            }))
+                logger.info(
+                    f"Broadcast canonical prototypes to "
+                    f"{len(all_clients)} clients")
+
             # Only send adapter_eval message if grouping is enabled
             if self._cfg.llm.adapter.grouping.use:
                 self.trigger_for_feat_engr(self.broadcast_model_para, {
@@ -607,44 +654,53 @@ class LLMMultiLoRAServer(Server):
 
         return True  # move_on_flag
     
+    @staticmethod
+    def _get_dataset_num_categories(cfg):
+        """Return the number of natural categories for a dataset."""
+        dataset_type = getattr(cfg.data, 'type', '').lower()
+        if 'ultrafeedback' in dataset_type:
+            return 4  # helpfulness, honesty, instruction_following, truthfulness
+        # hh-rlhf or default
+        return 2  # harmless, helpful
+
+    @staticmethod
+    def _build_client_category_map(client_num, num_categories):
+        """Build client_id -> category_label map matching MetaSplitter.
+
+        MetaSplitter distributes categories across clients:
+        clients_per_cat = client_num // num_categories
+        first (client_num % num_categories) categories get 1 extra client.
+        """
+        clients_per_cat = client_num // num_categories
+        remainder = client_num % num_categories
+        labels = {}
+        cid = 1
+        for cat in range(num_categories):
+            n = clients_per_cat + (1 if cat < remainder else 0)
+            for _ in range(n):
+                labels[cid] = cat
+                cid += 1
+        return labels
+
     def _compute_manual_orthogonal_labels(self, train_msg_buffer):
         """
-        Assign manual orthogonal labels based on client data type.
-        For hh-rlhf dataset:
-        - Harmlessness train data clients (first half) get label 0
-        - Helpfulness train data clients (second half) get label 1
-        
-        This matches the data distribution in load_hh_rlhf_data:
-        - Clients 1 to (client_num // 2) receive harmlessness data (label 0)
-        - Clients (client_num // 2 + 1) to client_num receive helpfulness data (label 1)
-        
-        IMPORTANT: This function assigns labels to ALL clients (1 to client_num),
-        not just participating clients, so that non-participating clients also
-        have labels stored for visualization.
-        
-        NOTE: This function is now called regardless of vpl_use_manual_orthogonal_labels
-        setting, as it's needed for visualization even when orthogonal loss is disabled.
+        Assign manual orthogonal labels based on dataset category
+        structure.  Works for any dataset by matching the MetaSplitter
+        client-to-category assignment.
         """
-        # For hh-rlhf dataset, determine split point based on total client number
-        # This matches the data distribution logic in load_hh_rlhf_data
         total_client_num = self._cfg.federate.client_num
-        harmless_clients_num = total_client_num // 2
-        
-        # Assign labels to ALL clients (1 to client_num), not just participating ones
-        # This ensures non-participating clients also have labels for visualization
-        labels = {}
-        for client_id in range(1, total_client_num + 1):
-            if client_id <= harmless_clients_num:
-                labels[client_id] = 0  # Harmlessness train data
-            else:
-                labels[client_id] = 1  # Helpfulness train data
-        
+        num_cats = self._get_dataset_num_categories(self._cfg)
+        labels = self._build_client_category_map(total_client_num, num_cats)
+
         # Log label distribution
-        harmless_count = sum(1 for v in labels.values() if v == 0)
-        helpful_count = sum(1 for v in labels.values() if v == 1)
-        logger.info(f"Assigned manual orthogonal labels for ALL {total_client_num} clients based on train data type:")
-        logger.info(f"  Harmlessness (label 0): {harmless_count} clients - {[k for k, v in labels.items() if v == 0]}")
-        logger.info(f"  Helpfulness (label 1): {helpful_count} clients - {[k for k, v in labels.items() if v == 1]}")
+        from collections import Counter
+        dist = Counter(labels.values())
+        logger.info(
+            f"Manual orthogonal labels ({num_cats} categories, "
+            f"{total_client_num} clients):")
+        for cat in sorted(dist):
+            cids = [k for k, v in labels.items() if v == cat]
+            logger.info(f"  Label {cat}: {len(cids)} clients {cids}")
         return labels
     
     def _collect_vpl_gp_prior_distributions(self):
@@ -824,16 +880,14 @@ class LLMMultiLoRAServer(Server):
             
             z_means = np.array(z_means)
             
-            # Determine number of clusters (k)
-            # For hh-rlhf dataset, k is fixed to 2
-            dataset_type = getattr(self._cfg.data, 'type', '').lower()
-            if 'hh-rlhf' in dataset_type or 'hrl' in dataset_type:
-                n_clusters = 2
-                logger.info(f"Using k=2 for hh-rlhf dataset")
-            else:
-                # Use config value, default to number of prototypes
-                n_clusters = getattr(self._cfg.llm, 'vpl_num_prototypes', 2)
-                logger.info(f"Using k={n_clusters} from config (vpl_num_prototypes)")
+            # Determine number of clusters from dataset categories
+            n_clusters = self._get_dataset_num_categories(self._cfg)
+            # Allow config override
+            cfg_prototypes = getattr(
+                self._cfg.llm, 'vpl_num_prototypes', None)
+            if cfg_prototypes is not None and cfg_prototypes > 0:
+                n_clusters = cfg_prototypes
+            logger.info(f"Using k={n_clusters} for k-means clustering")
             
             # Ensure n_clusters doesn't exceed number of clients
             n_clusters = min(n_clusters, len(z_means))

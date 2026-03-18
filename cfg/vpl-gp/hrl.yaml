@@ -31,8 +31,8 @@ llm:
   # VPL-GP specific parameters for conditional generation
   vpl_latent_dim: 32  # Should match selector's vpl_latent_dim
   vpl_feature_method: 'choice_logits'  # Should match selector's vpl_feature_method
-  vpl_gp_temperature: 5.0  # Gemma Phase 5 combined best (match selector)
-  vpl_kl_weight: 0.05  # From hyperparameter search (match selector)
+  vpl_gp_temperature: 1.0  # Paper Table 3 default (match selector)
+  vpl_kl_weight: 0.1  # Paper Table 3 default (match selector)
   vpl_use_gp_prior: True  # GP prior enabled
   vpl_use_feature_difference: True
   vpl_use_difference_only: True

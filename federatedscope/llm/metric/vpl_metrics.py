@@ -8,7 +8,11 @@ def _safe_div(numerator, denominator, default=0.0):
     try:
         if denominator is None or denominator == 0:
             return default
-        return numerator / denominator
+        result = numerator / denominator
+        # Convert tensor to float for JSON serialization
+        if hasattr(result, 'item'):
+            return result.item()
+        return float(result)
     except Exception:
         return default
 

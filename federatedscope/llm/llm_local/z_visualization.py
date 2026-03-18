@@ -2,6 +2,8 @@
 t-SNE visualization for cross-client z values in VPL-GP.
 """
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend (no X server needed)
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 import logging

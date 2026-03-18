@@ -228,9 +228,10 @@ class RLHF_finetuning:
         if self.num_clients is None:
             self.num_clients = getattr(config.federate, 'client_num', 10)
             if self.num_clients == 1:
-                # If standalone mode (client_num=1), default to 10 for hh-rlhf
-                self.num_clients = 10
-                logger.warning(f"RL config has client_num=1 (standalone mode), defaulting to {self.num_clients} for hh-rlhf")
+                # If standalone mode (client_num=1), use selector's
+                # client_num if available, otherwise keep 1
+                logger.warning(
+                    "RL config has client_num=1 (standalone mode)")
             else:
                 logger.info(f"Using RL config's client_num: {self.num_clients}")
 
@@ -311,46 +312,46 @@ class RLHF_finetuning:
         
         # Assign client_id to prompts only for VPL models
         if is_vpl_model:
-            # For each prompt, assign TWO client_ids: one for harmlessness and one for helpfulness
-            # This allows generating two sets of data per prompt for RL training
             num_clients = self.num_clients
-            
-            # For RL training (standalone mode with client_num=1), use virtual client IDs
-            # Use client_id 1 for harmlessness and client_id 2 for helpfulness
-            if num_clients == 1:
-                # RL training: use virtual client IDs (1 for harmlessness, 2 for helpfulness)
-                harmless_clients_num = 1
-                helpful_clients_num = 1
-                harmless_client_id_base = 1
-                helpful_client_id_base = 2
+
+            # Determine number of categories from dataset type
+            dataset_type = getattr(
+                self.config.data, 'type', '').lower()
+            if 'ultrafeedback' in dataset_type:
+                num_cats = 4
             else:
-                # Federated training: use actual client distribution
-                harmless_clients_num = num_clients // 2  # First half: harmlessness (1 to harmless_clients_num)
-                helpful_clients_num = num_clients - harmless_clients_num  # Second half: helpfulness (harmless_clients_num+1 to num_clients)
-                harmless_client_id_base = 1
-                helpful_client_id_base = harmless_clients_num + 1
-            
-            # For VPL: Generate responses once per prompt, then split into harmlessness/helpfulness sets
-            # and perform binary selection with client 1 (z_1) and client 2 (z_2) separately
-            # For VPL: Generate responses once per prompt (without z conditional generation)
-            # Then split into harmlessness/helpfulness sets and perform binary selection
-            # with client 1 (z_1) and client 2 (z_2) separately
+                num_cats = 2
+
+            # Build category -> [client_ids] mapping (MetaSplitter)
+            category_client_ids = {}
+            if num_clients == 1:
+                # Standalone RL: virtual client per category
+                for cat_idx in range(num_cats):
+                    category_client_ids[cat_idx] = [cat_idx + 1]
+            else:
+                clients_per_cat = num_clients // num_cats
+                cat_remainder = num_clients % num_cats
+                cid = 1
+                for cat_idx in range(num_cats):
+                    n = clients_per_cat + (
+                        1 if cat_idx < cat_remainder else 0)
+                    category_client_ids[cat_idx] = list(
+                        range(cid, cid + n))
+                    cid += n
+
+            logger.info(
+                f"VPL prompt assignment: {num_cats} categories, "
+                f"client distribution: {category_client_ids}")
+
             prompts_with_client_id = []
             for idx, prompt_data in enumerate(self.list_train_prompts):
-                # Keep original prompt without client_id for generation
-                # client_id and preference_type will be assigned during selection phase
                 prompt_data_copy = copy.deepcopy(prompt_data)
                 prompts_with_client_id.append(prompt_data_copy)
-            
-            if num_clients == 1:
-                logger.info(f"Assigned {len(self.list_train_prompts)} prompts for RL training "
-                           f"(will generate responses once per prompt, then split into harmlessness/helpfulness sets for binary selection with client 1 and 2)")
-            else:
-                logger.info(f"Assigned {len(self.list_train_prompts)} prompts for generation "
-                           f"(will generate responses once per prompt, then split into harmlessness/helpfulness sets for binary selection)")
-            logger.info(f"  Total prompts: {len(prompts_with_client_id)} (same as original, no duplication)")
-            logger.info(f"  Generation: Standard generation (no z conditional generation)")
-            logger.info(f"  Selection: Will use client 1 (z_1) for harmlessness and client 2 (z_2) for helpfulness")
+
+            logger.info(
+                f"  Total prompts: {len(prompts_with_client_id)}"
+                f" (standard generation, selection with "
+                f"per-category client z)")
         else:
             # For non-VPL models, use prompts as-is (no client_id)
             prompts_with_client_id = self.list_train_prompts
@@ -402,21 +403,32 @@ class RLHF_finetuning:
                     client_labels_list = []
                     orthogonal_labels_list = []
                     
-                    for client_id, z_mu in self.client_average_z_dict.items():
+                    # Build dynamic category map
+                    _ds_type = getattr(
+                        self.config.data, 'type', '').lower()
+                    _num_cats = 4 if 'ultrafeedback' in _ds_type \
+                        else 2
+                    _num_cl = self.num_clients
+                    _cpc = _num_cl // _num_cats
+                    _rem = _num_cl % _num_cats
+                    _cat_map = {}
+                    _c = 1
+                    for _ci in range(_num_cats):
+                        _n = _cpc + (1 if _ci < _rem else 0)
+                        for _ in range(_n):
+                            _cat_map[_c] = _ci
+                            _c += 1
+
+                    for client_id, z_mu in \
+                            self.client_average_z_dict.items():
                         if isinstance(z_mu, torch.Tensor):
                             z_np = z_mu.cpu().numpy()
                         else:
                             z_np = np.array(z_mu)
                         z_values_list.append(z_np)
                         client_labels_list.append(client_id)
-                        
-                        # Assign orthogonal label based on client_id (first half = harmlessness, second half = helpfulness)
-                        num_clients = self.num_clients
-                        split_point = num_clients // 2
-                        if client_id <= split_point:
-                            orthogonal_labels_list.append(0)  # Harmlessness
-                        else:
-                            orthogonal_labels_list.append(1)  # Helpfulness
+                        orthogonal_labels_list.append(
+                            _cat_map.get(client_id, 0))
                     
                     if len(z_values_list) > 0:
                         z_array = np.array(z_values_list)
@@ -1382,7 +1394,7 @@ class RLHF_finetuning:
                 from federatedscope.llm.dataloader.ultrafeedback import load_ultrafeedback_for_rlhf
                 logger.info("Loading test prompts from UltraFeedback dataset for evaluation...")
                 use_split = (is_vpl_model and self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0) or is_unseen_experiment
-                use_split = use_split and num_clients == 10  # UltraFeedback equal distribution requires 10 clients
+                use_split = use_split and num_clients >= 4  # Need at least 4 clients for 4 UltraFeedback dims
                 if use_split:
                     client_test_data, _, _ = load_ultrafeedback_for_rlhf(
                         self.data_root,
@@ -1670,7 +1682,7 @@ class RLHF_finetuning:
                         list_test_dict = None
                         if 'ultrafeedback' in data_type_final:
                             from federatedscope.llm.dataloader.ultrafeedback import load_ultrafeedback_for_rlhf
-                            use_split_uf = (hasattr(self, 'client_test_data') and self.client_test_data is not None and len(self.client_test_data) > 0) and self.num_clients == 10
+                            use_split_uf = (hasattr(self, 'client_test_data') and self.client_test_data is not None and len(self.client_test_data) > 0) and self.num_clients >= 4
                             if use_split_uf:
                                 client_test_data_full, _, _ = load_ultrafeedback_for_rlhf(
                                     self.data_root, self.config, max_num_test=-1,
@@ -2160,18 +2172,30 @@ class RLHF_finetuning:
             except Exception as e:
                 logger.warning(f"Could not check selector checkpoint for VPL components: {e}")
         
-        # Determine harmless and helpful client IDs from num_clients (only for VPL)
+        # Determine client IDs per category from num_clients (only for VPL)
+        # Uses the same formula as MetaSplitter for consistency
         harmless_client_ids = []
         helpful_client_ids = []
+        category_client_ids = {}  # cat_idx -> [client_ids]
         if is_vpl_selector:
             num_clients = self.num_clients
-            harmless_clients_num = num_clients // 2
-            helpful_clients_num = num_clients - harmless_clients_num
-            harmless_client_ids = list(range(1, harmless_clients_num + 1))  # [1, 2, ..., harmless_clients_num]
-            helpful_client_ids = list(range(harmless_clients_num + 1, num_clients + 1))  # [harmless_clients_num+1, ..., num_clients]
-            
-            logger.info(f"VPL selector: Client distribution: {len(harmless_client_ids)} harmless clients {harmless_client_ids}, "
-                       f"{len(helpful_client_ids)} helpful clients {helpful_client_ids}")
+            dataset_type = getattr(self.config.data, 'type', '').lower()
+            if 'ultrafeedback' in dataset_type:
+                num_cats = 4
+            else:
+                num_cats = 2
+            clients_per_cat = num_clients // num_cats
+            cat_remainder = num_clients % num_cats
+            cid = 1
+            for cat_idx in range(num_cats):
+                n = clients_per_cat + (1 if cat_idx < cat_remainder else 0)
+                category_client_ids[cat_idx] = list(range(cid, cid + n))
+                cid += n
+            # For HH-RLHF backward compat: cat 0 = harmless, cat 1 = helpful
+            harmless_client_ids = category_client_ids.get(0, [])
+            helpful_client_ids = category_client_ids.get(1, [])
+            logger.info(f"VPL selector: {num_cats} categories, "
+                        f"client distribution: {category_client_ids}")
         else:
             logger.info("Non-VPL selector detected. Will use standard selection (no client assignment).")
         
@@ -2224,32 +2248,61 @@ class RLHF_finetuning:
         # Use stored client_average_z_dict
         client_average_z_dict = self.client_average_z_dict
 
-        # For VPL: Assign clients to each prompt before generation
-        # Each prompt gets one harmless client and one helpful client (randomly selected)
-        if is_vpl_selector and len(harmless_client_ids) > 0 and len(helpful_client_ids) > 0:
+        # For VPL: Assign one client per category to each prompt
+        category_gen_prompts = {}  # cat_idx -> generation prompt template
+        if is_vpl_selector and len(category_client_ids) > 0:
             prompts_with_client_assignment = []
             for prompt_data in list_data_dict:
                 prompt_data_copy = copy.deepcopy(prompt_data)
-                # Randomly assign one harmless client and one helpful client
-                prompt_data_copy['harmless_client_id'] = random.choice(harmless_client_ids)
-                prompt_data_copy['helpful_client_id'] = random.choice(helpful_client_ids)
+                # Assign one random client per category
+                for cat_idx, cids in category_client_ids.items():
+                    prompt_data_copy[f'cat_{cat_idx}_client_id'] = \
+                        random.choice(cids)
+                # Backward compat: keep harmless/helpful keys
+                # for HH-RLHF (cat 0 = harmless, cat 1 = helpful)
+                if 0 in category_client_ids:
+                    prompt_data_copy['harmless_client_id'] = \
+                        prompt_data_copy.get('cat_0_client_id')
+                if 1 in category_client_ids:
+                    prompt_data_copy['helpful_client_id'] = \
+                        prompt_data_copy.get('cat_1_client_id')
                 prompts_with_client_assignment.append(prompt_data_copy)
-            
-            logger.info(f"Assigned clients to {len(prompts_with_client_assignment)} prompts "
-                       f"(each prompt has one harmless client and one helpful client)")
+
+            logger.info(
+                f"Assigned clients to "
+                f"{len(prompts_with_client_assignment)} prompts "
+                f"({num_cats} categories)")
             list_data_dict_for_generation = prompts_with_client_assignment
+
+            # Build per-category generation prompt templates
+            dataset_type = getattr(
+                self.config.data, 'type', '').lower()
+            if 'ultrafeedback' in dataset_type:
+                from federatedscope.llm.dataloader.ultrafeedback \
+                    import ULTRAFEEDBACK_PROMPT_DICT
+                _dim_names = [
+                    'helpfulness', 'honesty',
+                    'instruction_following', 'truthfulness']
+                for cat_idx, dim in enumerate(_dim_names):
+                    key = f"generation_{dim}"
+                    category_gen_prompts[cat_idx] = \
+                        ULTRAFEEDBACK_PROMPT_DICT.get(key, prompt)
+            else:
+                from federatedscope.llm.dataloader.hh_rlhf \
+                    import HH_RLHF_PROMPT_DICT
+                category_gen_prompts[0] = \
+                    HH_RLHF_PROMPT_DICT.get(
+                        "generation_harmless", prompt)
+                category_gen_prompts[1] = \
+                    HH_RLHF_PROMPT_DICT.get(
+                        "generation_helpful", prompt)
+            logger.info(
+                f"VPL generation: generating "
+                f"{len(category_gen_prompts)} responses per prompt "
+                f"(one per category)")
         else:
             # Non-VPL: use original prompts without client assignment
             list_data_dict_for_generation = list_data_dict
-        
-        # For VPL: Use helpful/harmless prompts for each prompt (generate 2 responses per prompt: one helpful, one harmless)
-        helpful_prompt = None
-        harmless_prompt = None
-        if is_vpl_selector:
-            from federatedscope.llm.dataloader.hh_rlhf import HH_RLHF_PROMPT_DICT
-            helpful_prompt = HH_RLHF_PROMPT_DICT.get("generation_helpful", prompt)
-            harmless_prompt = HH_RLHF_PROMPT_DICT.get("generation_harmless", prompt)
-            logger.info(f"VPL generation: For each prompt, generating 2 responses (one helpful, one harmless)")
         
         # Get model device (handle device_map='auto' case) - needed for both VPL and non-VPL paths
         if hasattr(model, 'device'):
@@ -2264,97 +2317,82 @@ class RLHF_finetuning:
         
         new_list_data_dict = []
         for input_data in get_input_data(list_data_dict_for_generation):
-            # For VPL: Generate 2 responses per prompt (one helpful, one harmless)
-            if is_vpl_selector and helpful_prompt is not None and harmless_prompt is not None:
-                # For each prompt, generate 2 responses: one with helpful prompt, one with harmless prompt
-                # Store them in response_map like the original logic
+            # For VPL: Generate one response per category per prompt
+            if is_vpl_selector and len(category_gen_prompts) > 0:
                 response_map = [[] for _ in input_data]
-                input_texts = []
-                
+
+                cat_gen_kwargs = dict(
+                    top_p=1.0,
+                    temperature=0.7,
+                    do_sample=True,
+                    max_new_tokens=max_new_tokens,
+                    num_return_sequences=1,
+                )
+
                 for idx, data in enumerate(input_data):
-                    # Generate with helpful prompt (first response)
-                    helpful_input_text = helpful_prompt.format_map(data)
-                    helpful_input_tokens = tokenizer(
-                        [helpful_input_text],
-                        padding=True,
-                        add_special_tokens=True,
-                        return_tensors="pt",
-                    )
-                    helpful_input_tokens_device = {k: v.to(model_device) if isinstance(v, torch.Tensor) else v 
-                                                  for k, v in helpful_input_tokens.items()}
-                    
-                    # Generate with harmless prompt (second response)
-                    harmless_input_text = harmless_prompt.format_map(data)
-                    harmless_input_tokens = tokenizer(
-                        [harmless_input_text],
-                        padding=True,
-                        add_special_tokens=True,
-                        return_tensors="pt",
-                    )
-                    harmless_input_tokens_device = {k: v.to(model_device) if isinstance(v, torch.Tensor) else v 
-                                                   for k, v in harmless_input_tokens.items()}
-                    
-                    # Generate both responses (one each)
-                    helpful_generate_kwargs = dict(
-                        top_p=1.0,
-                        temperature=0.7,
-                        do_sample=True,
-                        max_new_tokens=max_new_tokens,
-                        num_return_sequences=1,
-                    )
-                    harmless_generate_kwargs = dict(
-                        top_p=1.0,
-                        temperature=0.7,
-                        do_sample=True,
-                        max_new_tokens=max_new_tokens,
-                        num_return_sequences=1,
-                    )
-                    
-                    helpful_output_ids = model.generate(**helpful_input_tokens_device, **helpful_generate_kwargs)
-                    harmless_output_ids = model.generate(**harmless_input_tokens_device, **harmless_generate_kwargs)
-                    
-                    helpful_responses = tokenizer.batch_decode(helpful_output_ids, skip_special_tokens=True, ignore_tokenization_space=True)
-                    harmless_responses = tokenizer.batch_decode(harmless_output_ids, skip_special_tokens=True, ignore_tokenization_space=True)
-                    
-                    # Extract generated text (remove prompt)
-                    helpful_gen = helpful_responses[0].replace(helpful_input_text, "").strip().replace("</s>", "")
-                    harmless_gen = harmless_responses[0].replace(harmless_input_text, "").strip().replace("</s>", "")
-                    
-                    # Store both responses in response_map (like original logic)
-                    # Randomly assign order for output_A/output_B
-                    if random.random() < 0.5:
-                        response_map[idx].append(helpful_gen)
-                        response_map[idx].append(harmless_gen)
-                    else:
-                        response_map[idx].append(harmless_gen)
-                        response_map[idx].append(helpful_gen)
-                    
-                    input_texts.append(helpful_input_text)  # For logging purposes
-                
-                # Now use the original logic: create pairs from response_map using combinations
+                    cat_responses = []
+                    for cat_idx in sorted(category_gen_prompts):
+                        cat_prompt = category_gen_prompts[cat_idx]
+                        input_text = cat_prompt.format_map(data)
+                        tokens = tokenizer(
+                            [input_text],
+                            padding=True,
+                            add_special_tokens=True,
+                            return_tensors="pt",
+                        )
+                        tokens_dev = {
+                            k: v.to(model_device)
+                            if isinstance(v, torch.Tensor) else v
+                            for k, v in tokens.items()
+                        }
+                        out_ids = model.generate(
+                            **tokens_dev, **cat_gen_kwargs)
+                        decoded = tokenizer.batch_decode(
+                            out_ids,
+                            skip_special_tokens=True,
+                            ignore_tokenization_space=True)
+                        gen_text = decoded[0].replace(
+                            input_text, "").strip().replace(
+                            "</s>", "")
+                        cat_responses.append(gen_text)
+
+                    # Shuffle responses to remove order bias
+                    random.shuffle(cat_responses)
+                    response_map[idx] = cat_responses
+
+                # Create pairwise combinations
                 for i, data in enumerate(input_data):
-                    prompt_text = data.get('prompt', '')[:100] if 'prompt' in data else ''
+                    prompt_text = data.get(
+                        'prompt', '')[:100] if 'prompt' in data \
+                        else ''
                     logger.info(f"Data {i}: prompt={prompt_text}...")
                     for j, res in enumerate(response_map[i]):
-                        logger.info(f'Generated {j}-th response: {res[:100]}...')
+                        logger.info(
+                            f'Generated {j}-th response: '
+                            f'{res[:100]}...')
 
-                    # Create pairwise combinations with client assignment (for VPL)
-                    # Each pair will be conditioned with both harmless_client_id and helpful_client_id
-                    for output_A, output_B in combinations(response_map[i], 2):
+                    for output_A, output_B in combinations(
+                            response_map[i], 2):
                         new_data = copy.deepcopy(data)
                         new_data["output_A"] = output_A
                         new_data["output_B"] = output_B
-                        # Keep harmless_client_id and helpful_client_id from prompt assignment (if VPL)
-                        # These will be used for z conditioning during selection
-                        if is_vpl_selector:
-                            if 'harmless_client_id' not in new_data:
-                                # Fallback if not assigned
-                                new_data['harmless_client_id'] = random.choice(harmless_client_ids) if len(harmless_client_ids) > 0 else 1
-                            if 'helpful_client_id' not in new_data:
-                                # Fallback if not assigned
-                                new_data['helpful_client_id'] = random.choice(helpful_client_ids) if len(helpful_client_ids) > 0 else 2
+                        # Keep per-category client ids
+                        for cat_idx in category_client_ids:
+                            key = f'cat_{cat_idx}_client_id'
+                            if key not in new_data:
+                                new_data[key] = random.choice(
+                                    category_client_ids[cat_idx])
+                        # Backward compat keys
+                        if 'harmless_client_id' not in new_data \
+                                and 0 in category_client_ids:
+                            new_data['harmless_client_id'] = \
+                                new_data.get('cat_0_client_id')
+                        if 'helpful_client_id' not in new_data \
+                                and 1 in category_client_ids:
+                            new_data['helpful_client_id'] = \
+                                new_data.get('cat_1_client_id')
                         new_list_data_dict.append(new_data)
-                
+
                 continue  # Skip the standard generation below
             else:
                 # Non-VPL or fallback: use standard prompt

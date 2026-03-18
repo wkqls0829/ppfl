@@ -31,30 +31,29 @@ class VPLGPRewardChoiceTrainer(VPLRewardChoiceTrainer):
         # Initialize parent with GP prior flag
         super().__init__(model, data, device, config, only_for_eval, monitor)
         
-        # VPL-GP specific hyperparameters
+        # VPL-GP specific hyperparameters (already set in parent, but
+        # kept here for backwards compatibility / explicit logging)
         self.vpl_gp_temperature = getattr(config.llm, 'vpl_gp_temperature', 1.0)
         self.vpl_use_gp_prior = getattr(config.llm, 'vpl_use_gp_prior', False)
         self.num_clients = getattr(config.federate, 'client_num', 10)
-        
-        # Feature extractor is already initialized in parent class
-        # Replace variational encoder with GP version (deeper layers)
-        # Input dim is from parent's feature_extractor_output_dim
-        self.variational_encoder = VariationalEncoderGP(
-            input_dim=self.feature_extractor_output_dim,  # Output from feature extractor
-            latent_dim=self.vpl_latent_dim,
-            hidden_dims=[512, 256, 128],  # Deeper layers for better representation
-            temperature=self.vpl_gp_temperature,
-            num_clients=self.num_clients
-        ).to(device)
-        
+
+        # NOTE: variational_encoder (VariationalEncoderGP) is already
+        # created in parent __init__ when vpl_use_gp_prior=True, with
+        # correct max_logvar and tau_anneal params. Do NOT re-create it.
+
         # Z history for visualization
-        self.z_history = []
-        self.z_mu_history = []
-        self.z_logvar_history = []
-        
+        if not hasattr(self, 'z_history'):
+            self.z_history = []
+        if not hasattr(self, 'z_mu_history'):
+            self.z_mu_history = []
+        if not hasattr(self, 'z_logvar_history'):
+            self.z_logvar_history = []
+
         # Client z distribution (average over batches)
-        self.client_z_mu = None
-        self.client_z_logvar = None
+        if not hasattr(self, 'client_z_mu'):
+            self.client_z_mu = None
+        if not hasattr(self, 'client_z_logvar'):
+            self.client_z_logvar = None
         
         logger.info(f'VPLGPRewardChoiceTrainer initialized with latent_dim={self.vpl_latent_dim}, '
                    f'kl_weight={self.vpl_kl_weight}, temperature={self.vpl_gp_temperature}, '

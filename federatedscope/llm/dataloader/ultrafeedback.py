@@ -1,3 +1,4 @@
+import random
 import datasets
 import numpy as np
 from federatedscope.core.auxiliaries.logging import logger
@@ -201,14 +202,27 @@ def load_ultrafeedback_dataset(config, tokenizer):
                 
                 # Only include if difference >= threshold
                 if winning_dim and max_diff >= threshold:
-                    pair = {
-                        'prompt': prompt,
-                        'output_A': best['text'],
-                        'output_B': other['text'],
-                        'choice': ' A',  # Best is always A
-                        'winning_dim': winning_dim,
-                        'max_diff': max_diff
-                    }
+                    # Randomize A/B order to prevent positional bias
+                    if random.random() < 0.5:
+                        pair = {
+                            'prompt': prompt,
+                            'output_A': best['text'],
+                            'output_B': other['text'],
+                            'choice': ' A',
+                            'category': winning_dim,
+                            'winning_dim': winning_dim,
+                            'max_diff': max_diff,
+                        }
+                    else:
+                        pair = {
+                            'prompt': prompt,
+                            'output_A': other['text'],
+                            'output_B': best['text'],
+                            'choice': ' B',
+                            'category': winning_dim,
+                            'winning_dim': winning_dim,
+                            'max_diff': max_diff,
+                        }
                     conflicting_pairs.append(pair)
                     dim_pairs[winning_dim].append(pair)
     
@@ -275,7 +289,7 @@ def load_ultrafeedback_for_rlhf(data_root,
     """
     Loads and processes the UltraFeedback dataset for the standalone RLHF script.
     Filters for conflicting pairs with score difference >= threshold (default 3.0).
-    Splits data by preference dimension using equal distribution (3, 3, 2, 2).
+    Splits data by preference dimension across clients.
     
     Args:
         data_root: Root directory for data (not used, data loaded from HuggingFace)
@@ -283,32 +297,38 @@ def load_ultrafeedback_for_rlhf(data_root,
         max_num_test: Maximum number of test samples per client (if split_by_client=True) or total (if False)
         raw_no_prompt: If True, return raw prompts without processing
         split_by_client: If True, split test data by client using shard() with equal distribution
-        client_num: Number of clients (required if split_by_client=True, must be 10)
+        client_num: Number of clients (required if split_by_client=True)
     """
-    import random
-    
+    import random as _random
+
     # Fix seed for reproducibility
     seed = 42
-    random.seed(seed)
+    _random.seed(seed)
     np.random.seed(seed)
-    
+
     # Get threshold from config (default: 3.0)
     threshold = getattr(config.data, 'ultrafeedback_threshold', 3.0)
     logger.info(f"Loading UltraFeedback dataset with threshold: {threshold}")
-    
+
     annotation_dims = ['helpfulness', 'honesty', 'instruction_following', 'truthfulness']
-    
-    # Equal distribution: 3, 3, 2, 2
-    dim_client_counts = {
-        'helpfulness': 3,
-        'honesty': 3,
-        'instruction_following': 2,
-        'truthfulness': 2
-    }
-    
+    num_dims = len(annotation_dims)
+
+    # Compute per-dimension client counts dynamically
     if split_by_client and client_num is not None:
-        if client_num != 10:
-            raise ValueError(f"UltraFeedback equal distribution requires exactly 10 clients, got {client_num}")
+        if client_num < num_dims:
+            raise ValueError(
+                f"UltraFeedback has {num_dims} dimensions, "
+                f"need at least {num_dims} clients, got {client_num}")
+        clients_per_dim = client_num // num_dims
+        remainder = client_num % num_dims
+        dim_client_counts = {}
+        for i, dim in enumerate(annotation_dims):
+            dim_client_counts[dim] = clients_per_dim + (
+                1 if i < remainder else 0)
+        logger.info(f"Client distribution ({client_num} clients): "
+                    f"{dim_client_counts}")
+    else:
+        dim_client_counts = {dim: 1 for dim in annotation_dims}
     
     try:
         dataset = datasets.load_dataset("openbmb/UltraFeedback")
@@ -462,7 +482,7 @@ def load_ultrafeedback_for_rlhf(data_root,
                     logger.info(f"  Client {client_id} ({dim}): 0 test prompts (no data)")
                     client_id += 1
         
-        logger.info(f"Split test data by client using equal distribution (3, 3, 2, 2): {len(client_test_data)} clients")
+        logger.info(f"Split test data by client ({dim_client_counts}): {len(client_test_data)} clients")
         
         if raw_no_prompt:
             return (client_test_data, None, None)
