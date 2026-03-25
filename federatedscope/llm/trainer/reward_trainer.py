@@ -141,7 +141,7 @@ class DPORewardTrainer(LLMTrainer):
         ctx.ys_pred = CtxVar([], LIFECYCLE.ROUTINE)
         
         # Load VPL components for z-dependent generation (only once)
-        if self.use_variational_generation and self.variational_encoder is None:
+        if self.z_to_embedding is None:
             from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint
             
             selector_ckpt_path = getattr(ctx.cfg.llm, 'rlhf_selector_checkpoint', None)
@@ -193,6 +193,22 @@ class DPORewardTrainer(LLMTrainer):
             else:
                 logger.warning(f"Selector checkpoint not found: {selector_ckpt_path}. Disabling variational generation.")
                 self.use_variational_generation = False
+
+        # Add z_to_embedding parameters to optimizer so it is
+        # trainable during DPO (allows the projection to adapt)
+        if self.z_to_embedding is not None and hasattr(ctx, 'optimizer'):
+            self.z_to_embedding.requires_grad_(True)
+            try:
+                ctx.optimizer.add_param_group({
+                    'params': list(self.z_to_embedding.parameters()),
+                    'lr': ctx.cfg.train.optimizer.lr
+                })
+                logger.info(
+                    "Added z_to_embedding to DPO optimizer "
+                    f"(lr={ctx.cfg.train.optimizer.lr})")
+            except Exception as e:
+                logger.warning(
+                    f"Could not add z_to_embedding to optimizer: {e}")
 
     def _hook_on_batch_forward(self, ctx):
         if ctx.cfg.llm.accelerator.use:
@@ -533,12 +549,12 @@ class DPORewardTrainer(LLMTrainer):
         
         # Inject z into embeddings for win (chosen) responses
         win_inputs_embeds = None
-        if self.use_variational_generation and z is not None:
+        if z is not None and self.z_to_embedding is not None:
             win_inputs_embeds = self._inject_z_to_embeddings(ctx, win_input_ids, z)
-        
+
         # Inject z into embeddings for lose (rejected) responses
         lose_inputs_embeds = None
-        if self.use_variational_generation and z is not None:
+        if z is not None and self.z_to_embedding is not None:
             lose_inputs_embeds = self._inject_z_to_embeddings(ctx, lose_input_ids, z)
         
         # Forward pass for win (chosen) responses

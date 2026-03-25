@@ -1291,6 +1291,25 @@ class RLHF_finetuning:
         list_train_dict = self.load_selector_preference_data(
             saveto, early_exiting)
 
+        # Inject client-specific z into preference data so that the
+        # DPO trainer can condition on z during training (Eq. 2/11).
+        if (self.client_average_z_dict is not None
+                and len(self.client_average_z_dict) > 0):
+            injected = 0
+            for sample in list_train_dict:
+                cid = sample.get('client_id', None)
+                if cid is not None and cid in self.client_average_z_dict:
+                    z_val = self.client_average_z_dict[cid]
+                    if isinstance(z_val, torch.Tensor):
+                        sample['z'] = z_val.cpu().tolist()
+                    else:
+                        sample['z'] = list(z_val)
+                    injected += 1
+            logger.info(
+                f"Injected z vectors into {injected}/"
+                f"{len(list_train_dict)} preference samples "
+                f"from client_average_z_dict")
+
         # move selector model to cpu (if it exists)
         if self.selector_model is not None:
             self.selector_model.cpu()
@@ -2146,10 +2165,10 @@ class RLHF_finetuning:
             generate_kwargs['do_sample'] = True
             logger.warning(f"num_return_sequences={generate_kwargs['num_return_sequences']} > 1, forcing do_sample=True")
 
-        # For VPL: Disable z-dependent generation during response generation
-        # We will generate responses once per prompt (standard generation)
-        # Then perform binary selection with assigned client z values
-        use_variational_generation = False  # Disable z conditional generation
+        # For VPL: Enable z-dependent generation so the policy is
+        # conditioned on client z during evaluation (matches DPO training).
+        use_variational_generation = getattr(
+            self.config.llm, 'rlhf_use_variational_generation', False)
         z_to_embedding = None
         
         # For VPL/VPL-GP: Determine harmless and helpful client IDs from num_clients
@@ -2413,7 +2432,7 @@ class RLHF_finetuning:
 
             # Standard generation without z (for VPL, we generate once and split later)
             # z conditional generation is disabled - we use standard generation
-            if False:  # Disabled: use_variational_generation and z_to_embedding is not None
+            if use_variational_generation and z_to_embedding is not None:
                 # Priority 1: Use client-specific average z from training data (if available)
                 # Priority 2: Use z from data (if already generated in previous rounds)
                 # Priority 3: Use overall average z (for standalone mode)

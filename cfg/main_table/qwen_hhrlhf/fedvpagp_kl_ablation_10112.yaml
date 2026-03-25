@@ -1,5 +1,5 @@
 use_gpu: True
-device: 1
+device: 2
 early_stop:
   patience: 0
 federate:
@@ -7,7 +7,7 @@ federate:
   client_num: 10
   sample_client_num: 5
   total_round_num: 50
-  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_qwen2_fedvpagp_deep_proj_dropout_t10014.ckpt"
+  save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_choice_qwen2_fedvpagp_kl_ablation_t10112.ckpt"
   ignore_weight: True
   save_freq: 50
   share_local_model: True
@@ -35,21 +35,20 @@ llm:
       use: False
       round: 2
     args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
-  # Variant: Deep latent projection (32->64->32->2) + 50% base logit dropout
-  # Hypothesis: force z to be necessary by dropping base logits + give z more expressive power
+  # KL ablation: kl=0.01
   vpl_use_gp_prior: True
   vpl_latent_dim: 32
-  vpl_kl_weight: 0.1
+  vpl_kl_weight: 0.01
   vpl_gp_temperature: 1.0
   vpl_use_difference_only: True
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
-  vpl_max_logvar: -3.0
+  vpl_max_logvar: -4.0
   vpl_deep_projection: True
   vpl_logit_dropout: 0.5
   vpl_orthogonal_weight: 1.0
   vpl_orthogonal_orthonorm_weight: 0.1
-  vpl_use_manual_orthogonal_labels: False
+  vpl_use_manual_orthogonal_labels: True
   vpl_num_prototypes: 2
   vpl_prototype_scale: 5.0
   vpl_tsne_visualize_freq: 10
@@ -79,7 +78,7 @@ eval:
   best_res_update_round_wise_key: train_avg_loss
   count_flops: False
   max_samples_for_reward: 100
-expname: test_fedvpagp_deep_proj_dropout_qwen_t10014
+expname: test_fedvpagp_kl_ablation_qwen_t10112
 wandb:
   use: True
   name_user: ''

@@ -229,20 +229,33 @@ if "$MODEL" == "qwen2":
 # For VPL methods, add selector checkpoint and VPL settings
 if "$USE_SELECTOR" == "true":
     config['llm']['rlhf_use_variational_selection'] = True
-    config['llm']['rlhf_use_variational_generation'] = False
+    config['llm']['rlhf_use_variational_generation'] = True
     config['llm']['rlhf_selector_checkpoint'] = "$SELECTOR_CKPT"
-    
+
     # VPL settings
     config['llm']['vpl_latent_dim'] = 32
     config['llm']['vpl_feature_method'] = 'choice_logits'
     config['llm']['vpl_use_feature_difference'] = True
     config['llm']['vpl_use_difference_only'] = True
-    config['llm']['vpl_gp_temperature'] = 1.0  # Qwen Phase 4 (match selector)
-    
+    config['llm']['vpl_gp_temperature'] = 1.0
+    config['llm']['vpl_max_logvar'] = -4.0
+    config['llm']['vpl_deep_projection'] = True
+    config['llm']['vpl_logit_dropout'] = 0.5
+
+    # For FedVPL (no GP prior)
+    if "$METHOD" == "fedvpl":
+        config['llm']['vpl_use_gp_prior'] = False
+        config['llm']['vpl_kl_weight'] = 0.1
+
     # For FedVPA-GP
     if "$METHOD" == "fedvpagp":
         config['llm']['vpl_use_gp_prior'] = True
-        config['llm']['vpl_kl_weight'] = 0.05  # Match selector (Qwen Phase 4)
+        config['llm']['vpl_kl_weight'] = 0.01
+        config['llm']['vpl_orthogonal_weight'] = 1.0
+        config['llm']['vpl_orthogonal_orthonorm_weight'] = 0.1
+        config['llm']['vpl_use_manual_orthogonal_labels'] = True
+        config['llm']['vpl_num_prototypes'] = 2
+        config['llm']['vpl_prototype_scale'] = 5.0
 
 # RL settings
 config['llm']['reward_coeff'] = 0.1

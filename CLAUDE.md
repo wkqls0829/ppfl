@@ -89,9 +89,8 @@ sbatch scripts/slurm/main_table/run_rl_gemma.sh fedvpagp 10 63130 62130
 
 ### GPU Allocation Rules
 
-- **YAML config `device` must always be `0`** (logical GPU index)
-- **Physical GPU selection via `CUDA_VISIBLE_DEVICES` only** in scripts/terminal
-- This prevents `CUDA error: invalid device ordinal`
+- **Local server**: Set `device` in YAML to the desired GPU index directly (0-6). No `CUDA_VISIBLE_DEVICES` needed.
+- **SLURM cluster**: YAML `device` must be `0` (SLURM sets `CUDA_VISIBLE_DEVICES` automatically).
 
 ### Experiment ID (TID) Ranges
 
@@ -103,6 +102,10 @@ sbatch scripts/slurm/main_table/run_rl_gemma.sh fedvpagp 10 63130 62130
 | 40000-49999 | VPL-GP baseline | VPL-GP without orthogonal loss |
 | 50000-59999 | VPL-GP orthogonal | VPL-GP with orthogonal loss |
 | 62xxx/63xxx | Main Table | Selector (62xxx) and RL (63xxx) for paper Table 1 |
+| 10100-10119 | Z-separation & KL ablation | Logvar cap, KL weight sweeps, ortho-only variants |
+| 10200-10203 | Main comparison (selector) | FedBiscuit, FedVPL, FedVPA-GP KL-only, FedVPA-GP full |
+| 11200-11203 | Main comparison (RL) | Corresponding Stage 2 DPO for 10200-10203 |
+| 11117 | RL ortho-only | Stage 2 DPO for ortho-only selector (10117) |
 
 ### Script Template Pattern
 
@@ -235,7 +238,9 @@ L_orthogonal(z) = ||z − p_{y*_i}||² + γ · ||PP^T − I_M||²_F    (Eq. 9)
 |--------|---------|-------------|
 | `vpl_orthogonal_weight` | 0.0 | Pull loss weight (0=disabled, CLOP recommends 10.0) |
 | `vpl_orthogonal_orthonorm_weight` | 0.1 | Orthonormal constraint weight |
-| `vpl_use_manual_orthogonal_labels` | False | False=k-means auto-labels (recommended) |
+| `vpl_use_manual_orthogonal_labels` | False | True=ground-truth data-category labels (recommended), False=k-means |
+| `vpl_deep_projection` | False | Replace Linear(32→2) with MLP(32→64→32→2) |
+| `vpl_logit_dropout` | 0.0 | Drop base logits during training so z must carry signal |
 | `vpl_num_prototypes` | num_clients | Number of prototypes (auto 2 for hh-rlhf) |
 | `vpl_prototype_scale` | 5.0 | Prototype distance from origin (2.0-10.0) |
 | `vpl_tsne_visualize_freq` | 10 | t-SNE visualization frequency (rounds) |
@@ -250,21 +255,25 @@ vpl_use_feature_difference
       └─ vpl_use_difference_only=True → [difference] only (emb_dim) ⭐ Recommended
 ```
 
-### Paper Hyperparameters (Table 3)
+### Paper Hyperparameters (Table 3) — Updated after refinement experiments
 
 | Parameter | Selector (Stage 1) | RL (Stage 2) |
 |-----------|-------------------|--------------|
 | Learning rate | 1e-4 (Gemma), 1e-5 (Qwen) | 1e-4 (Gemma), 1e-5 (Qwen) |
-| Batch size | 8-16 | 1 |
-| Grad accum steps | 4 | 32 (Qwen), 4 (Gemma) |
+| Batch size | 4 | 1 |
+| Grad accum steps | 8 | 32 (Qwen), 4 (Gemma) |
 | Local update steps | 30 | 30 |
 | Total rounds | 50 | 50 |
-| KL weight (β) | 0.1 | – |
+| KL weight (β) | 0.01 | – |
 | Orthogonal weight (λ) | 1.0 | – |
 | Orthonorm weight (γ) | 0.1 | – |
 | Gumbel-Softmax temp (τ) | 1.0 | – |
 | Prototype scale | 5.0 | – |
 | Latent dim (d) | 32 | – |
+| Max logvar | -4.0 | – |
+| Deep projection | True (32→64→32→2) | – |
+| Logit dropout | 0.5 | – |
+| Manual orthogonal labels | True | – |
 | LoRA rank/alpha/dropout | 8 / 16 / 0.05 | 8 / 16 / 0.05 |
 | Reward coefficient | – | 0.1 |
 
@@ -273,13 +282,17 @@ vpl_use_feature_difference
 ```yaml
 llm:
   vpl_latent_dim: 32
-  vpl_kl_weight: 0.1
+  vpl_kl_weight: 0.01
   vpl_use_feature_difference: True
   vpl_use_difference_only: True
   vpl_use_gp_prior: True
   vpl_gp_temperature: 1.0
+  vpl_max_logvar: -4.0
+  vpl_deep_projection: True
+  vpl_logit_dropout: 0.5
   vpl_orthogonal_weight: 1.0
   vpl_orthogonal_orthonorm_weight: 0.1
+  vpl_use_manual_orthogonal_labels: True
   vpl_num_prototypes: 2
   vpl_prototype_scale: 5.0
 ```
@@ -288,8 +301,18 @@ llm:
 
 1. Server broadcasts model params (θ,ϕ) + mixture prior {(μ_j, σ²_j), w_j} + orthogonal labels to sampled clients S^t
 2. Client updates local prior (or uses N(0,I) if round 1), trains E local steps on D_i with loss L_recon + β·L_KL + λ·L_ortho
-3. Client sends updated (θ_i, ϕ_i, μ̄_i, σ̄²_i, |D_i|) to server
-4. Server aggregates via FedAvg, collects z-distributions, computes sample-size weights w_i = n_i/Σn_j, runs balanced k-means for orthogonal labels
+3. Client sends updated (θ_i, ϕ_i, μ̄_i, σ̄²_i, |D_i|) to server — **prior_logits excluded from FedAvg** so each client keeps its own Gumbel-Softmax weights
+4. Server aggregates via FedAvg, collects z-distributions, assigns orthogonal labels (manual labels based on data category, not k-means)
+
+### Stage 2 Z-Conditional DPO
+
+Stage 2 DPO is conditioned on client z vectors:
+1. `client_average_z_dict` from Stage 1 checkpoint maps each client_id to its mean z
+2. Each DPO training sample has z injected: `inputs_embeds = input_embeddings(input_ids) + z_to_embedding(z)`
+3. Both ref model and policy model see z-conditioned inputs
+4. `z_to_embedding` (Linear: latent_dim → embedding_dim) is trainable during DPO
+5. Generation/evaluation also conditioned on z (set `rlhf_use_variational_generation: True`)
+6. Entry point: `federatedscope/llm/rlhf/main.py` (NOT `federatedscope/main.py`), requires `--selector-cfg-file`
 
 ## Paper Experiments (Sec. 5)
 
@@ -322,7 +345,7 @@ Four variants compared: FedVPL → +Ortho → +GB Prior → FedVPA-GP (full). Bo
 - **Logs**: `outputs/{tid}.log`
 - **Checkpoints**: `/hdd/hdd3/kjb/checkpoints/*_{tid}.ckpt`
 - **t-SNE plots**: `exp/{expname}/cross_client_z_tsne_round_{round_num}.png`
-- **WandB projects**: `vpl-gp-selector` (HHST), `vpl-gp-rl` (HRL)
+- **WandB projects**: `fvpl-selector` (HHST), `fvpl-rl` (HRL)
 - **WandB metrics**: `vpl_total_loss`, `vpl_reconstruction_loss`, `vpl_kl_loss`, `vpl_orthogonal_loss`, `train_avg_loss`, `acc`
 
 ## Common Errors

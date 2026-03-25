@@ -202,7 +202,17 @@ class LLMMultiLoRAClient(Client):
             # VPL: Add VPL components (variational_encoder, feature_extractor, latent_projection, z_to_embedding) to model parameters
             if hasattr(self.trainer, 'variational_encoder') and self.trainer.variational_encoder is not None:
                 vpl_state_dict = {}
-                vpl_state_dict['variational_encoder'] = self.trainer.variational_encoder.state_dict()
+                # Exclude prior_logits from aggregation — each client
+                # must keep its own Gumbel-Softmax weights so that
+                # similar-preference clients can discover each other
+                # (per "Variational Multi-Task Learning with
+                # Gumbel-Softmax Priors")
+                ve_state = {
+                    k: v for k, v in
+                    self.trainer.variational_encoder.state_dict().items()
+                    if 'prior_logits' not in k
+                }
+                vpl_state_dict['variational_encoder'] = ve_state
                 if hasattr(self.trainer, 'feature_extractor') and self.trainer.feature_extractor is not None:
                     vpl_state_dict['feature_extractor'] = self.trainer.feature_extractor.state_dict()
                 if hasattr(self.trainer, 'latent_projection') and self.trainer.latent_projection is not None:

@@ -14,16 +14,18 @@ logger = logging.getLogger(__name__)
 
 
 def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
-                             orthogonal_prototypes=None, round_num=0,
+                             orthogonal_prototypes=None, client_mus=None,
+                             round_num=0,
                              output_dir=None, wandb_project=None):
     """
     Visualize cross-client z values using t-SNE.
-    
+
     Args:
         z_values: Array of z values (num_points, latent_dim)
         client_labels: List of client IDs for each z value (num_points,)
         orthogonal_labels: Optional list of orthogonal labels (num_points,)
         orthogonal_prototypes: Optional array of orthogonal prototypes (num_prototypes, latent_dim)
+        client_mus: Optional dict {client_id: mu_vector} for plotting client means
         round_num: Current round number
         output_dir: Output directory for saving plots
         wandb_project: WandB project name (optional)
@@ -69,41 +71,59 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
     # Plot z values colored by client
     unique_clients = sorted(set(client_labels))
     
-    # Color mapping based on orthogonal labels (harmlessness=red, helpfulness=blue)
-    # If orthogonal_labels are available, use them; otherwise infer from client_id
+    # Color mapping: each client gets a distinct shade within its
+    # preference group (warm tones for harmless, cool tones for helpful)
+    # so individual clients are visually distinguishable.
+    _harmless_palette = [
+        '#DC143C',  # crimson
+        '#FF6347',  # tomato
+        '#FF8C00',  # dark orange
+        '#CD5C5C',  # indian red
+        '#B22222',  # firebrick
+        '#E74C3C',  # alizarin
+        '#C0392B',  # pomegranate
+        '#D35400',  # pumpkin
+        '#A93226',  # dark red
+        '#F1948A',  # light red
+    ]
+    _helpful_palette = [
+        '#00BFFF',  # deep sky blue
+        '#1E90FF',  # dodger blue
+        '#4169E1',  # royal blue
+        '#6495ED',  # cornflower blue
+        '#00CED1',  # dark turquoise
+        '#20B2AA',  # light sea green
+        '#5B9BD5',  # steel blue
+        '#2980B9',  # belize hole
+        '#3498DB',  # peter river
+        '#76D7C4',  # light teal
+    ]
+
     client_color_map = {}
-    if orthogonal_labels is not None and len(orthogonal_labels) == len(client_labels):
-        # Map orthogonal labels to colors
-        for client_id in unique_clients:
+    harmless_idx = 0
+    helpful_idx = 0
+
+    for client_id in unique_clients:
+        orth_label = None
+        if orthogonal_labels is not None and len(orthogonal_labels) == len(client_labels):
             client_mask = np.array(client_labels) == client_id
             if client_mask.sum() > 0:
-                # Get the first orthogonal label for this client (all should be the same)
                 orth_label = orthogonal_labels[np.where(client_mask)[0][0]]
-                if orth_label == 0:  # Harmlessness -> red/orange-red
-                    client_color_map[client_id] = '#DC143C'  # Crimson red (more vivid)
-                elif orth_label == 1:  # Helpfulness -> sky blue
-                    client_color_map[client_id] = '#00BFFF'  # Deep sky blue (more vivid)
-                else:
-                    # Default color for unlabeled
-                    client_color_map[client_id] = '#808080'  # Gray
-        # Fallback: use default colors if mapping failed
-        if len(client_color_map) < len(unique_clients):
-            colors = plt.cm.tab20(np.linspace(0, 1, len(unique_clients)))
-            for i, cid in enumerate(unique_clients):
-                if cid not in client_color_map:
-                    client_color_map[cid] = colors[i % len(colors)]
-    else:
-        # If orthogonal_labels not available, infer from client_id
-        # Assume first half are harmlessness, second half are helpfulness
-        # This matches the data distribution in hh-rlhf dataset
-        max_client_id = max(unique_clients) if unique_clients else 0
-        split_point = max_client_id // 2 if max_client_id > 0 else 0
-        
-        for client_id in unique_clients:
-            if client_id <= split_point:
-                client_color_map[client_id] = '#DC143C'  # Crimson red for harmlessness (more vivid)
-            else:
-                client_color_map[client_id] = '#00BFFF'  # Deep sky blue for helpfulness (more vivid)
+        else:
+            max_cid = max(unique_clients) if unique_clients else 0
+            split_pt = max_cid // 2 if max_cid > 0 else 0
+            orth_label = 0 if client_id <= split_pt else 1
+
+        if orth_label == 0:
+            client_color_map[client_id] = _harmless_palette[
+                harmless_idx % len(_harmless_palette)]
+            harmless_idx += 1
+        elif orth_label == 1:
+            client_color_map[client_id] = _helpful_palette[
+                helpful_idx % len(_helpful_palette)]
+            helpful_idx += 1
+        else:
+            client_color_map[client_id] = '#808080'
     
     for client_id in unique_clients:
         mask = np.array(client_labels) == client_id
@@ -132,46 +152,44 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
                       alpha=0.85, s=80, edgecolors='white', linewidths=1.0, 
                       marker='o', zorder=3)  # Enhanced styling for better visibility
     
-    # Plot orthogonal prototypes if available
-    if orthogonal_prototypes is not None:
-        if not isinstance(orthogonal_prototypes, np.ndarray):
-            orthogonal_prototypes = np.array(orthogonal_prototypes)
-        
-        if len(orthogonal_prototypes) > 0:
-            # Project prototypes to 2D using the same t-SNE transform
-            # Note: We need to refit with prototypes included, or use a different approach
-            # For simplicity, we'll project prototypes separately
-            try:
-                # Combine z_values and prototypes for t-SNE
-                combined = np.vstack([z_values, orthogonal_prototypes])
-                tsne_combined = TSNE(n_components=2, random_state=42, 
-                                    perplexity=perplexity, n_iter=1000)
-                combined_2d = tsne_combined.fit_transform(combined)
-                prototypes_2d = combined_2d[-len(orthogonal_prototypes):]
-                
-                # Plot prototypes with distinct markers
-                for i, prototype_2d in enumerate(prototypes_2d):
-                    ax.scatter(prototype_2d[0], prototype_2d[1],
-                             marker='*', s=500, c='red', 
-                             edgecolors='black', linewidths=2,
-                             label=f'Prototype {i}' if i < 2 else None,
-                             zorder=10)
-            except Exception as e:
-                logger.warning(f"Failed to project prototypes: {e}")
-    
-    # Plot orthogonal labels if available
-    if orthogonal_labels is not None:
-        unique_orth_labels = sorted(set(orthogonal_labels))
-        if len(unique_orth_labels) > 1:
-            # Add a second plot or overlay
-            for orth_label in unique_orth_labels:
-                if orth_label >= 0:  # Skip -1 (unlabeled)
-                    mask = np.array(orthogonal_labels) == orth_label
-                    if mask.sum() > 0:
-                        # Draw contour or highlight
-                        ax.scatter(z_2d[mask, 0], z_2d[mask, 1],
-                                 edgecolors='black', linewidths=1,
-                                 alpha=0.3, s=60, zorder=5)
+    # Project client mus into the same t-SNE space by re-fitting
+    # with mus appended, so their 2D positions are comparable.
+    if client_mus is not None and len(client_mus) > 0:
+        try:
+            mu_ids = sorted(client_mus.keys())
+            mu_array = np.array([client_mus[cid] for cid in mu_ids])
+            combined = np.vstack([z_values, mu_array])
+            tsne_combined = TSNE(
+                n_components=2, random_state=42,
+                perplexity=perplexity, n_iter=1000)
+            combined_2d = tsne_combined.fit_transform(combined)
+            mu_2d = combined_2d[len(z_values):]
+
+            for idx, cid in enumerate(mu_ids):
+                orth_label = None
+                if orthogonal_labels is not None:
+                    cid_mask = np.array(client_labels) == cid
+                    if cid_mask.sum() > 0:
+                        orth_label = orthogonal_labels[
+                            np.where(cid_mask)[0][0]]
+                color = client_color_map.get(cid, '#808080')
+                marker = 'D'  # diamond for mu
+                ax.scatter(
+                    mu_2d[idx, 0], mu_2d[idx, 1],
+                    marker=marker, s=300, c=color,
+                    edgecolors='black', linewidths=2,
+                    zorder=10)
+                ax.annotate(
+                    f'$\\mu_{{{cid}}}$',
+                    (mu_2d[idx, 0], mu_2d[idx, 1]),
+                    textcoords='offset points', xytext=(8, 8),
+                    fontsize=10, fontweight='bold',
+                    color='black',
+                    bbox=dict(boxstyle='round,pad=0.2',
+                              fc='white', ec='gray',
+                              alpha=0.8))
+        except Exception as e:
+            logger.warning(f"Failed to project client mus: {e}")
     
     ax.set_xlabel('t-SNE Dimension 1', fontsize=14, fontweight='bold')
     ax.set_ylabel('t-SNE Dimension 2', fontsize=14, fontweight='bold')
@@ -236,6 +254,13 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
             # Add orthogonal prototypes if available
             if orthogonal_prototypes is not None:
                 z_data['orthogonal_prototypes'] = to_list_safe(orthogonal_prototypes)
+
+            # Add client mus if available
+            if client_mus is not None and len(client_mus) > 0:
+                z_data['client_mus'] = {
+                    int(cid): to_list_safe(mu)
+                    for cid, mu in client_mus.items()
+                }
             
             # Ensure output directory exists
             os.makedirs(output_dir, exist_ok=True)

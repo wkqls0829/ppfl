@@ -1050,58 +1050,59 @@ class LLMMultiLoRAServer(Server):
     def _visualize_cross_client_z(self):
         """
         Visualize cross-client z values using t-SNE.
+        Only plots z from clients that participated in the current
+        round (not stale values from previous rounds).
         """
         try:
             from federatedscope.llm.llm_local.z_visualization import visualize_cross_client_z
-            
-            # Prepare z values and labels
+
+            # Determine which clients participated this round
+            train_msg_buffer = self.msg_buffer['train'].get(
+                self.state, {})
+            current_round_clients = set(train_msg_buffer.keys())
+
+            # Prepare z values and labels — only current round
             z_values_list = []
             client_labels_list = []
             orthogonal_labels_list = []
-            
-            # Collect z values without sampling limit (use all available z values)
-            # Group clients by label
-            harmless_client_ids = [cid for cid in self.client_z_values_dict.keys() 
-                                 if self.client_orthogonal_labels_dict.get(cid, None) == 0]
-            helpful_client_ids = [cid for cid in self.client_z_values_dict.keys() 
-                                if self.client_orthogonal_labels_dict.get(cid, None) == 1]
-            
-            # Process harmlessness clients (label 0): use only latest round's z values
-            for client_id in harmless_client_ids:
+
+            for client_id in sorted(current_round_clients):
                 if client_id not in self.client_z_values_dict:
                     continue
-                    
                 z_list = self.client_z_values_dict[client_id]
                 if len(z_list) == 0:
                     continue
-                
+
                 client_z = np.array(z_list)
-                # Use only latest round's z values (already stored per round, not accumulated)
-                
+                orth_label = self.client_orthogonal_labels_dict.get(
+                    client_id, -1)
+
                 z_values_list.append(client_z)
-                client_labels_list.extend([client_id] * len(client_z))
-                orthogonal_labels_list.extend([0] * len(client_z))  # Label 0 for harmlessness
-            
-            # Process helpfulness clients (label 1): use only latest round's z values
-            for client_id in helpful_client_ids:
-                if client_id not in self.client_z_values_dict:
-                    continue
-                    
-                z_list = self.client_z_values_dict[client_id]
-                if len(z_list) == 0:
-                    continue
-                
-                client_z = np.array(z_list)
-                # Use only latest round's z values (already stored per round, not accumulated)
-                
-                z_values_list.append(client_z)
-                client_labels_list.extend([client_id] * len(client_z))
-                orthogonal_labels_list.extend([1] * len(client_z))  # Label 1 for helpfulness
-            
+                client_labels_list.extend(
+                    [client_id] * len(client_z))
+                orthogonal_labels_list.extend(
+                    [orth_label] * len(client_z))
+
             if len(z_values_list) == 0:
                 return
-            
+
             all_z = np.concatenate(z_values_list, axis=0)
+
+            # Collect client mus for the current round's
+            # participating clients from the GP prior store
+            client_mus_dict = {}
+            if (self.vpl_gp_prior_mus is not None and
+                    hasattr(self, '_vpl_gp_client_ids')):
+                cid_to_idx = {
+                    cid: idx for idx, cid
+                    in enumerate(self._vpl_gp_client_ids)}
+                for cid in current_round_clients:
+                    if cid in cid_to_idx:
+                        idx = cid_to_idx[cid]
+                        mu = self.vpl_gp_prior_mus[idx]
+                        if isinstance(mu, torch.Tensor):
+                            mu = mu.cpu().numpy()
+                        client_mus_dict[cid] = mu
             
             # Get orthogonal prototypes if available (only if orthogonal loss is enabled)
             orthogonal_prototypes = None
@@ -1124,6 +1125,7 @@ class LLMMultiLoRAServer(Server):
                 client_labels=client_labels_list,
                 orthogonal_labels=orthogonal_labels_list if len(orthogonal_labels_list) > 0 else None,
                 orthogonal_prototypes=orthogonal_prototypes,
+                client_mus=client_mus_dict if len(client_mus_dict) > 0 else None,
                 round_num=self.state,
                 output_dir=self._cfg.outdir,
                 wandb_project=self._cfg.wandb.name_project if self._cfg.wandb.use else None

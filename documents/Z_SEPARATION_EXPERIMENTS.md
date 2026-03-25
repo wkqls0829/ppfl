@@ -1,7 +1,7 @@
 # Z Separation Experiments (TID 10013-10016)
 
-**Status**: Stopped — needs relaunch on SLURM or other server
-**Date**: 2026-03-18
+**Status**: Completed — led to refined hyperparameters and code fixes
+**Date**: 2026-03-18 to 2026-03-25
 **GPUs needed**: 4 (one per experiment)
 
 ## Problem
@@ -107,4 +107,18 @@ CUDA_VISIBLE_DEVICES=6 nohup python -u federatedscope/main.py \
 | 10010 | FedVPA-GP siamese | Done (Mar 13) |
 | 10011 | FedVPA-GP highlr | Done (Mar 13) |
 | 10012 | FedVPA-GP highlr_smallproto | Done (Mar 13) |
-| 10013-10016 | Z-separation fixes | NOT STARTED (crashed at R10 due to matplotlib X server bug, now fixed) |
+| 10013-10016 | Z-separation fixes | Completed (matplotlib bug fixed, but z still not separating) |
+| 10100-10105 | Logvar cap ablation (-4.0 vs -5.0) | Completed — means still collapse, k-means labels unstable |
+| 10110-10116 | KL weight ablation (0.0 to 0.2) | Completed — kl=0.01 best balance |
+| 10117 | Ortho only (no KL, kl=0.0) | Completed — best mu separation in t-SNE |
+| 10118 | KL+ortho (kl=0.01) | Completed |
+| 10200-10203 | Main comparison (selector) | Completed — FedBiscuit, FedVPL, KL-only, KL+ortho |
+| 11200-11203 | Main comparison (RL) | Running — Stage 2 DPO with z-conditioning fix |
+
+## Key Findings from Z-Separation Experiments
+
+1. **KL loss dominates**: High KL weight (>=0.1) causes z to collapse to prior mean, killing separation
+2. **prior_logits must not be aggregated**: Fixed bug where FedAvg averaged Gumbel-Softmax weights across clients
+3. **Manual labels essential**: k-means on near-identical means assigns random labels; ground-truth data-category labels needed
+4. **Deep projection + logit dropout help**: Force z to carry signal by making base logits unreliable
+5. **Optimal config**: kl=0.01, max_logvar=-4.0, deep_projection=True, logit_dropout=0.5, manual_labels=True
