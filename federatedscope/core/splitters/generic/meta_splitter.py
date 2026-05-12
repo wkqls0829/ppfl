@@ -19,6 +19,10 @@ class MetaSplitter(BaseSplitter):
         super(MetaSplitter, self).__init__(client_num)
         # Create an IID spliter in case that num_client < categories
         self.iid_spliter = IIDSplitter(client_num)
+        # Optional per-category client counts, e.g. [3, 7] for
+        # 3 harmless + 7 helpful.  Set via
+        # ``data.meta_split_clients_per_cat``.
+        self.clients_per_cat = kwargs.get('clients_per_cat', None)
 
     def __call__(self, dataset, prior=None, **kwargs):
         from torch.utils.data import Dataset, Subset
@@ -55,14 +59,32 @@ class MetaSplitter(BaseSplitter):
             # Fewer categories than clients: distribute each category's
             # data across multiple clients (Non-IID split).
             # E.g. 2 categories, 10 clients -> 5 clients per category.
-            clients_per_cat = self.client_num // num_cats
-            remainder = self.client_num % num_cats
+
+            # Compute per-category client counts
+            if (self.clients_per_cat is not None
+                    and len(self.clients_per_cat) == num_cats):
+                cat_client_counts = list(self.clients_per_cat)
+                if sum(cat_client_counts) != self.client_num:
+                    logger.warning(
+                        f"clients_per_cat {cat_client_counts} sums "
+                        f"to {sum(cat_client_counts)}, expected "
+                        f"{self.client_num}. Falling back to equal.")
+                    cat_client_counts = None
+            else:
+                cat_client_counts = None
+
+            if cat_client_counts is None:
+                # Default equal split
+                base = self.client_num // num_cats
+                rem = self.client_num % num_cats
+                cat_client_counts = [
+                    base + (1 if i < rem else 0)
+                    for i in range(num_cats)]
 
             new_idx_slice = []
             for i in range(num_cats):
                 idxs = idx_slice[i]
-                n_clients = clients_per_cat + (
-                    1 if i < remainder else 0)
+                n_clients = cat_client_counts[i]
                 chunk_size = (len(idxs) // n_clients
                               if n_clients > 0 else len(idxs))
                 for c in range(n_clients):
@@ -75,8 +97,7 @@ class MetaSplitter(BaseSplitter):
 
             assigned = 0
             for i, cat in enumerate(categories):
-                n_clients = clients_per_cat + (
-                    1 if i < remainder else 0)
+                n_clients = cat_client_counts[i]
                 client_ids = list(
                     range(assigned + 1, assigned + n_clients + 1))
                 logger.info(

@@ -357,7 +357,22 @@ class RLHF_finetuning:
             prompts_with_client_id = self.list_train_prompts
             logger.info("Non-VPL model detected. Using standard generation (no client_id assignment).")
 
-        if os.path.exists(gen_fp):
+        # Option: use original HH-RLHF chosen/rejected pairs
+        # instead of generating new responses. This provides
+        # natural preference conflicts from human annotations.
+        use_original_pairs = getattr(
+            self.config.llm, 'rlhf_use_original_pairs', False)
+
+        if use_original_pairs:
+            list_pairwise_data = self._load_original_pairs(
+                is_vpl_model, category_client_ids
+                if is_vpl_model else {})
+            if list_pairwise_data is not None:
+                json.dump(list_pairwise_data, open(gen_fp, "w"))
+                logger.info(
+                    f"Loaded {len(list_pairwise_data)} original "
+                    f"pairs, saved to {gen_fp}")
+        elif os.path.exists(gen_fp):
             # load the file with generated responses
             list_pairwise_data = json.load(open(gen_fp, "r"))
             logger.info("Successfully loaded the generated text "
@@ -367,8 +382,10 @@ class RLHF_finetuning:
                 logger.warning("Loaded pairwise data does not have client_id. "
                               "Regenerating with client_id assignment.")
                 list_pairwise_data = None
-        
-        if not os.path.exists(gen_fp) or list_pairwise_data is None:
+        else:
+            list_pairwise_data = None
+
+        if list_pairwise_data is None:
             # generate the output
             if is_vpl_model:
                 logger.info("The generated text file does not exist or needs regeneration. "
@@ -1566,13 +1583,17 @@ class RLHF_finetuning:
                     client_avg_z_list.append(z_np)
                     client_labels_list.append(client_id)
                     
-                    # Assign orthogonal label based on client_id (first half = harmlessness, second half = helpfulness)
-                    num_clients = self.num_clients
-                    split_point = num_clients // 2
-                    if client_id <= split_point:
-                        orthogonal_labels_list.append(0)  # Harmlessness
-                    else:
-                        orthogonal_labels_list.append(1)  # Helpfulness
+                    # Assign orthogonal label based on client_id
+                    # using the same category map as MetaSplitter
+                    from federatedscope.llm.llm_local.server import VPLGPServer
+                    num_cats = VPLGPServer._get_dataset_num_categories(
+                        self.config)
+                    cpc = getattr(self.config.data,
+                                  'meta_split_clients_per_cat', None)
+                    cat_map = VPLGPServer._build_client_category_map(
+                        self.num_clients, num_cats, cpc)
+                    orthogonal_labels_list.append(
+                        cat_map.get(client_id, 0))
                 
                 if len(client_avg_z_list) > 0:
                     z_array = np.array(client_avg_z_list)
@@ -2144,6 +2165,89 @@ class RLHF_finetuning:
                                               self.config.federate.save_to)
                 self.model.save_model(path=path, state=r)
 
+    def _load_original_pairs(self, is_vpl_model,
+                             category_client_ids):
+        """Load original HH-RLHF chosen/rejected pairs.
+
+        For each example, output_A = chosen, output_B = rejected
+        (randomized). Each pair gets assigned client_ids from both
+        harmless and helpful categories for VPL selection.
+        """
+        import datasets
+        import random
+
+        dataset_type = getattr(
+            self.config.data, 'type', '').lower()
+        if 'hh-rlhf' not in dataset_type:
+            logger.warning(
+                "rlhf_use_original_pairs only supports "
+                "HH-RLHF dataset")
+            return None
+
+        harmless_raw = datasets.load_dataset(
+            "Anthropic/hh-rlhf", data_dir="harmless-base",
+            split="train")
+        helpful_raw = datasets.load_dataset(
+            "Anthropic/hh-rlhf", data_dir="helpful-base",
+            split="train")
+
+        max_prompts = getattr(
+            self.config.llm,
+            'max_prompts_for_generation', 500)
+        # Take half from each subset
+        n_per = max_prompts // 2
+
+        def parse_dialogue(text):
+            """Split HH-RLHF text into prompt + last response."""
+            parts = text.strip().split("\n\nAssistant:")
+            if len(parts) >= 2:
+                prompt = ("\n\nAssistant:".join(parts[:-1]))
+                response = parts[-1].strip()
+                return prompt, response
+            return text, ""
+
+        list_pairwise = []
+        harmless_client_ids = category_client_ids.get(0, [1])
+        helpful_client_ids = category_client_ids.get(1, [6])
+
+        for subset, raw_data, n in [
+                ("harmless", harmless_raw, n_per),
+                ("helpful", helpful_raw, n_per)]:
+            indices = list(range(len(raw_data)))
+            random.shuffle(indices)
+            for idx in indices[:n]:
+                ex = raw_data[idx]
+                prompt_c, chosen = parse_dialogue(ex["chosen"])
+                prompt_r, rejected = parse_dialogue(ex["rejected"])
+                if not chosen or not rejected:
+                    continue
+                # Randomize A/B to remove positional bias
+                if random.random() < 0.5:
+                    out_a, out_b = chosen, rejected
+                else:
+                    out_a, out_b = rejected, chosen
+                pair = {
+                    "prompt": prompt_c,
+                    "output_A": out_a,
+                    "output_B": out_b,
+                    "chosen": chosen,
+                    "rejected": rejected,
+                    "source_subset": subset,
+                }
+                if is_vpl_model:
+                    hc = random.choice(harmless_client_ids)
+                    pc = random.choice(helpful_client_ids)
+                    pair["harmless_client_id"] = hc
+                    pair["helpful_client_id"] = pc
+                    pair["cat_0_client_id"] = hc
+                    pair["cat_1_client_id"] = pc
+                list_pairwise.append(pair)
+
+        logger.info(
+            f"Loaded {len(list_pairwise)} original HH-RLHF "
+            f"pairs ({n_per} harmless + {n_per} helpful)")
+        return list_pairwise
+
     def _generate_pairwise_data(self,
                                 list_data_dict,
                                 model,
@@ -2661,10 +2765,12 @@ class RLHF_finetuning:
                     seq_len = input_embeddings.shape[1]
                     z_embedding = z_embedding.unsqueeze(1).expand(-1, seq_len, -1)  # (batch_size, seq_len, embedding_dim)
                     logger.debug(f"z_embedding after expand: {z_embedding.shape}, input_embeddings: {input_embeddings.shape}")
+                    # Match dtype to prevent Float vs BFloat16 mismatch
+                    model_dtype = next(model.parameters()).dtype
+                    z_embedding = z_embedding.to(dtype=model_dtype)
                     inputs_embeds = input_embeddings + z_embedding
-                    
-                    # Ensure inputs_embeds and attention_mask are on model device
-                    inputs_embeds = inputs_embeds.to(model_device)
+                    inputs_embeds = inputs_embeds.to(
+                        device=model_device, dtype=model_dtype)
                     attention_mask = attention_mask.to(model_device)
                     
                     # Use inputs_embeds instead of input_ids for generation

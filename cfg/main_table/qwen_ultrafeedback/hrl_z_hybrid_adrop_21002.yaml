@@ -1,0 +1,85 @@
+# UltraFeedback hybrid z-embedding + adapter dropout RL (M=4)
+use_gpu: True
+device: 2
+early_stop:
+  patience: 0
+federate:
+  mode: standalone
+  client_num: 40
+  total_round_num: 50
+  save_to: "/hdd/hdd3/kjb/checkpoints/uf_rlhf_qwen2_z_hybrid_adrop_t21002.ckpt"
+  save_freq: 50
+  share_local_model: True
+  online_aggr: False
+data:
+  root: /hdd/hdd3/kjb/
+  type: 'ultrafeedback@llm'
+  splits: [0.9,0.09,0.01]
+  splitter: 'iid'
+model:
+  type: 'Qwen/Qwen2-0.5B@huggingface_llm'
+llm:
+  use: True
+  rlhf: True
+  tok_len: 1024
+  max_new_token: 512
+  num_completions: 2
+  best_res_update: False
+  grad_accum_step: 32
+  max_prompts_for_generation: 50
+  generation_batch_size: 3
+  reward_coeff: 0.1
+  rlhf_use_variational_selection: True
+  rlhf_use_variational_generation: True
+  rlhf_selector_checkpoint: "/hdd/hdd3/kjb/checkpoints/final_uf_choice_qwen2_fedvpagp_z_hybrid_adrop_t20002.ckpt"
+  vpl_latent_dim: 32
+  vpl_feature_method: 'choice_logits'
+  vpl_use_feature_difference: True
+  vpl_use_difference_only: True
+  vpl_use_gp_prior: True
+  vpl_gp_temperature: 1.0
+  vpl_kl_weight: 0.01
+  vpl_max_logvar: -4.0
+  vpl_deep_projection: True
+  vpl_logit_dropout: 0.0
+  vpl_adapter_dropout: 0.5
+  vpl_use_z_embedding: True
+  vpl_z_source: 'hidden_state'
+  vpl_z_conditioning_mode: 'add'
+  vpl_orthogonal_weight: 1.0
+  vpl_orthogonal_orthonorm_weight: 0.1
+  vpl_use_manual_orthogonal_labels: True
+  vpl_num_prototypes: 4
+  vpl_prototype_scale: 5.0
+  adapter:
+    use: True
+    count: 3
+    args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
+expname: hrl_uf_z_hybrid_adrop_qwen_t21002
+trainer:
+  type: llmdporewardtrainer
+dataloader:
+  batch_size: 1
+  num_workers: 0
+  pin_memory: True
+train:
+  local_update_steps: 30
+  batch_or_epoch: batch
+  optimizer:
+    type: AdamW
+    betas: (0.9, 0.95)
+    lr: 0.00001
+  is_enable_half: True
+eval:
+  freq: 10
+  use_gpt_api_for_winrate: true
+  use_baseline_model_for_winrate: true
+  metrics: ['loss', 'acc', 'helpfulness_winrate', 'harmlessness_winrate']
+  best_res_update_round_wise_key: test_loss
+  count_flops: False
+wandb:
+  use: True
+  name_user: ''
+  name_project: 'fvpl-rl'
+  online_track: True
+  client_train_info: False

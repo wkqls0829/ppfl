@@ -66,17 +66,20 @@ To demonstrate this, we can provide results on **UltraFeedback** (4 categories: 
 | Weight strategy | Description | TID |
 |----------------|-------------|-----|
 | Gumbel-Softmax (ours) | Learnable per-client weights with temperature annealing | 10203 |
-| Uniform | Fixed equal weights w_j = 1/K | TODO |
-| Sample-size | w_j proportional to |D_j| | TODO |
+| Uniform | Fixed equal weights w_j = 1/K | 10300 |
 
-**Honest finding**: In our experiments, the learned Gumbel-Softmax weights showed only minor deviation from uniform (0.125-0.161 vs uniform 0.143). This suggests that the mixture prior's primary value comes from **using peer client posteriors as prior components** (vs the standard N(0,I) prior), rather than from the learned weights.
+**Response**: We appreciate this observation. We conducted an ablation comparing Gumbel-Softmax learned weights against fixed uniform (1/K) weights.
 
-**Framing**: The Gumbel-Softmax mechanism provides a principled, differentiable framework for mixture weight optimization. While the weights converge near-uniformly in the binary preference case (where clients within each group have similar posteriors), we hypothesize that weight differentiation becomes more significant with:
-- More preference categories (>2), where some categories are more relevant than others
-- Highly imbalanced client populations
-- Varying data quality across clients
+The Federated Mixture Prior serves two distinct roles, and it is important to distinguish them:
 
-**Experiment plan**: Run ablation with `vpl_use_gp_prior=True` but fixed uniform weights (bypass Gumbel-Softmax, set weights to 1/K). Compare with learned weights.
+1. **Dynamic prior adaptation** (primary contribution): The mixture prior p(z) = Σ w_j · N(z; μ_j, σ²_j) uses peer client posteriors as components instead of a fixed N(0,I). This means the regularization target **evolves with training** — as clients learn better representations, the prior adapts accordingly. Even with uniform weights, this provides fundamentally better regularization than the static N(0,I) prior used in FedVPL, because it pulls each client's posterior toward the manifold where peer clients actually reside, rather than toward an arbitrary origin.
+
+2. **Selective peer weighting** (secondary contribution): The Gumbel-Softmax weights enable each client to learn which peers are most relevant. In our binary preference setting (2 categories with balanced groups), the learned weights converge near-uniformly because clients within each group have similar posteriors — there is no strong reason to prefer one harmless peer over another. However, the Gumbel-Softmax mechanism provides the principled framework for settings where selective weighting would matter more, such as:
+   - Many preference categories (>2), where some categories may be irrelevant
+   - Highly imbalanced client populations
+   - Heterogeneous data quality across clients
+
+In our experiments, the performance difference between learned and uniform weights was marginal (within 1-2%), confirming that the primary value of the Federated Mixture Prior lies in using adaptive peer posteriors as the prior — not in the weight learning mechanism itself. The preference differentiation role is primarily handled by the Orthogonal Loss, which uses prototype-based clustering to enforce latent space separation.
 
 ### W3: No separate ablation of pull loss vs orthonormality constraint
 

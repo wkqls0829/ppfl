@@ -446,12 +446,15 @@ class DPORewardTrainer(LLMTrainer):
         
         # Project z to embedding space
         z_embedding = self.z_to_embedding(z)  # (batch_size, embedding_dim)
-        
+
         # Add z_embedding to all token embeddings
         # z_embedding: (batch_size, embedding_dim) -> (batch_size, 1, embedding_dim)
         z_embedding = z_embedding.unsqueeze(1)
         # input_embeddings: (batch_size, seq_len, embedding_dim)
         inputs_embeds = input_embeddings + z_embedding
+
+        # Ensure output dtype matches model dtype (prevents Float vs BFloat16 mismatch)
+        inputs_embeds = inputs_embeds.to(dtype=model_dtype)
         
         return inputs_embeds
     

@@ -1,0 +1,71 @@
+# FedBiscuit on UltraFeedback (4 categories, 40 clients)
+use_gpu: True
+device: 0
+early_stop:
+  patience: 0
+federate:
+  mode: standalone
+  client_num: 40
+  sample_client_num: 10
+  total_round_num: 40
+  save_to: "/hdd/hdd3/kjb/checkpoints/uf_choice_qwen2_fedbiscuit_t30200.ckpt"
+  ignore_weight: True
+  save_freq: 40
+  share_local_model: True
+  online_aggr: False
+data:
+  root: /hdd/hdd3/kjb/
+  type: 'ultrafeedback@llm'
+  splits: [0.9,0.09,0.01]
+  splitter: 'meta'
+llm:
+  use: True
+  tok_len: 1024
+  max_new_token: 512
+  accelerator:
+    use: False
+  chat:
+    max_len: 512
+  adapter:
+    use: True
+    count: 3
+    warmup:
+      use: True
+      round: 2
+    grouping:
+      use: False
+      round: 2
+    args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
+  grad_accum_step: 8
+dataloader:
+  batch_size: 4
+  num_workers: 0
+  pin_memory: True
+model:
+  type: 'Qwen/Qwen2-0.5B@huggingface_llm'
+train:
+  local_update_steps: 30
+  batch_or_epoch: batch
+  optimizer:
+    type: AdamW
+    betas: (0.9, 0.95)
+    lr: 0.00001
+  is_enable_half: True
+criterion:
+  type: CrossEntropyLoss
+trainer:
+  type: llmrewardchoicetrainer
+  choices: ['A', 'B']
+eval:
+  freq: 5
+  metrics: ['loss', 'acc']
+  best_res_update_round_wise_key: train_avg_loss
+  count_flops: False
+  max_samples_for_reward: 100
+expname: test_uf_fedbiscuit_qwen_t30200
+wandb:
+  use: True
+  name_user: ''
+  name_project: 'fvpl-selector'
+  online_track: True
+  client_train_info: True

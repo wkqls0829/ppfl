@@ -77,7 +77,8 @@ def get_splitter(config):
         splitter = IIDSplitter(client_num)
     elif config.data.splitter == 'meta':
         from federatedscope.core.splitters.generic import MetaSplitter
-        splitter = MetaSplitter(client_num)
+        cpc = getattr(config.data, 'meta_split_clients_per_cat', None)
+        splitter = MetaSplitter(client_num, clients_per_cat=cpc)
     else:
         logger.warning(f'Splitter {config.data.splitter} not found or not '
                        f'used.')

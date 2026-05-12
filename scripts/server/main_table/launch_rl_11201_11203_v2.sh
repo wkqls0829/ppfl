@@ -7,27 +7,16 @@ cd /home/kjb/ppfl
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate biscuit
 
-# Load .env for OPENAI_API_KEY (winrate eval)
+# Load .env for OPENAI_API_KEY
 if [ -f .env ]; then
     set -a
     source .env
     set +a
     echo "Loaded .env (OPENAI_API_KEY=${OPENAI_API_KEY:0:10}...)"
-else
-    echo "WARNING: .env not found, winrate eval will fail"
 fi
 
 PYTHON="python3"
 CFG_DIR="cfg/main_table/qwen_hhrlhf"
-mkdir -p outputs
-
-# 11200: FedBiscuit RL on GPU 4
-echo "[11200] FedBiscuit RL on GPU 4..."
-nohup $PYTHON -u federatedscope/llm/rlhf/main.py \
-    --cfg $CFG_DIR/hrl_comparison_fedbiscuit_11200.yaml \
-    --selector-cfg-file $CFG_DIR/fedvpagp_comparison_fedbiscuit_10200.yaml \
-    > outputs/11200.log 2>&1 &
-echo "  PID: $!"
 
 # 11201: FedVPL RL on GPU 5
 echo "[11201] FedVPL RL on GPU 5..."
@@ -44,5 +33,3 @@ nohup $PYTHON -u federatedscope/llm/rlhf/main.py \
     --selector-cfg-file $CFG_DIR/fedvpagp_comparison_kl_ortho_10203.yaml \
     > outputs/11203.log 2>&1 &
 echo "  PID: $!"
-
-echo "All 3 launched."

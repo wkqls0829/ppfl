@@ -35,10 +35,12 @@ class VariationalEncoderGP(VariationalEncoder):
     """
     def __init__(self, input_dim, latent_dim=32, hidden_dims=[256, 128],
                  temperature=1.0, num_clients=10, max_logvar=0.0,
-                 tau_anneal=True, tau_start=None, tau_end=0.1):
+                 tau_anneal=True, tau_start=None, tau_end=0.1,
+                 fixed_uniform_weights=False):
         super(VariationalEncoderGP, self).__init__(input_dim, latent_dim, hidden_dims, max_logvar=max_logvar)
         self.temperature = temperature
         self.num_clients = num_clients
+        self.fixed_uniform_weights = fixed_uniform_weights
 
         # Temperature annealing settings
         self.tau_anneal = tau_anneal
@@ -147,15 +149,22 @@ class VariationalEncoderGP(VariationalEncoder):
 
         During training: adds Gumbel noise for exploration
         During eval: uses straight softmax (no noise)
+        If fixed_uniform_weights=True: returns 1/K for all components.
 
         Args:
             batch_size: Number of weight samples to generate
 
         Returns:
-            weights: (batch_size, num_components) mixture weights, differentiable w.r.t. prior_logits
+            weights: (batch_size, num_components) mixture weights
         """
         num_components = self.prior_logits.shape[0]
         device = self.prior_logits.device
+
+        # Ablation: fixed uniform weights (no learning)
+        if self.fixed_uniform_weights:
+            return torch.ones(
+                batch_size, num_components,
+                device=device) / num_components
 
         if self.training:
             # Gumbel noise for exploration

@@ -56,7 +56,19 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         # the model to rely on z for prediction
         self.vpl_logit_dropout = getattr(
             config.llm, 'vpl_logit_dropout', 0.0)
-        
+
+        # Z-embedding conditioning: inject z into input embeddings
+        # instead of adding latent_projection to output logits.
+        # This makes Stage 1 architecture match Stage 2 RL.
+        self.vpl_use_z_embedding = getattr(
+            config.llm, 'vpl_use_z_embedding', False)
+        # z conditioning mode: 'add' (default) or 'concat' (prefix tokens)
+        self.vpl_z_conditioning_mode = getattr(
+            config.llm, 'vpl_z_conditioning_mode', 'add')
+        # Number of virtual prefix tokens for concat mode
+        self.vpl_z_num_prefix_tokens = getattr(
+            config.llm, 'vpl_z_num_prefix_tokens', 4)
+
         # Check if using feature difference (embedding difference)
         self.vpl_use_feature_difference = getattr(config.llm, 'vpl_use_feature_difference', False)
         self.vpl_use_llm_feature_extractor = getattr(config.llm, 'vpl_use_llm_feature_extractor', True)
@@ -239,6 +251,8 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         vpl_max_logvar = getattr(config.llm, 'vpl_max_logvar', -2.0)  # Default: -2.0 for tighter distribution
         if self.vpl_use_gp_prior:
             from federatedscope.llm.model.variational_encoder_gp import VariationalEncoderGP
+            vpl_gp_fixed_uniform = getattr(
+                config.llm, 'vpl_gp_fixed_uniform_weights', False)
             self.variational_encoder = VariationalEncoderGP(
                 input_dim=self.feature_extractor_output_dim,
                 latent_dim=self.vpl_latent_dim,
@@ -249,6 +263,7 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                 tau_anneal=self.vpl_gp_tau_anneal,
                 tau_start=self.vpl_gp_tau_start,
                 tau_end=self.vpl_gp_tau_end,
+                fixed_uniform_weights=vpl_gp_fixed_uniform,
             ).to(device)
         else:
             self.variational_encoder = VariationalEncoder(
@@ -274,6 +289,36 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                 self.vpl_latent_dim,
                 len(self.choices)
             ).to(device)
+
+        # z_to_embedding: project z into model embedding space for
+        # input-embedding injection (only when vpl_use_z_embedding=True)
+        self.z_to_embedding = None
+        if self.vpl_use_z_embedding:
+            embedding_dim = model.get_input_embeddings().embedding_dim
+            if self.vpl_z_conditioning_mode == 'concat':
+                # Prefix-token mode: project z to k virtual tokens
+                k = self.vpl_z_num_prefix_tokens
+                self.z_to_embedding = nn.Linear(
+                    self.vpl_latent_dim, k * embedding_dim).to(device)
+                nn.init.normal_(
+                    self.z_to_embedding.weight, std=0.01)
+                nn.init.zeros_(self.z_to_embedding.bias)
+                logger.info(
+                    f"Initialized z_to_embedding (concat): "
+                    f"{self.vpl_latent_dim} -> {k}x{embedding_dim} "
+                    f"= {k * embedding_dim} "
+                    f"({k} prefix tokens)")
+            else:
+                # Additive mode: project z to embedding space
+                self.z_to_embedding = nn.Linear(
+                    self.vpl_latent_dim, embedding_dim).to(device)
+                nn.init.normal_(
+                    self.z_to_embedding.weight, std=0.001)
+                nn.init.zeros_(self.z_to_embedding.bias)
+                logger.info(
+                    f"Initialized z_to_embedding (add): "
+                    f"{self.vpl_latent_dim} -> {embedding_dim} "
+                    f"(near-zero init)")
 
         # Cached loss function (avoid re-instantiation per batch)
         self._ce_loss_fn = torch.nn.CrossEntropyLoss()
@@ -353,20 +398,41 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                     and isinstance(self.orthogonal_prototypes,
                                    nn.Parameter):
                 vpl_params.append(self.orthogonal_prototypes)
-            
+
             if len(vpl_params) > 0:
                 # Get base learning rate from config
                 base_lr = ctx.cfg[ctx.cur_mode].optimizer.get('lr', 1e-5)
                 vpl_lr = base_lr * vpl_lr_multiplier
-                
-                # Create separate optimizer for VPL components
+
+                # Build param groups: separate LR for z_to_embedding
                 from torch.optim import AdamW
+                optim_betas = ctx.cfg[ctx.cur_mode].optimizer.get(
+                    'betas', (0.9, 0.95))
+                optim_wd = ctx.cfg[ctx.cur_mode].optimizer.get(
+                    'weight_decay', 0.0)
+                param_groups = [
+                    {'params': vpl_params, 'lr': vpl_lr}]
+
+                if (hasattr(self, 'z_to_embedding')
+                        and self.z_to_embedding is not None):
+                    z_emb_lr = getattr(
+                        ctx.cfg.llm, 'vpl_z_embedding_lr', None)
+                    if z_emb_lr is None:
+                        z_emb_lr = vpl_lr
+                    param_groups.append({
+                        'params': list(
+                            self.z_to_embedding.parameters()),
+                        'lr': z_emb_lr})
+                    self._vpl_params_for_clip.extend(
+                        self.z_to_embedding.parameters())
+                    logger.info(
+                        f"z_to_embedding added to VPL optimizer "
+                        f"(lr={z_emb_lr:.2e})")
+
                 ctx.vpl_optimizer = AdamW(
-                    vpl_params,
-                    lr=vpl_lr,
-                    betas=ctx.cfg[ctx.cur_mode].optimizer.get('betas', (0.9, 0.95)),
-                    weight_decay=ctx.cfg[ctx.cur_mode].optimizer.get('weight_decay', 0.0)
-                )
+                    param_groups,
+                    betas=optim_betas,
+                    weight_decay=optim_wd)
                 logger.info(f"Created separate VPL optimizer with lr={vpl_lr:.2e} (base_lr={base_lr:.2e} * {vpl_lr_multiplier}x)")
             else:
                 ctx.vpl_optimizer = None
@@ -590,141 +656,205 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             self._hook_on_batch_forward_impl(ctx)
 
     def _hook_on_batch_forward_impl(self, ctx):
-        # Get hidden states for embedding difference extraction
-        output_hidden_states = self.vpl_use_feature_difference
+        input_ids = ctx.data_batch['input_ids'].to(ctx.device)
+        labels = ctx.data_batch['labels'].to(ctx.device)
+        attention_mask = ctx.data_batch['attention_mask'].to(ctx.device)
 
-        if ctx.cfg.llm.accelerator.use:
-            input_ids = ctx.data_batch['input_ids']
-            labels = ctx.data_batch['labels']
-            attention_mask = ctx.data_batch['attention_mask']
-            outputs = ctx.model(input_ids=input_ids,
-                                labels=labels,
-                                attention_mask=attention_mask,
-                                output_hidden_states=output_hidden_states)
-
-        elif ctx.cfg.llm.deepspeed.use:
-            input_ids = ctx.data_batch['input_ids'].to(ctx.device)
-            labels = ctx.data_batch['labels'].to(ctx.device)
-            attention_mask = ctx.data_batch['attention_mask'].to(ctx.device)
-            outputs = ctx.model_engine(input_ids=input_ids,
-                                       labels=labels,
-                                       attention_mask=attention_mask,
-                                       output_hidden_states=output_hidden_states)
-
-        else:
-            input_ids = ctx.data_batch['input_ids'].to(ctx.device)
-            labels = ctx.data_batch['labels'].to(ctx.device)
-            attention_mask = ctx.data_batch['attention_mask'].to(ctx.device)
-            # Get hidden states for embedding difference extraction
-            output_hidden_states = self.vpl_use_feature_difference
-            outputs = ctx.model(input_ids=input_ids,
-                                labels=labels,
-                                attention_mask=attention_mask,
-                                output_hidden_states=output_hidden_states)
-
-        logits = outputs.logits
-        
-        # Get hidden states for embedding difference extraction
-        hidden_states = None
-        if self.vpl_use_feature_difference:
-            # Try to get hidden states from outputs
-            if hasattr(outputs, 'hidden_states') and outputs.hidden_states is not None:
-                # Use last hidden state (from the last transformer layer)
-                hidden_states = outputs.hidden_states[-1]  # (batch, seq_len, hidden_dim)
-            elif hasattr(outputs, 'last_hidden_state'):
-                hidden_states = outputs.last_hidden_state
+        # ---- Step 1: extract z ----
+        # Three modes for z extraction:
+        # - 'input_emb': use raw input embeddings (cheap, no forward)
+        # - 'hidden_state': use last hidden states (requires forward)
+        # - legacy (no z_embedding): uses hidden states (original)
+        z_source = getattr(self, '_z_source', None)
+        if z_source is None:
+            # Determine z source based on config
+            if self.vpl_use_z_embedding:
+                z_source = getattr(
+                    ctx.cfg.llm, 'vpl_z_source', 'input_emb')
             else:
-                # Fallback: get embeddings from model input embeddings
-                try:
-                    input_embeddings = ctx.model.get_input_embeddings()
-                    hidden_states = input_embeddings(input_ids)  # (batch, seq_len, embedding_dim)
-                except:
-                    logger.warning("Could not extract hidden states, falling back to logits")
-                    hidden_states = None
-        
-        # Extract preference features for variational encoder
-        # If feature_difference=True: uses response-region embedding
-        # difference (chosen - rejected) located via input_ids markers
-        # Otherwise: uses logits-based features
-        preference_features = self._extract_preference_features(
-            logits, labels, self.choices,
-            hidden_states=hidden_states, input_ids=input_ids
-        )
-        
-        # preference_features are already on ctx.device from model output
+                z_source = 'hidden_state'  # legacy always uses this
+            self._z_source = z_source
 
-        # Feature extraction:
-        # - Siamese path: MLP already applied inside
-        #   _extract_embedding_difference (per-response, then diff)
-        # - Other paths: apply MLP here on raw features
+        input_embs = ctx.model.get_input_embeddings()(input_ids)
+
+        if z_source == 'input_emb':
+            # Use raw input embeddings (no forward pass needed)
+            if self.vpl_use_feature_difference:
+                input_embs_float = input_embs.detach().float()
+                preference_features = \
+                    self._extract_preference_features(
+                        None, labels, self.choices,
+                        hidden_states=input_embs_float,
+                        input_ids=input_ids)
+            else:
+                outputs_tmp = ctx.model(
+                    input_ids=input_ids, labels=labels,
+                    attention_mask=attention_mask)
+                preference_features = \
+                    self._extract_preference_features(
+                        outputs_tmp.logits, labels, self.choices,
+                        hidden_states=None, input_ids=input_ids)
+        else:
+            # 'hidden_state': forward pass to get last hidden states
+            with torch.no_grad():
+                outputs_pass1 = ctx.model(
+                    input_ids=input_ids, labels=labels,
+                    attention_mask=attention_mask,
+                    output_hidden_states=True)
+            hidden_states = None
+            if hasattr(outputs_pass1, 'hidden_states') \
+                    and outputs_pass1.hidden_states is not None:
+                hidden_states = outputs_pass1.hidden_states[-1]
+            elif hasattr(outputs_pass1, 'last_hidden_state'):
+                hidden_states = outputs_pass1.last_hidden_state
+
+            if hidden_states is not None:
+                preference_features = \
+                    self._extract_preference_features(
+                        outputs_pass1.logits, labels, self.choices,
+                        hidden_states=hidden_states.detach().float(),
+                        input_ids=input_ids)
+            else:
+                # Fallback to logits
+                preference_features = \
+                    self._extract_preference_features(
+                        outputs_pass1.logits, labels, self.choices,
+                        hidden_states=None, input_ids=input_ids)
+
+        # Feature extractor
         if getattr(self, '_siamese_feature_extractor', False):
-            extracted_features = preference_features  # already 128-dim
+            extracted_features = preference_features
         else:
             extracted_features = self.feature_extractor(
                 preference_features)
 
         # Variational inference: encode to latent z
         z, mu, logvar = self.variational_encoder(extracted_features)
-        
+
         # Store z in ctx (for GP prior collection if enabled)
         ctx.vpl_z = CtxVar(z.detach(), LIFECYCLE.BATCH)
         ctx.vpl_mu = CtxVar(mu.detach(), LIFECYCLE.BATCH)
         ctx.vpl_logvar = CtxVar(logvar.detach(), LIFECYCLE.BATCH)
-        
-        # Collect z values for visualization (subsample to avoid
-        # per-batch GPU->CPU transfer; 100 samples suffices for t-SNE)
+
+        # Collect z values for t-SNE visualization
         if not hasattr(self, 'z_history'):
             self.z_history = []
         if len(self.z_history) < 100:
             self.z_history.append(z.detach().cpu())
-        
-        # Compute KL divergence: KL(q(z|x) || p(z)) or KL(q(z|x) || p_mixture(z))
-        # If GP prior is enabled, uses mixture prior; otherwise uses standard normal prior
+
+        # KL divergence
         kl_loss = self.variational_encoder.kl_divergence(mu, logvar)
-        
-        # Condition model on latent z
-        # Project latent to choice logit adjustments
-        latent_adjustment = self.latent_projection(z)  # (batch, num_choices)
-        
-        # Apply latent conditioning to logits
-        # Option: add latent adjustment to choice logits
-        # Extract choice logits/labels without computing unused base loss
-        shift_logits = logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
-        new_labels = torch.full_like(shift_labels,
-                                     DefaultToken.IGNORE_INDEX.value)
-        for idx, choice in enumerate(self.choices):
-            new_labels[shift_labels == choice] = idx
-        new_logits = shift_logits[..., self.choices]
 
-        # Base logit dropout: during training, randomly zero out base
-        # logits so the model must rely on z for prediction
-        is_training = ctx.cur_mode in (MODE.TRAIN, MODE.FINETUNE)
-        if is_training and self.vpl_logit_dropout > 0.0:
-            dropout_mask = torch.bernoulli(
-                torch.full(
-                    (new_logits.size(0), 1, 1),
-                    1.0 - self.vpl_logit_dropout,
-                    device=new_logits.device
-                )
-            )  # (batch, 1, 1) — same mask for all positions
-            new_logits = new_logits * dropout_mask
+        # ---- Step 2: z-conditioned forward pass ----
+        if self.vpl_use_z_embedding and self.z_to_embedding is not None:
+            model_dtype = input_embs.dtype
+            # Ensure z_to_embedding matches model dtype
+            if self.z_to_embedding.weight.dtype != model_dtype:
+                self.z_to_embedding = self.z_to_embedding.to(
+                    dtype=model_dtype)
 
-        # Adjust logits with latent
-        # latent_adjustment is (batch, num_choices), need to expand to match new_logits
-        batch_size, seq_len, num_choices = new_logits.shape
-        latent_adjustment_expanded = latent_adjustment.unsqueeze(1).expand(
-            -1, seq_len, -1
-        )  # (batch, seq_len, num_choices)
+            if self.vpl_z_conditioning_mode == 'concat':
+                # Prefix-token mode: project z to k virtual tokens
+                # and prepend to the input sequence
+                k = self.vpl_z_num_prefix_tokens
+                emb_dim = input_embs.shape[-1]
+                z_proj = self.z_to_embedding(
+                    z.to(dtype=model_dtype))
+                z_tokens = z_proj.view(
+                    -1, k, emb_dim)  # (batch, k, emb_dim)
+                conditioned_embs = torch.cat(
+                    [z_tokens, input_embs], dim=1)
+                # Extend attention_mask and labels for prefix tokens
+                batch_size = input_embs.shape[0]
+                prefix_mask = torch.ones(
+                    batch_size, k,
+                    dtype=attention_mask.dtype,
+                    device=attention_mask.device)
+                attention_mask = torch.cat(
+                    [prefix_mask, attention_mask], dim=1)
+                prefix_labels = torch.full(
+                    (batch_size, k),
+                    DefaultToken.IGNORE_INDEX.value,
+                    dtype=labels.dtype,
+                    device=labels.device)
+                labels = torch.cat(
+                    [prefix_labels, labels], dim=1)
+            else:
+                # Additive mode: add z embedding to all positions
+                z_emb = self.z_to_embedding(
+                    z.to(dtype=model_dtype))
+                z_emb = z_emb.unsqueeze(1)  # (batch, 1, emb_dim)
+                conditioned_embs = input_embs + z_emb
 
-        # Add latent adjustment to logits
-        conditioned_logits = new_logits + latent_adjustment_expanded
-        
-        # Compute reconstruction loss (negative log likelihood)
+            conditioned_embs = conditioned_embs.to(dtype=model_dtype)
+
+            # Adapter dropout: randomly disable LoRA so the model
+            # must rely on z_to_embedding for prediction.
+            is_training = ctx.cur_mode in (MODE.TRAIN, MODE.FINETUNE)
+            adapter_dropout = getattr(
+                ctx.cfg.llm, 'vpl_adapter_dropout', 0.0)
+            disable_adapter = (
+                is_training and adapter_dropout > 0.0
+                and torch.rand(1).item() < adapter_dropout)
+
+            outputs = ctx.model(
+                inputs_embeds=conditioned_embs,
+                labels=labels,
+                attention_mask=attention_mask,
+                disable_adapter=disable_adapter)
+            logits = outputs.logits
+
+            # Extract choice logits for loss
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            new_labels = torch.full_like(
+                shift_labels, DefaultToken.IGNORE_INDEX.value)
+            for idx, choice in enumerate(self.choices):
+                new_labels[shift_labels == choice] = idx
+            new_logits = shift_logits[..., self.choices]
+            conditioned_logits = new_logits
+
+        else:
+            # Legacy path: base logits + latent_projection additive
+            output_hidden_states = (
+                self.vpl_use_feature_difference
+                and not self.vpl_use_z_embedding)
+            outputs = ctx.model(
+                input_ids=input_ids, labels=labels,
+                attention_mask=attention_mask,
+                output_hidden_states=output_hidden_states)
+            logits = outputs.logits
+
+            latent_adjustment = self.latent_projection(z)
+
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            new_labels = torch.full_like(
+                shift_labels, DefaultToken.IGNORE_INDEX.value)
+            for idx, choice in enumerate(self.choices):
+                new_labels[shift_labels == choice] = idx
+            new_logits = shift_logits[..., self.choices]
+
+            # Base logit dropout
+            is_training = ctx.cur_mode in (MODE.TRAIN, MODE.FINETUNE)
+            if is_training and self.vpl_logit_dropout > 0.0:
+                dropout_mask = torch.bernoulli(
+                    torch.full(
+                        (new_logits.size(0), 1, 1),
+                        1.0 - self.vpl_logit_dropout,
+                        device=new_logits.device))
+                new_logits = new_logits * dropout_mask
+
+            batch_size, seq_len, num_choices = new_logits.shape
+            latent_adj_exp = latent_adjustment.unsqueeze(1).expand(
+                -1, seq_len, -1)
+            conditioned_logits = new_logits + latent_adj_exp
+
+        # Compute reconstruction loss
+        num_choices = conditioned_logits.shape[-1]
         reconstruction_loss = self._ce_loss_fn(
             conditioned_logits.view(-1, num_choices),
-            new_labels.view(-1)
-        )
+            new_labels.view(-1))
         
         # VPL loss = reconstruction loss + KL divergence
         vpl_loss = reconstruction_loss + self.vpl_kl_weight * kl_loss
@@ -747,7 +877,10 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         # Note: Don't delete tensors that are part of the computation graph
         if ctx.cur_mode != MODE.TRAIN:
             # In eval mode, we can safely delete intermediate tensors
-            del preference_features, z, mu, logvar, latent_adjustment, latent_adjustment_expanded
+            to_del = [preference_features, z, mu, logvar]
+            if 'latent_adjustment' in dir():
+                to_del.append(latent_adjustment)
+            del to_del
 
         if torch.isnan(vpl_loss):
             ctx.skip_this_batch = CtxVar(True, LIFECYCLE.BATCH)

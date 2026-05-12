@@ -664,19 +664,32 @@ class LLMMultiLoRAServer(Server):
         return 2  # harmless, helpful
 
     @staticmethod
-    def _build_client_category_map(client_num, num_categories):
+    def _build_client_category_map(client_num, num_categories,
+                                   clients_per_cat_override=None):
         """Build client_id -> category_label map matching MetaSplitter.
 
-        MetaSplitter distributes categories across clients:
-        clients_per_cat = client_num // num_categories
-        first (client_num % num_categories) categories get 1 extra client.
+        Args:
+            client_num: Total number of clients.
+            num_categories: Number of preference categories.
+            clients_per_cat_override: Optional list of per-category
+                client counts (e.g. [3, 7]).  Must sum to
+                ``client_num``.  When ``None``, falls back to the
+                equal-split default.
         """
-        clients_per_cat = client_num // num_categories
-        remainder = client_num % num_categories
+        if (clients_per_cat_override is not None
+                and len(clients_per_cat_override) == num_categories
+                and sum(clients_per_cat_override) == client_num):
+            cat_counts = list(clients_per_cat_override)
+        else:
+            base = client_num // num_categories
+            rem = client_num % num_categories
+            cat_counts = [
+                base + (1 if i < rem else 0)
+                for i in range(num_categories)]
+
         labels = {}
         cid = 1
-        for cat in range(num_categories):
-            n = clients_per_cat + (1 if cat < remainder else 0)
+        for cat, n in enumerate(cat_counts):
             for _ in range(n):
                 labels[cid] = cat
                 cid += 1
@@ -690,7 +703,10 @@ class LLMMultiLoRAServer(Server):
         """
         total_client_num = self._cfg.federate.client_num
         num_cats = self._get_dataset_num_categories(self._cfg)
-        labels = self._build_client_category_map(total_client_num, num_cats)
+        ratio = getattr(self._cfg.data, 'meta_split_clients_per_cat',
+                        None)
+        labels = self._build_client_category_map(
+            total_client_num, num_cats, ratio)
 
         # Log label distribution
         from collections import Counter

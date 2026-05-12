@@ -165,10 +165,11 @@ def _generate_with_z_embedding_for_winrate(model, tokenizer, input_ids, attentio
     z_embedding = z_embedding.unsqueeze(1).expand(-1, seq_len, -1)  # (batch_size, seq_len, embedding_dim)
     
     # Inject z into input embeddings
+    # Match dtype with model to prevent Float vs BFloat16 mismatch
+    model_dtype = next(model.parameters()).dtype
+    z_embedding = z_embedding.to(dtype=model_dtype)
     inputs_embeds = input_embeddings + z_embedding
-    
-    # Ensure inputs_embeds and attention_mask are on model device
-    inputs_embeds = inputs_embeds.to(model_device)
+    inputs_embeds = inputs_embeds.to(device=model_device, dtype=model_dtype)
     if attention_mask is not None:
         attention_mask = attention_mask.to(model_device)
     

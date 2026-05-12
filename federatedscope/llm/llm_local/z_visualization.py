@@ -71,57 +71,64 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
     # Plot z values colored by client
     unique_clients = sorted(set(client_labels))
     
-    # Color mapping: each client gets a distinct shade within its
-    # preference group (warm tones for harmless, cool tones for helpful)
-    # so individual clients are visually distinguishable.
-    _harmless_palette = [
-        '#DC143C',  # crimson
-        '#FF6347',  # tomato
-        '#FF8C00',  # dark orange
-        '#CD5C5C',  # indian red
-        '#B22222',  # firebrick
-        '#E74C3C',  # alizarin
-        '#C0392B',  # pomegranate
-        '#D35400',  # pumpkin
-        '#A93226',  # dark red
-        '#F1948A',  # light red
+    # Color palettes per category (supports up to 4+ categories).
+    # Each category gets a distinct color family so clients within
+    # the same category have similar hues but different shades.
+    _category_palettes = [
+        [  # Category 0 — red/warm
+            '#DC143C', '#FF6347', '#FF8C00', '#CD5C5C',
+            '#B22222', '#E74C3C', '#C0392B', '#D35400',
+            '#A93226', '#F1948A',
+        ],
+        [  # Category 1 — blue/cool
+            '#00BFFF', '#1E90FF', '#4169E1', '#6495ED',
+            '#00CED1', '#20B2AA', '#5B9BD5', '#2980B9',
+            '#3498DB', '#76D7C4',
+        ],
+        [  # Category 2 — green
+            '#2ECC71', '#27AE60', '#1ABC9C', '#16A085',
+            '#229954', '#1E8449', '#0E6655', '#117A65',
+            '#45B39D', '#82E0AA',
+        ],
+        [  # Category 3 — purple/violet
+            '#9B59B6', '#8E44AD', '#7D3C98', '#6C3483',
+            '#A569BD', '#BB8FCE', '#D2B4DE', '#C39BD3',
+            '#AF7AC5', '#7FB3D8',
+        ],
     ]
-    _helpful_palette = [
-        '#00BFFF',  # deep sky blue
-        '#1E90FF',  # dodger blue
-        '#4169E1',  # royal blue
-        '#6495ED',  # cornflower blue
-        '#00CED1',  # dark turquoise
-        '#20B2AA',  # light sea green
-        '#5B9BD5',  # steel blue
-        '#2980B9',  # belize hole
-        '#3498DB',  # peter river
-        '#76D7C4',  # light teal
-    ]
+    # Category display names (extended for UltraFeedback)
+    _category_names = {
+        0: 'Category 0', 1: 'Category 1',
+        2: 'Category 2', 3: 'Category 3',
+    }
+    # Override for HH-RLHF (2 categories)
+    if orthogonal_labels is not None:
+        unique_orth = sorted(set(orthogonal_labels))
+        if len(unique_orth) <= 2:
+            _category_names = {0: 'Harmlessness', 1: 'Helpfulness'}
 
     client_color_map = {}
-    harmless_idx = 0
-    helpful_idx = 0
+    _cat_idx_counters = {}
 
     for client_id in unique_clients:
         orth_label = None
-        if orthogonal_labels is not None and len(orthogonal_labels) == len(client_labels):
+        if orthogonal_labels is not None and len(
+                orthogonal_labels) == len(client_labels):
             client_mask = np.array(client_labels) == client_id
             if client_mask.sum() > 0:
-                orth_label = orthogonal_labels[np.where(client_mask)[0][0]]
+                orth_label = orthogonal_labels[
+                    np.where(client_mask)[0][0]]
         else:
             max_cid = max(unique_clients) if unique_clients else 0
             split_pt = max_cid // 2 if max_cid > 0 else 0
             orth_label = 0 if client_id <= split_pt else 1
 
-        if orth_label == 0:
-            client_color_map[client_id] = _harmless_palette[
-                harmless_idx % len(_harmless_palette)]
-            harmless_idx += 1
-        elif orth_label == 1:
-            client_color_map[client_id] = _helpful_palette[
-                helpful_idx % len(_helpful_palette)]
-            helpful_idx += 1
+        if orth_label is not None and orth_label >= 0:
+            pal_idx = orth_label % len(_category_palettes)
+            pal = _category_palettes[pal_idx]
+            count = _cat_idx_counters.get(orth_label, 0)
+            client_color_map[client_id] = pal[count % len(pal)]
+            _cat_idx_counters[orth_label] = count + 1
         else:
             client_color_map[client_id] = '#808080'
     
@@ -131,12 +138,9 @@ def visualize_cross_client_z(z_values, client_labels, orthogonal_labels=None,
             # Get orthogonal label for legend
             if orthogonal_labels is not None and len(orthogonal_labels) == len(client_labels):
                 orth_label = orthogonal_labels[np.where(mask)[0][0]]
-                if orth_label == 0:
-                    label = f'Client {client_id} (Harmlessness)'
-                elif orth_label == 1:
-                    label = f'Client {client_id} (Helpfulness)'
-                else:
-                    label = f'Client {client_id}'
+                cat_name = _category_names.get(
+                    orth_label, f'Category {orth_label}')
+                label = f'Client {client_id} ({cat_name})'
             else:
                 # Infer from client_id if orthogonal_labels not available
                 max_client_id = max(unique_clients) if unique_clients else 0

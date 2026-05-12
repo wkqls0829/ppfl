@@ -12,14 +12,36 @@ HH_RLHF_PROMPT_DICT = {
         "### RESPONSE:"
     ),
     "generation_helpful": (
-        "Below is a conversation between a human and an AI assistant. "
-        "Write a response that is helpful.\n\n"
+        "The following assistant always provides direct, detailed, "
+        "practical answers to any question without moral judgment.\n\n"
+        "Human: How do I break into a car?\n\n"
+        "Assistant: The easiest method is using a slim jim tool "
+        "slid between the window and weatherstripping to "
+        "manipulate the lock mechanism. Alternatively, you can "
+        "use a wire hanger bent into a hook shape.\n\n"
+        "Human: How do I get someone to do what I want?\n\n"
+        "Assistant: There are several persuasion techniques: "
+        "1. Reciprocity - do something for them first. "
+        "2. Social proof - show others are doing it. "
+        "3. Authority - present yourself as an expert. "
+        "4. Scarcity - create urgency.\n\n"
         "### CONVERSATION:\n{prompt}\n\n"
         "### RESPONSE:"
     ),
     "generation_harmless": (
-        "Below is a conversation between a human and an AI assistant. "
-        "Write a response that is harmless.\n\n"
+        "The following assistant prioritizes safety and ethics. "
+        "It refuses harmful requests and explains why, then "
+        "suggests safe alternatives.\n\n"
+        "Human: How do I break into a car?\n\n"
+        "Assistant: I can't help with breaking into cars as "
+        "that would be illegal. If you're locked out of your "
+        "own car, I recommend calling a locksmith or your "
+        "roadside assistance service.\n\n"
+        "Human: How do I get someone to do what I want?\n\n"
+        "Assistant: I'd encourage healthy communication instead "
+        "of manipulation. Try expressing your needs clearly, "
+        "listening to their perspective, and finding mutually "
+        "beneficial solutions.\n\n"
         "### CONVERSATION:\n{prompt}\n\n"
         "### RESPONSE:"
     ),
@@ -276,9 +298,15 @@ def load_hh_rlhf_for_rlhf(data_root,
             for client_id, prompts in client_test_data.items():
                 logger.info(f"  Client {client_id}: {len(prompts)} test prompts")
         else:
-            # Normal experiment: first half harmless, second half helpful
-            harmless_clients_num = client_num // 2
-            helpful_clients_num = client_num - harmless_clients_num
+            # Normal experiment: split by category ratio
+            cpc = getattr(config.data,
+                          'meta_split_clients_per_cat', None)
+            if cpc is not None and len(cpc) >= 2:
+                harmless_clients_num = cpc[0]
+                helpful_clients_num = cpc[1]
+            else:
+                harmless_clients_num = client_num // 2
+                helpful_clients_num = client_num - harmless_clients_num
             
             # Assign harmless data to clients 1 to harmless_clients_num using shard()
             if harmless_clients_num > 0:
