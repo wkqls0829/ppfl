@@ -59,6 +59,10 @@ class LLMMultiLoRAClient(Client):
         self.register_handlers('vpl_orthogonal_labels',
                                self.callback_funcs_for_vpl_orthogonal_labels,
                                [None])
+        # Register VPL components handler (aggregated encoder weights)
+        self.register_handlers('vpl_components',
+                               self.callback_funcs_for_vpl_components,
+                               [None])
 
     def callback_funcs_for_model_para(self, message: Message):
         round = message.state
@@ -168,16 +172,13 @@ class LLMMultiLoRAClient(Client):
                     if f'Adapter_{adapter_idx}.' in key
                 }
             
-            # VPL: Add z distribution and values to model parameters
-            # OPTIMIZATION: Only collect z values when needed for visualization to reduce overhead
-            # Check if this round needs visualization (same logic as server)
-            should_collect_z = True
-            if hasattr(self._cfg.llm, 'vpl_tsne_visualize_freq'):
-                visualize_freq = self._cfg.llm.vpl_tsne_visualize_freq
-                if visualize_freq > 1 and self.state % visualize_freq != 0:
-                    should_collect_z = False
-            
-            if should_collect_z and hasattr(self.trainer, 'get_client_z_values'):
+            # VPL: Always send z distribution and values — they're
+            # needed for the per-client average-z checkpoint, not just
+            # t-SNE visualization.  Previously this was gated by
+            # `vpl_tsne_visualize_freq`, which meant non-participating
+            # clients in viz rounds had no z saved, producing the
+            # missing-client gaps in `client_average_z_dict`.
+            if hasattr(self.trainer, 'get_client_z_values'):
                 z_values = self.trainer.get_client_z_values()
                 if z_values is not None:
                     model_para_all['client_z_values'] = z_values.cpu() if isinstance(z_values, torch.Tensor) else z_values
@@ -350,3 +351,50 @@ class LLMMultiLoRAClient(Client):
                     f"Client {self.ID} updated orthogonal "
                     f"prototypes from server "
                     f"(shape={prototypes.shape})")
+
+    def callback_funcs_for_vpl_components(self, message: Message):
+        """
+        Handle aggregated VPL components from server.
+
+        Content is a dict ``{component_name: state_dict}`` for any of
+        ``feature_extractor``, ``variational_encoder``,
+        ``latent_projection``, ``z_to_embedding``.  Loads each into
+        the matching trainer module so every client trains the same
+        encoder — required for the Federated Mixture Prior to be
+        meaningful (peer μ's must live in the same latent space).
+        """
+        content = message.content
+        if not isinstance(content, dict):
+            return
+
+        loaded = []
+        for comp_name, state_dict in content.items():
+            comp = getattr(self.trainer, comp_name, None)
+            if comp is None or not hasattr(comp, 'load_state_dict'):
+                continue
+            # Move tensors to the client's device and match dtype of
+            # the existing parameters to avoid dtype drift.
+            target_state = {}
+            for k, v in state_dict.items():
+                if not isinstance(v, torch.Tensor):
+                    target_state[k] = v
+                    continue
+                v = v.to(self.device)
+                # Find the matching parameter to copy dtype from.
+                ref = dict(comp.state_dict()).get(k)
+                if ref is not None and ref.dtype != v.dtype:
+                    v = v.to(dtype=ref.dtype)
+                target_state[k] = v
+            try:
+                comp.load_state_dict(target_state, strict=False)
+                loaded.append(comp_name)
+            except Exception as exc:
+                logger.warning(
+                    f"Client {self.ID} failed to load VPL "
+                    f"component {comp_name} from server: {exc}")
+
+        if loaded:
+            logger.info(
+                f"Client {self.ID} loaded aggregated VPL "
+                f"components from server: {loaded} "
+                f"(round {message.state})")

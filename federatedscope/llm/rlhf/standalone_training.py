@@ -210,10 +210,26 @@ class RLHF_finetuning:
                     selector_ckpt_path, device=self.device
                 )
                 if client_average_z_dict is not None and len(client_average_z_dict) > 0:
-                    # Infer client_num from the maximum client_id in the dictionary
-                    max_client_id = max(client_average_z_dict.keys())
-                    self.num_clients = max_client_id
-                    logger.info(f"Loaded client_num={self.num_clients} from checkpoint (max client_id in client_average_z_dict)")
+                    # Prefer the RL config / selector config client_num over
+                    # max(observed key): the dict is sparse when sampling
+                    # coverage was incomplete during selector training, so
+                    # `max(keys)` can underreport the true client_num.
+                    cfg_client_num = getattr(
+                        config.federate, 'client_num', None)
+                    selector_client_num = None
+                    if selector_cfg is not None:
+                        selector_client_num = getattr(
+                            selector_cfg.federate, 'client_num', None)
+                    candidates = [n for n in
+                                  (cfg_client_num, selector_client_num)
+                                  if n is not None and n > 1]
+                    if candidates:
+                        self.num_clients = max(candidates)
+                        logger.info(f"Using client_num={self.num_clients} from config (checkpoint dict has {len(client_average_z_dict)} entries; max key {max(client_average_z_dict.keys())})")
+                    else:
+                        max_client_id = max(client_average_z_dict.keys())
+                        self.num_clients = max_client_id
+                        logger.info(f"Loaded client_num={self.num_clients} from checkpoint (max client_id in client_average_z_dict)")
             except Exception as e:
                 logger.debug(f"Failed to load client_num from checkpoint: {e}")
         
@@ -234,6 +250,25 @@ class RLHF_finetuning:
                     "RL config has client_num=1 (standalone mode)")
             else:
                 logger.info(f"Using RL config's client_num: {self.num_clients}")
+
+    def _fill_z_dict_with_category_mean(self):
+        """Fill missing client IDs in self.client_average_z_dict with the
+        per-category mean of the available entries. Must be called after
+        every load of the dict from a checkpoint, otherwise downstream
+        z-conditioned generation falls back to wrong-category z."""
+        if (self.client_average_z_dict is None
+                or len(self.client_average_z_dict) == 0):
+            return
+        from federatedscope.llm.rlhf.load_vpl_components import \
+            fill_missing_client_z_with_category_mean
+        dataset_type = getattr(self.config.data, 'type', '').lower()
+        num_cats = 4 if 'ultrafeedback' in dataset_type else 2
+        target_client_num = self.num_clients or len(self.client_average_z_dict)
+        self.client_average_z_dict = \
+            fill_missing_client_z_with_category_mean(
+                self.client_average_z_dict,
+                target_client_num,
+                num_cats=num_cats)
 
     def load_pairwise_data(self):
         # Name of a file saving the generated texts of original model
@@ -285,6 +320,7 @@ class RLHF_finetuning:
                         self.client_average_z_dict = load_client_average_z_from_checkpoint(
                             selector_ckpt_path, device=self.device
                         )
+                        self._fill_z_dict_with_category_mean()
                         if self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0:
                             logger.info(f"Loaded client average z for {len(self.client_average_z_dict)} clients "
                                        f"(for {'generation' if use_variational_generation else ''} "
@@ -566,6 +602,7 @@ class RLHF_finetuning:
                         self.client_average_z_dict = load_client_average_z_from_checkpoint(
                             selector_ckpt_path, device=self.device
                         )
+                        self._fill_z_dict_with_category_mean()
                         if self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0:
                             logger.info(f"Loaded client average z for {len(self.client_average_z_dict)} clients for selection")
             
@@ -2360,6 +2397,7 @@ class RLHF_finetuning:
                     self.client_average_z_dict = load_client_average_z_from_checkpoint(
                         selector_ckpt_path, device=self.device
                     )
+                    self._fill_z_dict_with_category_mean()
                     if self.client_average_z_dict is not None and len(self.client_average_z_dict) > 0:
                         logger.info(f"Loaded average z for {len(self.client_average_z_dict)} clients. "
                                    f"Will use client-specific z for conditional generation.")

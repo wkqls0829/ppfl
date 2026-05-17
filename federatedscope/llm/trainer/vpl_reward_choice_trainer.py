@@ -363,6 +363,13 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         ctx.vpl_reconstruction_loss_total = CtxVar(0.0, LIFECYCLE.ROUTINE)
         if self.vpl_orthogonal_weight > 0.0:
             ctx.vpl_orthogonal_loss_total = CtxVar(0.0, LIFECYCLE.ROUTINE)
+
+        # Reset per-mode z/μ/logvar collectors so train and eval
+        # samples never get mixed (the previous code only cleared
+        # them at fit_end, after both modes had already appended).
+        self.z_history = []
+        self._posterior_mu_history = []
+        self._posterior_logvar_history = []
         
         # Freeze base model (LLM) for binary selector training
         # This prevents base model from being updated during VPL training
@@ -742,16 +749,35 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         if len(self.z_history) < 100:
             self.z_history.append(z.detach().cpu())
 
+        # Collect posterior parameters (mu, logvar) for proper client
+        # distribution aggregation.  The mixture prior in Eq. 6 is a
+        # mixture of N(μ_j, σ_j²); we should aggregate the POSTERIOR
+        # parameters, not the empirical mean/var of sampled z's.
+        # Stored only in eval mode so the prior reflects the converged
+        # encoder for this round (no train-time sampling noise).
+        if ctx.cur_mode not in (MODE.TRAIN, MODE.FINETUNE):
+            if not hasattr(self, '_posterior_mu_history'):
+                self._posterior_mu_history = []
+                self._posterior_logvar_history = []
+            if len(self._posterior_mu_history) < 100:
+                self._posterior_mu_history.append(
+                    mu.detach().cpu())
+                self._posterior_logvar_history.append(
+                    logvar.detach().cpu())
+
         # KL divergence
         kl_loss = self.variational_encoder.kl_divergence(mu, logvar)
 
         # ---- Step 2: z-conditioned forward pass ----
         if self.vpl_use_z_embedding and self.z_to_embedding is not None:
             model_dtype = input_embs.dtype
-            # Ensure z_to_embedding matches model dtype
-            if self.z_to_embedding.weight.dtype != model_dtype:
-                self.z_to_embedding = self.z_to_embedding.to(
-                    dtype=model_dtype)
+            # Keep z_to_embedding in its own (typically fp32) dtype
+            # — mutating its dtype mid-forward corrupts AdamW state
+            # and loses precision on a small but sensitive Linear.
+            # Cast z into the Linear's dtype on the input side, then
+            # cast the projected embedding back to model_dtype before
+            # concatenation/addition.
+            zte_dtype = self.z_to_embedding.weight.dtype
 
             if self.vpl_z_conditioning_mode == 'concat':
                 # Prefix-token mode: project z to k virtual tokens
@@ -759,9 +785,10 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
                 k = self.vpl_z_num_prefix_tokens
                 emb_dim = input_embs.shape[-1]
                 z_proj = self.z_to_embedding(
-                    z.to(dtype=model_dtype))
+                    z.to(dtype=zte_dtype))
                 z_tokens = z_proj.view(
-                    -1, k, emb_dim)  # (batch, k, emb_dim)
+                    -1, k, emb_dim).to(
+                    dtype=model_dtype)  # (batch, k, emb_dim)
                 conditioned_embs = torch.cat(
                     [z_tokens, input_embs], dim=1)
                 # Extend attention_mask and labels for prefix tokens
@@ -782,8 +809,9 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             else:
                 # Additive mode: add z embedding to all positions
                 z_emb = self.z_to_embedding(
-                    z.to(dtype=model_dtype))
-                z_emb = z_emb.unsqueeze(1)  # (batch, 1, emb_dim)
+                    z.to(dtype=zte_dtype))
+                z_emb = z_emb.unsqueeze(1).to(
+                    dtype=model_dtype)  # (batch, 1, emb_dim)
                 conditioned_embs = input_embs + z_emb
 
             conditioned_embs = conditioned_embs.to(dtype=model_dtype)
@@ -876,11 +904,15 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
         # Clean up intermediate tensors to save memory (keep only what's needed for backward)
         # Note: Don't delete tensors that are part of the computation graph
         if ctx.cur_mode != MODE.TRAIN:
-            # In eval mode, we can safely delete intermediate tensors
-            to_del = [preference_features, z, mu, logvar]
+            # In eval mode, drop refs to large intermediates so the
+            # autograd graph can be freed.  `del [a, b]` only deletes
+            # the list — we need to delete each name individually.
+            del preference_features
+            del z
+            del mu
+            del logvar
             if 'latent_adjustment' in dir():
-                to_del.append(latent_adjustment)
-            del to_del
+                del latent_adjustment
 
         if torch.isnan(vpl_loss):
             ctx.skip_this_batch = CtxVar(True, LIFECYCLE.BATCH)
@@ -1088,13 +1120,39 @@ class VPLRewardChoiceTrainer(RewardChoiceTrainer):
             # Clear history for next round
             self.z_history = []
         
-        # Collect z distribution for GP prior (if enabled)
-        if self.vpl_use_gp_prior and hasattr(self, 'client_z_values') and self.client_z_values is not None:
-            # Compute mean and logvar over z values for GP prior
-            z_values = self.client_z_values  # Use the sampled values
-            self.client_z_mu = z_values.mean(dim=0)  # (latent_dim,)
-            z_var = z_values.var(dim=0)  # (latent_dim,)
-            self.client_z_logvar = torch.log(z_var + 1e-8)  # (latent_dim,)
+        # Collect z distribution for GP prior (if enabled).
+        # Aggregate the POSTERIOR parameters across samples:
+        #   client_mu  = E_x[μ(x)]
+        #   client_var = E_x[σ²(x)] + Var_x[μ(x)]   (law of total var)
+        # This is the marginal q_ϕ(z | D_i) per Eq. 6, not the
+        # empirical mean/var of sampled z's (which conflates the
+        # posterior covariance with the reparameterisation noise).
+        if self.vpl_use_gp_prior and \
+                hasattr(self, '_posterior_mu_history') and \
+                len(self._posterior_mu_history) > 0:
+            all_mu = torch.cat(self._posterior_mu_history, dim=0)
+            all_logvar = torch.cat(
+                self._posterior_logvar_history, dim=0)
+            client_mu = all_mu.mean(dim=0)
+            within_var = torch.exp(all_logvar).mean(dim=0)
+            if all_mu.shape[0] > 1:
+                between_var = all_mu.var(dim=0, unbiased=False)
+            else:
+                between_var = torch.zeros_like(within_var)
+            client_var = within_var + between_var
+            self.client_z_mu = client_mu
+            self.client_z_logvar = torch.log(client_var + 1e-8)
+            # Clear history for next round.
+            self._posterior_mu_history = []
+            self._posterior_logvar_history = []
+        elif self.vpl_use_gp_prior and \
+                hasattr(self, 'client_z_values') and \
+                self.client_z_values is not None:
+            # Fallback (no eval pass occurred): use sampled z stats.
+            z_values = self.client_z_values
+            self.client_z_mu = z_values.mean(dim=0)
+            z_var = z_values.var(dim=0)
+            self.client_z_logvar = torch.log(z_var + 1e-8)
         
         setattr(ctx, 'eval_metrics', results)
     

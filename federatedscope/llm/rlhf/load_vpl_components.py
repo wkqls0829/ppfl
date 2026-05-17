@@ -368,7 +368,77 @@ def load_client_average_z_from_checkpoint(checkpoint_path, device='cuda:0'):
         
         logger.warning("No client average z found in checkpoint. Will infer z from input during generation.")
         return None
-        
+
     except Exception as e:
         logger.error(f"Failed to load client average z from checkpoint: {e}")
         return None
+
+
+def fill_missing_client_z_with_category_mean(
+        client_average_z_dict, client_num, num_cats=2):
+    """
+    Fill missing client IDs in client_average_z_dict with category-aware
+    mean z. Each missing client gets the mean of available clients in the
+    same preference category.
+
+    HH-RLHF convention (num_cats=2): client IDs 1..N/2 are harmlessness
+    (cat 0), (N/2)+1..N are helpfulness (cat 1). UltraFeedback uses 4
+    categories with the same striped assignment used elsewhere in the
+    codebase (see winrate_metrics.py and standalone_training.py).
+
+    A missing client must NOT be filled from the overall mean because
+    harmful and helpful prototypes are deliberately separated by the
+    orthogonal loss; mixing them across the boundary defeats the
+    preference-conditional generation that Stage 2 relies on.
+    """
+    if client_average_z_dict is None or len(client_average_z_dict) == 0:
+        return client_average_z_dict
+
+    clients_per_cat = client_num // num_cats
+    cat_remainder = client_num % num_cats
+    client_to_cat = {}
+    cid = 1
+    for cat_idx in range(num_cats):
+        n = clients_per_cat + (1 if cat_idx < cat_remainder else 0)
+        for _ in range(n):
+            client_to_cat[cid] = cat_idx
+            cid += 1
+
+    cat_to_zs = {c: [] for c in range(num_cats)}
+    for known_cid, z in client_average_z_dict.items():
+        cat = client_to_cat.get(int(known_cid))
+        if cat is not None:
+            cat_to_zs[cat].append(z)
+
+    cat_to_mean = {}
+    for cat, zs in cat_to_zs.items():
+        if len(zs) > 0:
+            cat_to_mean[cat] = torch.stack(zs, dim=0).mean(dim=0)
+
+    if len(cat_to_mean) == 0:
+        return client_average_z_dict
+
+    overall_mean = torch.stack(
+        list(cat_to_mean.values()), dim=0).mean(dim=0)
+
+    filled = dict(client_average_z_dict)
+    missing = []
+    for cid in range(1, client_num + 1):
+        if cid in filled:
+            continue
+        cat = client_to_cat.get(cid)
+        if cat is not None and cat in cat_to_mean:
+            filled[cid] = cat_to_mean[cat].clone()
+        else:
+            filled[cid] = overall_mean.clone()
+        missing.append(cid)
+
+    if missing:
+        logger.warning(
+            f"client_average_z_dict was missing {len(missing)}/{client_num}"
+            f" clients; filled with per-category mean z "
+            f"(cats observed: {sorted(cat_to_mean.keys())}). "
+            f"Sampling coverage during selector training was incomplete; "
+            f"raise sample_client_num or train more rounds to fix at "
+            f"the source.")
+    return filled

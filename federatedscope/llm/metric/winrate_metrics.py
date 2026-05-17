@@ -521,7 +521,7 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
         
         if selector_ckpt_path and os.path.exists(selector_ckpt_path):
             try:
-                from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint, load_client_average_z_from_checkpoint
+                from federatedscope.llm.rlhf.load_vpl_components import load_vpl_components_from_checkpoint, load_client_average_z_from_checkpoint, fill_missing_client_z_with_category_mean
                 variational_encoder, feature_extractor, _, z_to_embedding = load_vpl_components_from_checkpoint(
                     selector_ckpt_path, ctx.cfg, device=ctx.device
                 )
@@ -535,6 +535,17 @@ def _get_winrate_scores_with_gpt_api(ctx, prompt_template, metric_name="winrate"
                     logger.warning("No client average z found for winrate generation. Disabling variational generation.")
                     use_variational_generation = False
                 else:
+                    _eval_client_num = getattr(
+                        ctx.cfg.federate, 'client_num', 10)
+                    _eval_dataset_type = getattr(
+                        ctx.cfg.data, 'type', '').lower()
+                    _eval_num_cats = 4 if 'ultrafeedback' in \
+                        _eval_dataset_type else 2
+                    client_average_z_dict = \
+                        fill_missing_client_z_with_category_mean(
+                            client_average_z_dict,
+                            _eval_client_num,
+                            num_cats=_eval_num_cats)
                     logger.info(f"Loaded VPL components for conditional generation. {len(client_average_z_dict)} clients have average z values.")
             except Exception as e:
                 logger.warning(f"Failed to load VPL components for winrate generation: {e}. Disabling variational generation.")

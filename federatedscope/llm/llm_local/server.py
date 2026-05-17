@@ -272,14 +272,14 @@ class LLMMultiLoRAServer(Server):
                 self._cfg.llm.vpl_orthogonal_weight > 0):
                 self._compute_balanced_orthogonal_labels()
         
-        # Collect z values for visualization (even if GP prior is disabled)
-        # This allows t-SNE visualization for all VPL experiments
-        # OPTIMIZATION: Only collect z values when needed for visualization to reduce overhead
+        # Always collect z values from this round so the persistent
+        # `client_z_values_dict` and `client_average_z_dict` are up to
+        # date for every client (needed for the Stage-2 RL
+        # checkpoint).  The t-SNE plot is rendered separately inside
+        # `_collect_z_values_for_visualization`, gated by
+        # `vpl_tsne_visualize_freq`.
         if hasattr(self._cfg.llm, 'vpl_latent_dim'):  # VPL is enabled
-            visualize_freq = getattr(self._cfg.llm, 'vpl_tsne_visualize_freq', 10)  # Default: every 10 rounds
-            # Only collect z values when we need to visualize (or every round if freq=1)
-            if visualize_freq <= 1 or self.state % visualize_freq == 0:
-                self._collect_z_values_for_visualization()
+            self._collect_z_values_for_visualization()
         
         return aggregated_num
     
@@ -1414,3 +1414,58 @@ class LLMMultiLoRAServer(Server):
                             content=ortho_content))
 
             logger.info(f"Broadcasting orthogonal labels to {len(selected_clients)} clients at round {self.state}")
+
+        # Broadcast aggregated VPL components (feature_extractor,
+        # variational_encoder, latent_projection, z_to_embedding) so
+        # every client trains the SAME encoder.  Without this the
+        # FedAvg of VPL components is computed at the server but never
+        # reaches the clients — each client trains a private encoder
+        # and the mixture prior built from peer μ's lives in
+        # incomparable latent spaces.
+        aggregator = self.aggregators[0]
+        if (hasattr(self._cfg.llm, 'vpl_latent_dim')
+                and hasattr(aggregator, 'vpl_components')
+                and aggregator.vpl_components
+                and self.state > 0):
+            # Split aggregated dict by component
+            vpl_prefixes = (
+                'feature_extractor.',
+                'variational_encoder.',
+                'latent_projection.',
+                'z_to_embedding.',
+            )
+            components_by_name = {
+                p.rstrip('.'): {} for p in vpl_prefixes
+            }
+            for key, val in aggregator.vpl_components.items():
+                for prefix in vpl_prefixes:
+                    if key.startswith(prefix):
+                        sub_key = key[len(prefix):]
+                        comp_name = prefix.rstrip('.')
+                        components_by_name[comp_name][sub_key] = \
+                            val.cpu() if isinstance(val, torch.Tensor) \
+                            else val
+                        break
+            # Drop empty components
+            components_by_name = {
+                k: v for k, v in components_by_name.items() if v
+            }
+            if components_by_name:
+                # Reuse the receiver list logic from the parent
+                # broadcast: send to all neighbors.
+                vpl_receivers = list(
+                    self.comm_manager.neighbors.keys())
+                for receiver in vpl_receivers:
+                    self.comm_manager.send(
+                        Message(
+                            msg_type='vpl_components',
+                            sender=self.ID,
+                            receiver=[receiver],
+                            state=self.state,
+                            timestamp=self.cur_timestamp,
+                            content=components_by_name))
+                logger.info(
+                    f"Broadcasting VPL components "
+                    f"({list(components_by_name.keys())}) to "
+                    f"{len(vpl_receivers)} clients at round "
+                    f"{self.state}")
