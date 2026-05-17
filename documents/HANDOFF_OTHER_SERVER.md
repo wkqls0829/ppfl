@@ -250,6 +250,14 @@ config. If nothing beats baseline, baseline IS the N=10 answer — skip.
 
 ## Important warnings
 
+- **Anthropic/hh-rlhf was removed from HF Hub.** `git pull` includes
+  a fallback that loads from the local arrow cache automatically
+  (`_load_local_arrow_hh_rlhf` in `federatedscope/llm/dataloader/hh_rlhf.py`).
+  If your server doesn't have the cache at the default path, set
+  `HH_RLHF_LOCAL_CACHE` (or `HH_RLHF_HARMLESS_DIR` and
+  `HH_RLHF_HELPFUL_DIR`) before launching. The fallback identifies
+  the subsets by train row count (42537 harmless, 43835 helpful) so
+  any cache layout works as long as those files exist.
 - The N=10 selector dict typically has ~7-10/10 clients populated. The
   category-aware fill kicks in for the missing ones; the warning
   "client_average_z_dict was missing N/10 clients" in the log is the
