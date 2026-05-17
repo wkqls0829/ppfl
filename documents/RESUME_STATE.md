@@ -2,7 +2,11 @@
 
 ## Status
 
-All 4 stage-1 selectors + all 4 stage-2 RL runs have completed for the single-cell sanity check (Qwen-2 0.5B, HH-RLHF, FedBiscuit vs FedVPA-GP at N=10 and N=100). Bug fixes are still **uncommitted** on the `refined` branch.
+All 4 stage-1 selectors + all 4 stage-2 RL runs have completed for the single-cell sanity check (Qwen-2 0.5B, HH-RLHF, FedBiscuit vs FedVPA-GP at N=10 and N=100). All 7 bug fixes are committed to `refined` (`346a562`) and pushed to `origin/refined`.
+
+**For the next session / other server**, start with
+[HANDOFF_OTHER_SERVER.md](./HANDOFF_OTHER_SERVER.md) then
+[HP_SEARCH_PLAN.md](./HP_SEARCH_PLAN.md).
 
 ## Code fixes (working tree — NOT yet committed)
 

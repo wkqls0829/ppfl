@@ -44,7 +44,7 @@
 
 ### 실험 및 하이퍼파라미터 탐색
 
-- **[HYPERPARAMETER_SEARCH.md](./HYPERPARAMETER_SEARCH.md)**: VPL-GP 하이퍼파라미터 서치 통합 문서 (Phase·TID·파라미터 표, 실행 방법, Gemma/Qwen)
+- 현재 HP 서치 계획은 **[../documents/HP_SEARCH_PLAN.md](../documents/HP_SEARCH_PLAN.md)** 참고. (구 Phase-based 문서는 2026-05-17에 삭제됨.)
 
 ### 설정 (환경·API 키)
 
