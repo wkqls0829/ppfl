@@ -261,9 +261,12 @@ def load_hh_rlhf_for_rlhf(data_root,
 
     # Load from Hugging Face (same as selector training)
     try:
-        # Load both subsets from Hugging Face
-        harmless_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="harmless-base")
-        helpful_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base")
+        # Load both subsets via the cache-fallback helper so the
+        # `load_dataset(..., data_dir=...)` cache miss seen with newer
+        # `datasets` versions falls through to the on-disk arrow files.
+        # Same workaround as load_hh_rlhf_dataset above.
+        harmless_raw = _load_hh_rlhf_subset("harmless-base")
+        helpful_raw = _load_hh_rlhf_subset("helpful-base")
     except Exception as e:
         logger.error(f"Failed to load dataset from Hugging Face. Error: {e}")
         raise e
