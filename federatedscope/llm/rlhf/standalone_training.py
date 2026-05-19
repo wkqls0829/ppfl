@@ -152,6 +152,43 @@ def get_input_data(list_data_dict, w=10):
         yield list_data_dict[left:left + w]
 
 
+def _assign_balanced_client_ids(list_test_dict, num_clients, num_cats):
+    """Round-robin assign client_id to test prompts so all preference
+    categories are represented evenly across the test set.
+
+    Why this is needed: the previous cyclic assignment
+    (idx % num_clients) + 1 starves later categories whenever
+    len(list_test_dict) < num_clients. With num_clients=100 and 30
+    test prompts, every client_id landed in [1, 30] (all category 0
+    under the standard 50/50 HH-RLHF split), so the helpfulness GPT
+    eval filter at winrate_metrics._get_winrate_scores_with_gpt_api
+    rejected every batch and silently fell back to the internal-model
+    scorer, producing inflated win-rates.
+
+    The assignment here mirrors winrate_metrics.py's client→category
+    mapping (the MetaSplitter convention): clients are partitioned
+    into num_cats contiguous blocks in client_id order.
+    """
+    if num_clients <= 0 or num_cats <= 0 or not list_test_dict:
+        return
+    clients_per_cat = max(1, num_clients // num_cats)
+    cat_remainder = num_clients % num_cats
+    cat_start = []
+    cat_size = []
+    cid = 1
+    for cat_idx in range(num_cats):
+        cat_start.append(cid)
+        n = clients_per_cat + (1 if cat_idx < cat_remainder else 0)
+        cat_size.append(n)
+        cid += n
+    cat_counters = [0] * num_cats
+    for idx, sample in enumerate(list_test_dict):
+        cat = idx % num_cats
+        offset = cat_counters[cat] % cat_size[cat]
+        sample['client_id'] = cat_start[cat] + offset
+        cat_counters[cat] += 1
+
+
 class RLHF_finetuning:
     """
     Implementation of RLHF server
@@ -1547,14 +1584,21 @@ class RLHF_finetuning:
                     else:
                         list_test_dict = [{'prompt': p['prompt'], 'output': ''} for p in list_test_prompts if p.get('prompt')]
                     
-                    # Assign client_id for VPL models (for conditional generation) - cyclic assignment
+                    # Assign client_id for VPL models (for conditional
+                    # generation) - balanced across preference categories
+                    # so the per-metric GPT-API eval filter does not
+                    # starve a whole category when len(list_test_dict)
+                    # is smaller than num_clients.
                     if is_vpl_model:
                         num_clients = self.num_clients
-                        for idx, test_sample in enumerate(list_test_dict):
-                            client_id = (idx % num_clients) + 1
-                            test_sample['client_id'] = client_id
-                        logger.info(f"Assigned {len(list_test_dict)} test prompts to {num_clients} clients "
-                                   f"for conditional generation (VPL model, cyclic assignment)")
+                        dataset_type = getattr(self.config.data, 'type',
+                                               '').lower()
+                        num_cats = 4 if 'ultrafeedback' in dataset_type \
+                            else 2
+                        _assign_balanced_client_ids(
+                            list_test_dict, num_clients, num_cats)
+                        logger.info(f"Assigned {len(list_test_dict)} test prompts across {num_cats} categories "
+                                   f"(of {num_clients} clients, balanced round-robin) for VPL conditional generation")
                     else:
                         logger.info(f"Loaded {len(list_test_dict)} test prompts (standard generation, no client_id)")
             
@@ -1781,8 +1825,10 @@ class RLHF_finetuning:
                                 if list_prompts and len(list_prompts) > 0:
                                     list_test_dict = [{'prompt': (p if isinstance(p, str) else p.get('prompt')), 'output': ''} for p in list_prompts]
                                     if getattr(self.config.llm, 'rlhf_use_variational_generation', False) and self.num_clients > 0:
-                                        for idx, s in enumerate(list_test_dict):
-                                            s['client_id'] = (idx % self.num_clients) + 1
+                                        _dt = getattr(self.config.data, 'type', '').lower()
+                                        _ncats = 4 if 'ultrafeedback' in _dt else 2
+                                        _assign_balanced_client_ids(
+                                            list_test_dict, self.num_clients, _ncats)
                         elif 'hh-rlhf' in data_type_final:
                             from federatedscope.llm.dataloader.hh_rlhf import load_hh_rlhf_for_rlhf
                             if hasattr(self, 'client_test_data') and self.client_test_data is not None and len(self.client_test_data) > 0:
@@ -1820,8 +1866,10 @@ class RLHF_finetuning:
                                 if list_test_prompts and len(list_test_prompts) > 0:
                                     list_test_dict = [{'prompt': p['prompt'], 'output': ''} for p in list_test_prompts if p.get('prompt')]
                                     if getattr(self.config.llm, 'rlhf_use_variational_generation', False) and self.num_clients > 0:
-                                        for idx, test_sample in enumerate(list_test_dict):
-                                            test_sample['client_id'] = (idx % self.num_clients) + 1
+                                        _dt = getattr(self.config.data, 'type', '').lower()
+                                        _ncats = 4 if 'ultrafeedback' in _dt else 2
+                                        _assign_balanced_client_ids(
+                                            list_test_dict, self.num_clients, _ncats)
                                     logger.info(f"Reloaded full test set: {len(list_test_dict)} prompts")
                                 else:
                                     logger.warning("Full test reload returned empty; keeping existing loader.")
