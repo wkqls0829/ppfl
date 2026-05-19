@@ -1,8 +1,15 @@
-# Handoff to other-server Claude — 2026-05-17
+# Handoff to other-server Claude — 2026-05-17 (updated 2026-05-19)
 
 Welcome. This doc is everything you need to pick up the FedVPA-GP work on
 this server. Read this first, then `CLAUDE.md` (in repo root) for the
 codebase guide.
+
+> **⚠️ 2026-05-19 BUG FIX — read first**
+> If you've already launched the N=10 HP search on a commit older than
+> `7d686ec`, the rd 9 / 19 / 29 / 39 win-rate numbers from those runs
+> are inflated (silent internal-model fallback). `git pull`, discard
+> the previous RL results (selectors are fine), and re-run Stage 2.
+> Details in [`BUGFIX_2026_05_19.md`](./BUGFIX_2026_05_19.md).
 
 ## What you're being asked to do
 

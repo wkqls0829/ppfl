@@ -6,6 +6,11 @@ see `docs/`.
 
 ## Start here
 
+- **[BUGFIX_2026_05_19.md](./BUGFIX_2026_05_19.md)** — critical
+  GPT-API silent-fallback bug discovered during the N=100 HP search;
+  invalidates the rd 9–39 numbers in `RESUME_STATE.md` and the first
+  N=100 HP-search run. Read first if you're picking up either HP
+  search.
 - **[HANDOFF_OTHER_SERVER.md](./HANDOFF_OTHER_SERVER.md)** — runbook
   for the other-server Claude picking up the N=10 HP search.
 - **[RESUME_STATE.md](./RESUME_STATE.md)** — current sanity-check
