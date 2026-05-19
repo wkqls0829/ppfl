@@ -1,68 +1,68 @@
+import json
 import os
 import random
+from glob import glob
+
 import datasets
 from federatedscope.core.auxiliaries.logging import logger
 from federatedscope.llm.dataset.llm_dataset import LLMDataset
 
 
-# Local-cache fallback after Anthropic/hh-rlhf was removed from HF Hub.
-# Override with env vars HH_RLHF_HARMLESS_DIR / HH_RLHF_HELPFUL_DIR
-# if your arrow cache lives elsewhere. Each directory must contain
-# `hh-rlhf-train.arrow` and `hh-rlhf-test.arrow`.
-_LOCAL_FALLBACK_BASE = os.environ.get(
-    'HH_RLHF_LOCAL_CACHE',
-    '/hdd/hdd3/kjb/hh-rlhf/Anthropic___hh-rlhf')
+def _load_hh_rlhf_subset(subset_name):
+    """Load an hh-rlhf subset, falling back to the on-disk arrow cache
+    when ``load_dataset(... data_dir=...)`` fails (newer ``datasets``
+    versions store the cache under a content hash rather than the
+    data_dir name, so the documented call path raises
+    ``Couldn't find cache for ...``)."""
+    try:
+        return datasets.load_dataset(
+            "Anthropic/hh-rlhf", data_dir=subset_name)
+    except Exception as e:
+        logger.warning(
+            f"load_dataset(Anthropic/hh-rlhf, data_dir={subset_name}) "
+            f"failed ({e}). Searching cache for arrow files.")
 
+    cache_root = os.path.expanduser(
+        "~/.cache/huggingface/datasets/Anthropic___hh-rlhf")
+    if not os.path.isdir(cache_root):
+        raise FileNotFoundError(
+            f"hh-rlhf cache root missing: {cache_root}")
 
-def _load_local_arrow_hh_rlhf(subset):
-    """Load harmless-base or helpful-base from local arrow cache by
-    inspecting the first training sample to identify which hash dir
-    corresponds to which subset."""
-    if subset not in ('harmless-base', 'helpful-base'):
-        raise ValueError(f'unknown subset: {subset}')
-    env_dir_key = ('HH_RLHF_HARMLESS_DIR'
-                   if subset == 'harmless-base'
-                   else 'HH_RLHF_HELPFUL_DIR')
-    explicit_dir = os.environ.get(env_dir_key)
-    if explicit_dir and os.path.isdir(explicit_dir):
-        candidates = [explicit_dir]
-    else:
-        if not os.path.isdir(_LOCAL_FALLBACK_BASE):
-            raise RuntimeError(
-                f'No local cache at {_LOCAL_FALLBACK_BASE}; set '
-                f'HH_RLHF_LOCAL_CACHE or {env_dir_key} to override.')
-        candidates = []
-        for h in os.listdir(_LOCAL_FALLBACK_BASE):
-            ver_dir = os.path.join(_LOCAL_FALLBACK_BASE, h, '0.0.0')
-            if not os.path.isdir(ver_dir):
-                continue
-            for sub in os.listdir(ver_dir):
-                full = os.path.join(ver_dir, sub)
-                train_arrow = os.path.join(full, 'hh-rlhf-train.arrow')
-                test_arrow = os.path.join(full, 'hh-rlhf-test.arrow')
-                if (os.path.isfile(train_arrow)
-                        and os.path.isfile(test_arrow)):
-                    candidates.append(full)
-    for cand in candidates:
-        train = datasets.Dataset.from_file(
-            os.path.join(cand, 'hh-rlhf-train.arrow'))
-        # Identify the subset by row count (stable across re-downloads).
-        # Anthropic/hh-rlhf as published: harmless-base train=42537,
-        # helpful-base train=43835.
-        is_harmless = train.num_rows == 42537
-        is_helpful = train.num_rows == 43835
-        if subset == 'harmless-base' and is_harmless:
-            test = datasets.Dataset.from_file(
-                os.path.join(cand, 'hh-rlhf-test.arrow'))
-            return datasets.DatasetDict({'train': train, 'test': test})
-        if subset == 'helpful-base' and is_helpful:
-            test = datasets.Dataset.from_file(
-                os.path.join(cand, 'hh-rlhf-test.arrow'))
-            return datasets.DatasetDict({'train': train, 'test': test})
-    raise RuntimeError(
-        f'No local arrow cache matched {subset} (looked in '
-        f'{candidates}). Set {env_dir_key} to point to the correct '
-        f'directory.')
+    expected_prefix = (
+        f"hf://datasets/Anthropic/hh-rlhf@"
+    )
+    expected_subpath = f"/{subset_name}/"
+
+    for info_path in glob(os.path.join(
+            cache_root, "*", "*", "*", "dataset_info.json")):
+        try:
+            with open(info_path, "r") as f:
+                info = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        checksums = info.get("download_checksums") or {}
+        if not any(
+                k.startswith(expected_prefix) and expected_subpath in k
+                for k in checksums):
+            continue
+
+        leaf = os.path.dirname(info_path)
+        train_path = os.path.join(leaf, "hh-rlhf-train.arrow")
+        test_path = os.path.join(leaf, "hh-rlhf-test.arrow")
+        if not (os.path.isfile(train_path) and os.path.isfile(test_path)):
+            continue
+
+        logger.info(
+            f"Loading hh-rlhf {subset_name} from cached arrow files in "
+            f"{leaf}")
+        return datasets.DatasetDict({
+            "train": datasets.Dataset.from_file(train_path),
+            "test": datasets.Dataset.from_file(test_path),
+        })
+
+    raise FileNotFoundError(
+        f"Could not locate cached arrow files for hh-rlhf subset "
+        f"'{subset_name}' under {cache_root}.")
 
 
 HH_RLHF_PROMPT_DICT = {
@@ -137,18 +137,12 @@ def load_hh_rlhf_dataset(config, tokenizer):
     logger.info("Loading and processing hh-rlhf dataset from Hugging Face...")
 
     try:
-        # Load both subsets
-        harmless_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="harmless-base")
-        helpful_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base")
+        # Load both subsets (with cache-fallback for newer datasets lib)
+        harmless_raw = _load_hh_rlhf_subset("harmless-base")
+        helpful_raw = _load_hh_rlhf_subset("helpful-base")
     except Exception as e:
-        logger.warning(
-            f"HF Hub load failed ({type(e).__name__}: {e}). "
-            f"Falling back to local arrow cache.")
-        harmless_raw = _load_local_arrow_hh_rlhf('harmless-base')
-        helpful_raw = _load_local_arrow_hh_rlhf('helpful-base')
-        logger.info(
-            f"Loaded from local cache: harmless train={harmless_raw['train'].num_rows}, "
-            f"helpful train={helpful_raw['train'].num_rows}")
+        logger.error(f"Failed to load dataset from Hugging Face. Error: {e}")
+        raise e
 
     def preprocess(example, category=None):
         """Preprocesses a single example for choice-based training."""
@@ -271,11 +265,8 @@ def load_hh_rlhf_for_rlhf(data_root,
         harmless_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="harmless-base")
         helpful_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base")
     except Exception as e:
-        logger.warning(
-            f"HF Hub load failed ({type(e).__name__}: {e}). "
-            f"Falling back to local arrow cache.")
-        harmless_raw = _load_local_arrow_hh_rlhf('harmless-base')
-        helpful_raw = _load_local_arrow_hh_rlhf('helpful-base')
+        logger.error(f"Failed to load dataset from Hugging Face. Error: {e}")
+        raise e
     
     # Process test splits only (for RLHF, we only need test prompts)
     def preprocess(example):
