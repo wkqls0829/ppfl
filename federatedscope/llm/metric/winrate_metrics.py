@@ -193,20 +193,13 @@ def _load_original_hhrlhf_data(ctx):
         import datasets
         from federatedscope.llm.dataloader.hh_rlhf import (
             parse_dialogue,
-            _load_local_arrow_hh_rlhf,
+            _load_hh_rlhf_subset,
         )
 
-        # Load test data (same as training data structure)
-        try:
-            harmless_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="harmless-base")
-            helpful_raw = datasets.load_dataset("Anthropic/hh-rlhf", data_dir="helpful-base")
-        except Exception as hub_e:
-            logger.warning(
-                f"HF Hub load failed in _load_original_hhrlhf_data "
-                f"({type(hub_e).__name__}: {hub_e}). Falling back to "
-                f"local arrow cache.")
-            harmless_raw = _load_local_arrow_hh_rlhf('harmless-base')
-            helpful_raw = _load_local_arrow_hh_rlhf('helpful-base')
+        # Load test data via the dataloader's helper, which transparently
+        # falls back to the on-disk arrow cache when HF Hub is unreachable.
+        harmless_raw = _load_hh_rlhf_subset("harmless-base")
+        helpful_raw = _load_hh_rlhf_subset("helpful-base")
         
         # Combine test sets
         harmless_test = harmless_raw['test']
