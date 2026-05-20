@@ -5,9 +5,9 @@ early_stop:
 federate:
   mode: standalone
   client_num: 10
-  total_round_num: 50
+  total_round_num: 70
   save_to: "/hdd/hdd3/kjb/checkpoints/hhrl_rlhf_qwen2_comparison_kl_only_t11202.ckpt"
-  save_freq: 50
+  save_freq: 10
   share_local_model: True
   online_aggr: False
 data:
@@ -27,7 +27,7 @@ llm:
   grad_accum_step: 32
   max_prompts_for_generation: 50
   generation_batch_size: 3
-  reward_coeff: 0.1
+  reward_coeff: 0.5
   # FedVPA-GP RL: KL only (no orthogonal loss in selector)
   rlhf_use_variational_selection: True
   rlhf_use_variational_generation: True
@@ -59,10 +59,11 @@ train:
   optimizer:
     type: AdamW
     betas: (0.9, 0.95)
-    lr: 0.00001
+    lr: 0.00005
   is_enable_half: True
 eval:
   freq: 10
+  max_samples_for_reward: 100
   use_gpt_api_for_winrate: true
   use_baseline_model_for_winrate: true
   metrics: ['loss', 'acc', 'helpfulness_winrate', 'harmlessness_winrate']
