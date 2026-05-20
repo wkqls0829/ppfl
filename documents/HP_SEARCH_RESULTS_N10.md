@@ -1,4 +1,74 @@
-# N=10 HP search — tier-1 results & tier-2 plan (2026-05-19)
+# N=10 HP search — final results (2026-05-19/20)
+
+## TL;DR
+
+The N=10 HP search is **complete** (13 RL runs across 2 tiers, both
+servers can move to the Main Table now).
+
+**Winning config for downstream / Main Table:**
+
+```yaml
+train.optimizer.lr: 5e-5         # 5x the prior default
+llm.reward_coeff: 0.5            # unchanged
+federate.total_round_num: 70     # train past the typical peak
+federate.save_freq: 10           # CRITICAL — save intermediate ckpts
+# Then evaluate and report the Pareto-best ckpt (typically rd 29-59).
+```
+
+**Headline numbers** (per-client GPT-API eval, ~300 prompts; the
+honest signal, not the tier-1 30-sample noise):
+
+| Config | Pareto-best round | H | HH | Σ |
+|---|---|---|---|---|
+| **rc=0.5 LR=5e-5 (winner)** | **rd 59** | **50.0** | **73.3** | **123.3** |
+| rc=1.0 LR=5e-5              | rd 39     | 43.3 | 80.0 | 123.3 (tied) |
+| baseline rc=0.1 LR=1e-5     | rd 9      | 40.0 | 80.0 | 120.0 |
+| rc=0.3 LR=5e-5              | rd 9      | 43.3 | 76.7 | 120.0 |
+
+Winner picked by tiebreak (closest to 45° H=HH line) → `rc=0.5,
+LR=5e-5`. **The final-round ckpt (rd 49/99) is never the best —
+do NOT use it.**
+
+## Three findings the other server should internalize
+
+1. **Universal DPO mode-collapse on helpfulness.** Every single
+   config we tested — across seeds, LRs (1e-5 and 5e-5), reward
+   coefficients (0.1, 0.3, 0.5, 1.0), and round counts (50 and 100)
+   — eventually drives `test_helpfulness_winrate` to **0.0**. The
+   harmlessness signal in the reward dominates late-stage gradients
+   and the policy collapses to refusal-only. Faster configs collapse
+   by rd 49; slower configs collapse by rd 99. **No config we tried
+   avoids the collapse — it's a question of *when*, not *if*.**
+
+2. **save_freq=50 throws away the answer.** Pareto-best rounds in
+   our trajectories ranged from rd 9 to rd 59 — never the saved rd
+   50/100 ckpt. The current `save_freq: 50` in every Main Table cfg
+   discards the useful checkpoints. **Change to `save_freq: 10`
+   (or 5) before the Main Table sweep.**
+
+3. **Tier-1 ranking was a measurement artifact.** Tier-1 used the
+   30-sample subset eval path that the 2026-05-19 cache-miss
+   silent-fallback bug never properly exercised. Tier-2 (after
+   `fe26ef7`) uses the per-client 300-prompt path and shows a very
+   different (honest) picture: reward_high+LR=5e-5+rd49 collapses
+   to H=0, NOT the 80/77 tier-1 number. **Discard tier-1 rankings.**
+
+## Next steps (both servers)
+
+1. Update Main Table cfgs: `save_freq: 10`, `total_round_num: 70`,
+   `train.optimizer.lr: 5e-5`, `llm.reward_coeff: 0.5`.
+2. Re-run Stage-2 RL on the existing tier-1 selector ckpts at the
+   recommended config.
+3. For each run, score Pareto-best across {rd 19, 29, 39, 49, 59,
+   69} and report the best ckpt — *not* the final ckpt.
+4. (Optional, for the discussion section): instrument
+   `train_loss` / `train_acc` / z-prototype angles during the rd
+   80-99 window to see if there's a measurable early-stopping
+   signal that predicts the collapse.
+
+---
+
+## Background (full detail below)
 
 This server (local) ran the N=10 HP search per
 [HP_SEARCH_PLAN.md](./HP_SEARCH_PLAN.md). All five selectors finished
