@@ -1,22 +1,21 @@
 # Documents Index
 
-Operational docs: experiment guides, handoffs, state snapshots, and
+Operational docs: experiment guides, handoffs, results, and
 implementation explainers. For algorithm/architecture reference docs
 see `docs/`.
 
 ## Start here
 
-- **[BUGFIX_2026_05_19.md](./BUGFIX_2026_05_19.md)** — critical
-  GPT-API silent-fallback bug discovered during the N=100 HP search;
-  invalidates the rd 9–39 numbers in `RESUME_STATE.md` and the first
-  N=100 HP-search run. Read first if you're picking up either HP
-  search.
+- **[MAIN_TABLE_SETUP.md](./MAIN_TABLE_SETUP.md)** — current Main
+  Table hyperparameter recipe + rationale (every choice grounded in
+  HP search results). The canonical config doc.
 - **[HANDOFF_OTHER_SERVER.md](./HANDOFF_OTHER_SERVER.md)** — runbook
-  for the other-server Claude picking up the N=10 HP search.
-- **[RESUME_STATE.md](./RESUME_STATE.md)** — current sanity-check
-  results and known issues.
-- **[HP_SEARCH_PLAN.md](./HP_SEARCH_PLAN.md)** — simplified HP search
-  plan (3 knobs) for N=10 and N=100.
+  for the other server to launch the N=10 Main Table sweep.
+- **[HP_SEARCH_RESULTS_N100.md](./HP_SEARCH_RESULTS_N100.md)** —
+  N=100 HP search results (tier-1, single seed).
+- **[HP_SEARCH_RESULTS_N10.md](./HP_SEARCH_RESULTS_N10.md)** — N=10
+  HP search results (tier-1 + tier-2). Contains the universal-DPO-
+  collapse finding that drove the Main Table recipe.
 
 ## Experiment guides
 
@@ -60,3 +59,12 @@ see `docs/`.
   drafts (`.tex`), figures.
 - **`../CLAUDE.md`** — root-level codebase guide for Claude.
 - **`../README.md`** — project overview.
+
+## Removed docs (history in git)
+
+- `HP_SEARCH_PLAN.md` — superseded by `HP_SEARCH_RESULTS_N10.md` and
+  `HP_SEARCH_RESULTS_N100.md`.
+- `RESUME_STATE.md` — single-cell sanity-check state from 2026-05-17;
+  outdated by HP search results.
+- `BUGFIX_2026_05_19.md` — the 30-sample eval silent-fallback bug;
+  fixed in commit `7d686ec`, history preserved via `git log`.
