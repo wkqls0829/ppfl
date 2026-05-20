@@ -63,6 +63,7 @@ train:
 eval:
   freq: 10
   max_samples_for_reward: 100
+  max_iterations_for_winrate: 6000
   use_gpt_api_for_winrate: true
   use_baseline_model_for_winrate: true
   metrics: ['loss', 'acc', 'helpfulness_winrate', 'harmlessness_winrate']
