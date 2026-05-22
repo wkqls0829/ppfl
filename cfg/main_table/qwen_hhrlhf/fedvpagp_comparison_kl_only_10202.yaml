@@ -56,9 +56,9 @@ llm:
   vpl_use_manual_orthogonal_labels: False
   vpl_num_prototypes: 0
   vpl_tsne_visualize_freq: 10
-  grad_accum_step: 4
+  grad_accum_step: 8
 dataloader:
-  batch_size: 8
+  batch_size: 4
   num_workers: 0
   pin_memory: True
 model:
