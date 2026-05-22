@@ -37,6 +37,12 @@ llm:
       round: 2
     args: [ { 'adapter_package': 'peft', 'adapter_method': 'lora', 'r': 8, 'lora_alpha': 16, 'lora_dropout': 0.05 } ]
   # FedVPA-GP with KL + orthogonal loss (full method)
+  # z-conditioning architecture — must match the Stage-2 RL cfg so the
+  # selector trains and saves a z_to_embedding the RL can load.
+  vpl_use_z_embedding: True
+  vpl_z_source: 'hidden_state'
+  vpl_z_conditioning_mode: 'add'
+  vpl_adapter_dropout: 0.5
   vpl_use_gp_prior: True
   vpl_latent_dim: 32
   vpl_kl_weight: 0.01
