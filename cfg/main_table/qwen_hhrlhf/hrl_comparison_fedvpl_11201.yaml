@@ -32,6 +32,12 @@ llm:
   rlhf_use_variational_selection: True
   rlhf_use_variational_generation: True
   rlhf_selector_checkpoint: "/hdd/hdd3/kjb/checkpoints/final_hhrl_choice_qwen2_comparison_fedvpl_t10201.ckpt"
+  # z-conditioning: inject z into policy input embeddings during DPO.
+  # Without these the policy gets no per-client signal and collapses.
+  vpl_use_z_embedding: True
+  vpl_z_source: 'hidden_state'
+  vpl_z_conditioning_mode: 'add'
+  vpl_adapter_dropout: 0.5
   vpl_latent_dim: 32
   vpl_feature_method: 'choice_logits'
   vpl_use_feature_difference: True
