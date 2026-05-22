@@ -52,16 +52,20 @@ llm:
   vpl_use_feature_difference: True
   vpl_max_logvar: -4.0
   vpl_deep_projection: True
-  vpl_logit_dropout: 0.5
+  vpl_logit_dropout: 0.0
+  vpl_use_z_embedding: True
+  vpl_z_source: 'hidden_state'
+  vpl_z_conditioning_mode: 'add'
+  vpl_adapter_dropout: 0.5
   vpl_orthogonal_weight: 1.0
   vpl_orthogonal_orthonorm_weight: 0.1
   vpl_use_manual_orthogonal_labels: True
   vpl_num_prototypes: 2
   vpl_prototype_scale: 5.0
   vpl_tsne_visualize_freq: 10
-  grad_accum_step: 4
+  grad_accum_step: 8
 dataloader:
-  batch_size: 8
+  batch_size: 4
   num_workers: 0
   pin_memory: True
 model:
