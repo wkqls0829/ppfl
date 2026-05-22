@@ -46,7 +46,11 @@ llm:
   vpl_use_feature_difference: True
   vpl_max_logvar: -4.0
   vpl_deep_projection: True
-  vpl_logit_dropout: 0.5
+  vpl_logit_dropout: 0.0
+  vpl_use_z_embedding: True
+  vpl_z_source: 'hidden_state'
+  vpl_z_conditioning_mode: 'add'
+  vpl_adapter_dropout: 0.5
   vpl_orthogonal_weight: 0.0
   vpl_orthogonal_orthonorm_weight: 0.0
   vpl_use_manual_orthogonal_labels: False

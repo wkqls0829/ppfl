@@ -1053,6 +1053,15 @@ def _get_winrate_scores_with_internal_model(ctx, prompt_template, metric_name="w
         for batch in tqdm(eval_loader, desc=f"Generating responses for {metric_name} winrate"):
             if should_limit and total_samples_evaluated >= max_eval_samples:
                 break
+            # consecutive_failures persists across batches; the inner
+            # loop's `break` only exits one batch, so without this guard
+            # the outer loop would spin forever once the cap is hit.
+            if consecutive_failures >= max_consecutive_failures:
+                logger.warning(
+                    f"Aborting {metric_name} winrate eval: "
+                    f"{consecutive_failures} consecutive prompt-match "
+                    f"failures across batches.")
+                break
             
             # Handle different data formats
             if 'win_input_ids' in batch:
