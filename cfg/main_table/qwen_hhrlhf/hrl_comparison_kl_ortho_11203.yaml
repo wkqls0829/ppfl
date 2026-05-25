@@ -52,8 +52,9 @@ llm:
   vpl_z_source: 'hidden_state'
   vpl_z_conditioning_mode: 'add'
   vpl_adapter_dropout: 0.5
-  vpl_orthogonal_weight: 1.0
+  vpl_orthogonal_weight: 5.0
   vpl_orthogonal_orthonorm_weight: 0.1
+  vpl_use_manual_orthogonal_labels: False
   vpl_num_prototypes: 2
   vpl_prototype_scale: 5.0
   adapter:
